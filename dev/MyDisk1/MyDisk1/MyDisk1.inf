@@ -1,0 +1,62 @@
+;
+; MyDisk1.inf
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ManufacturerName%
+CatalogFile = MyDisk1.cat
+DriverVer   = ; TODO: set DriverVer in stampinf property pages
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+MyDisk1.sys = 1,,
+
+;*****************************************
+; Install Section
+;*****************************************
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299 ; %13% support introduced in build 16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%MyDisk1.DeviceDesc% = MyDisk1_Device, Root\MyDisk1 ; TODO: edit hw-id
+
+[MyDisk1_Device.NT]
+CopyFiles = File_Copy
+
+[File_Copy]
+MyDisk1.sys
+
+;-------------- Service installation
+[MyDisk1_Device.NT.Services]
+AddService = MyDisk1,%SPSVCINST_ASSOCSERVICE%, MyDisk1_Service_Inst
+
+; -------------- MyDisk1 driver install sections
+[MyDisk1_Service_Inst]
+DisplayName    = %MyDisk1.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %13%\MyDisk1.sys
+
+[MyDisk1_Device.NT.Wdf]
+KmdfService = MyDisk1, MyDisk1_wdfsect
+
+[MyDisk1_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ManufacturerName = "Zightch" ;TODO: Replace with your manufacturer name
+DiskName = "MyDisk1 Installation Disk"
+MyDisk1.DeviceDesc = "MyDisk1 Device"
+MyDisk1.SVCDESC = "MyDisk1 Service"

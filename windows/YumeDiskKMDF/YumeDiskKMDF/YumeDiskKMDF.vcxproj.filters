@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
+    </Filter>
+    <Filter Include="Driver Files">
+      <UniqueIdentifier>{8E41214B-6785-4CFE-B992-037D68949A14}</UniqueIdentifier>
+      <Extensions>inf;inv;inx;mof;mc;</Extensions>
+    </Filter>
+    <Filter Include="Source Files\Core">
+      <UniqueIdentifier>{E2E965AD-F0A4-4588-98D4-65A48E709501}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Session">
+      <UniqueIdentifier>{6BC0E1E3-2B2D-4B34-A115-140417A4F272}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Transport">
+      <UniqueIdentifier>{B912D714-5E11-4C14-8FE8-B5B930F6D531}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Control">
+      <UniqueIdentifier>{A8DD83AC-D5C2-4C5F-BA6B-65FD0BF812A9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Device">
+      <UniqueIdentifier>{16F9C85B-C16B-4510-A5A9-2B797E633C2C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Driver">
+      <UniqueIdentifier>{FD1D9E12-BB8D-4AFC-AE53-E576B40D83BF}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Core">
+      <UniqueIdentifier>{CDB149EF-DDAA-4486-99F4-7343B2D0BA0B}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Session">
+      <UniqueIdentifier>{C66B77BE-8449-4279-B699-36A75A54415D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Transport">
+      <UniqueIdentifier>{E9D7B5A8-2083-4F60-BA84-39EBC832B321}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Control">
+      <UniqueIdentifier>{E230EFD3-0CF3-481A-89E1-168535FDDE53}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Device">
+      <UniqueIdentifier>{2B05F0AF-9B4B-4F29-8C4E-0A745E352E9D}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Inf Include="YumeDiskKMDF.inf">
+      <Filter>Driver Files</Filter>
+    </Inf>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="core\memory.c">
+      <Filter>Source Files\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="session\session.c">
+      <Filter>Source Files\Session</Filter>
+    </ClCompile>
+    <ClCompile Include="transport\transport.c">
+      <Filter>Source Files\Transport</Filter>
+    </ClCompile>
+    <ClCompile Include="control\file.c">
+      <Filter>Source Files\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="control\ioctl.c">
+      <Filter>Source Files\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="device\device.c">
+      <Filter>Source Files\Device</Filter>
+    </ClCompile>
+    <ClCompile Include="driver\main.c">
+      <Filter>Source Files\Driver</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="core\defs.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\memory.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="session\session.h">
+      <Filter>Header Files\Session</Filter>
+    </ClInclude>
+    <ClInclude Include="transport\transport.h">
+      <Filter>Header Files\Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="control\file.h">
+      <Filter>Header Files\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="control\ioctl.h">
+      <Filter>Header Files\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="device\device.h">
+      <Filter>Header Files\Device</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
+

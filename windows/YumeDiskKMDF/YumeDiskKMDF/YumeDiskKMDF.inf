@@ -1,0 +1,56 @@
+;
+; YumeDiskKMDF.inf
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ManufacturerName%
+CatalogFile = YumeDiskKMDF.cat
+DriverVer   =
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+YumeDiskKMDF.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%YumeDiskKMDF.DeviceDesc% = YumeDiskKMDF_Device, Root\YumeDiskKMDF
+
+[YumeDiskKMDF_Device.NT]
+CopyFiles = File_Copy
+
+[File_Copy]
+YumeDiskKMDF.sys
+
+[YumeDiskKMDF_Device.NT.Services]
+AddService = YumeDiskKMDF,%SPSVCINST_ASSOCSERVICE%, YumeDiskKMDF_Service_Inst
+
+[YumeDiskKMDF_Service_Inst]
+DisplayName   = %YumeDiskKMDF.SVCDESC%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %13%\YumeDiskKMDF.sys
+
+[YumeDiskKMDF_Device.NT.Wdf]
+KmdfService = YumeDiskKMDF, YumeDiskKMDF_wdfsect
+
+[YumeDiskKMDF_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ManufacturerName = "Zightch"
+DiskName = "YumeDiskKMDF Installation Disk"
+YumeDiskKMDF.DeviceDesc = "YumeDiskKMDF"
+YumeDiskKMDF.SVCDESC = "YumeDiskKMDF Service"

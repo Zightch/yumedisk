@@ -1,0 +1,50 @@
+;
+; YumeDiskSCSI.inf
+;
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = SCSIAdapter
+ClassGuid   = {4D36E97B-E325-11CE-BFC1-08002BE10318}
+Provider    = %ManufacturerName%
+DriverVer   =
+CatalogFile = YumeDiskSCSI.cat
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 13
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+YumeDiskSCSI.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NT$ARCH$.10.0...16299
+
+[Standard.NT$ARCH$.10.0...16299]
+%YumeDiskSCSI.DeviceDesc% = YumeDiskSCSI_Device, Root\YumeDiskSCSI
+
+[YumeDiskSCSI_Device.NT]
+CopyFiles = File_Copy
+
+[File_Copy]
+YumeDiskSCSI.sys
+
+[YumeDiskSCSI_Device.NT.Services]
+AddService = YumeDiskSCSI,%SPSVCINST_ASSOCSERVICE%, YumeDiskSCSI_Service_Inst
+
+[YumeDiskSCSI_Service_Inst]
+DisplayName   = %YumeDiskSCSI.SVCDESC%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %13%\YumeDiskSCSI.sys
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ManufacturerName = "Zightch"
+DiskName = "YumeDiskSCSI Installation Disk"
+YumeDiskSCSI.DeviceDesc = "YumeDiskSCSI"
+YumeDiskSCSI.SVCDESC = "YumeDiskSCSI Service"

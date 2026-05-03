@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
+    </Filter>
+    <Filter Include="Driver Files">
+      <UniqueIdentifier>{8E41214B-6785-4CFE-B992-037D68949A14}</UniqueIdentifier>
+      <Extensions>inf;inv;inx;mof;mc;</Extensions>
+    </Filter>
+    <Filter Include="Source Files\Core">
+      <UniqueIdentifier>{7A86E5B2-BDB3-4F7B-BEB6-5A29FAE7279C}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Queue">
+      <UniqueIdentifier>{8D0AB45B-18C7-4FAA-AAD5-8973530332F8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Control">
+      <UniqueIdentifier>{42D45FB8-0348-4347-B421-7DDAA6C13E68}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\SCSI">
+      <UniqueIdentifier>{78B22BC9-FC58-4B4F-8AB2-08A1F495D66D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Adapter">
+      <UniqueIdentifier>{A41F1E77-E0D3-4257-87C8-81B8BD2BEE19}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Driver">
+      <UniqueIdentifier>{69B2AD41-2AB8-4521-B08E-039C6DF4C321}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Core">
+      <UniqueIdentifier>{9E3F517B-69B0-4B79-8358-654F13C709C0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Queue">
+      <UniqueIdentifier>{2313108A-F668-4E37-9E14-C6F8A0516AD9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Control">
+      <UniqueIdentifier>{EB42F65C-CE20-49E1-A1AB-2D327A936413}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\SCSI">
+      <UniqueIdentifier>{0B87A68A-22EF-44B7-8FF1-9AAEC31A70A8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Adapter">
+      <UniqueIdentifier>{E4F92B59-973A-4B90-93C1-4F8636EA889D}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Inf Include="YumeDiskSCSI.inf">
+      <Filter>Driver Files</Filter>
+    </Inf>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="core\memory.c">
+      <Filter>Source Files\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="core\protocol.c">
+      <Filter>Source Files\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="queue\queue.c">
+      <Filter>Source Files\Queue</Filter>
+    </ClCompile>
+    <ClCompile Include="control\control.c">
+      <Filter>Source Files\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="scsi\scsi.c">
+      <Filter>Source Files\SCSI</Filter>
+    </ClCompile>
+    <ClCompile Include="adapter\adapter.c">
+      <Filter>Source Files\Adapter</Filter>
+    </ClCompile>
+    <ClCompile Include="driver\main.c">
+      <Filter>Source Files\Driver</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="core\defs.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\memory.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="core\protocol.h">
+      <Filter>Header Files\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="queue\queue.h">
+      <Filter>Header Files\Queue</Filter>
+    </ClInclude>
+    <ClInclude Include="control\control.h">
+      <Filter>Header Files\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="scsi\scsi.h">
+      <Filter>Header Files\SCSI</Filter>
+    </ClInclude>
+    <ClInclude Include="adapter\adapter.h">
+      <Filter>Header Files\Adapter</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
+

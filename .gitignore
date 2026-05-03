@@ -1,1 +1,12 @@
 .idea/
+.codebuddy/
+
+symbol/
+symbol.txt
+storage/
+
+**/x64/
+**/.vs/
+**/.vscode/
+**/build/
+**/cmake-build-*/
