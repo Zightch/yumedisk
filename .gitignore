@@ -4,6 +4,7 @@
 symbol/
 symbol.txt
 storage/
+jsoncpp/
 
 **/x64/
 **/.vs/
