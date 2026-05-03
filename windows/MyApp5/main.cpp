@@ -59,8 +59,8 @@ static bool SendCommand(HANDLE file, std::vector<unsigned char>& buffer, DWORD* 
     ok = DeviceIoControl(
         file,
         IOCTL_YUMEDISK_APP_COMMAND,
-        buffer.data(),
-        static_cast<DWORD>(buffer.size()),
+        nullptr,
+        0,
         buffer.data(),
         static_cast<DWORD>(buffer.size()),
         &overlappedBytesReturned,

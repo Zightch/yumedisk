@@ -57,7 +57,7 @@ DiskHandleInquiry(
     inquiryData->VersionDescriptors[0] = 0x0960;
     inquiryData->VersionDescriptors[1] = 0x0060;
 
-    RtlCopyMemory(inquiryData->VendorId, "Yume    ", 8);
+    RtlCopyMemory(inquiryData->VendorId, "Zightch", 8);
     RtlCopyMemory(inquiryData->ProductId, "YumeDisk        ", 16);
     RtlCopyMemory(inquiryData->ProductRevisionLevel, "1.0 ", 4);
     *DataTransferLength = INQUIRYDATABUFFERSIZE;

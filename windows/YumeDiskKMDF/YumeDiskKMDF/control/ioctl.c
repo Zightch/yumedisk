@@ -14,20 +14,19 @@ ControlEvtIoDeviceControl(
 {
     WDFDEVICE device;
     PCTRL_DEVICE_CONTEXT context;
-    PUCHAR inputBuffer;
     PUCHAR outputBuffer;
-    size_t inputSize;
     size_t outputSize;
-    size_t maxSize;
     NTSTATUS status;
     ULONG bytesReturned;
     ULONG bufferCapacity;
+    ULONG requestLength;
     UINT64 sessionId;
     PYUMEDISK_MESSAGE message;
 
+    UNREFERENCED_PARAMETER(InputBufferLength);
+
     device = WdfIoQueueGetDevice(Queue);
     context = ControlGetContext(device);
-    inputBuffer = NULL;
     outputBuffer = NULL;
     bytesReturned = 0;
 
@@ -36,15 +35,8 @@ ControlEvtIoDeviceControl(
         return;
     }
 
-    if (InputBufferLength < YUMEDISK_MESSAGE_BASE_SIZE ||
-        OutputBufferLength < YUMEDISK_MESSAGE_BASE_SIZE) {
+    if (OutputBufferLength < YUMEDISK_MESSAGE_BASE_SIZE) {
         WdfRequestComplete(Request, STATUS_BUFFER_TOO_SMALL);
-        return;
-    }
-
-    status = WdfRequestRetrieveInputBuffer(Request, InputBufferLength, (PVOID*)&inputBuffer, &inputSize);
-    if (!NT_SUCCESS(status)) {
-        WdfRequestComplete(Request, status);
         return;
     }
 
@@ -54,20 +46,21 @@ ControlEvtIoDeviceControl(
         return;
     }
 
-    maxSize = (inputSize > outputSize) ? inputSize : outputSize;
-    bufferCapacity = (ULONG)((maxSize > MAXULONG) ? MAXULONG : maxSize);
-    if (inputBuffer != outputBuffer) {
-        RtlCopyMemory(outputBuffer, inputBuffer, min(inputSize, outputSize));
-    }
-
     message = (PYUMEDISK_MESSAGE)outputBuffer;
-    if (message->Header.Version != YUMEDISK_PROTOCOL_VERSION ||
-        message->Header.Size < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
-        message->Header.Size > bufferCapacity ||
-        message->Header.Size < (ULONG)(YUMEDISK_MESSAGE_BASE_SIZE + message->Header.PayloadLength)) {
+    if (message->Header.PayloadLength > MAXULONG - (ULONG)YUMEDISK_MESSAGE_BASE_SIZE) {
         WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
         return;
     }
+
+    requestLength = (ULONG)YUMEDISK_MESSAGE_BASE_SIZE + message->Header.PayloadLength;
+    if (message->Header.Version != YUMEDISK_PROTOCOL_VERSION ||
+        message->Header.Size < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
+        message->Header.Size > outputSize ||
+        message->Header.Size < requestLength) {
+        WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+    bufferCapacity = message->Header.Size;
 
     sessionId = ControlSessionGetActiveId(context);
     if (sessionId == 0) {
@@ -76,7 +69,7 @@ ControlEvtIoDeviceControl(
     }
 
     message->Header.SessionId = sessionId;
-    status = ControlProxyCommand(outputBuffer, (ULONG)inputSize, bufferCapacity, &bytesReturned);
+    status = ControlProxyCommand(outputBuffer, requestLength, bufferCapacity, &bytesReturned);
     if (bytesReturned == 0) {
         bytesReturned = YUMEDISK_MESSAGE_BASE_SIZE;
     }
