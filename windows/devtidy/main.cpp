@@ -52,6 +52,8 @@ static const DeviceSpec kDeviceSpecs[] = {
     }
 };
 
+static const char* kOutputSchema = "devtidy.v1";
+
 static std::string WideToUtf8(const std::wstring& value) {
     if (value.empty()) {
         return {};
@@ -107,17 +109,33 @@ static Json::Value JsonUint(DWORD value) {
     return Json::Value(static_cast<Json::UInt>(value));
 }
 
-static void WriteJsonEvent(
+static Json::Value JsonSize(size_t value) {
+    return Json::Value(static_cast<Json::UInt64>(value));
+}
+
+static Json::Value JsonObject(
+    std::initializer_list<std::pair<const char*, Json::Value>> fields = {}
+) {
+    Json::Value object(Json::objectValue);
+    for (const auto& field : fields) {
+        object[field.first] = field.second;
+    }
+
+    return object;
+}
+
+static void WriteEvent(
     const char* level,
     const char* event,
-    std::initializer_list<std::pair<const char*, Json::Value>> fields
+    const wchar_t* device,
+    const Json::Value& data
 ) {
     Json::Value root(Json::objectValue);
+    root["schema"] = kOutputSchema;
     root["level"] = level;
     root["event"] = event;
-    for (const auto& field : fields) {
-        root[field.first] = field.second;
-    }
+    root["device"] = (device != nullptr) ? JsonText(device) : Json::Value(Json::nullValue);
+    root["data"] = data;
 
     Json::StreamWriterBuilder builder;
     builder["indentation"] = "";
@@ -127,18 +145,28 @@ static void WriteJsonEvent(
     std::cout << Json::writeString(builder, root) << std::endl;
 }
 
-static void WriteInfoEvent(
-    const char* event,
-    std::initializer_list<std::pair<const char*, Json::Value>> fields = {}
-) {
-    WriteJsonEvent("info", event, fields);
+static void WriteInfoEvent(const char* event, const Json::Value& data = JsonObject()) {
+    WriteEvent("info", event, nullptr, data);
 }
 
-static void WriteErrorEvent(
+static void WriteInfoDeviceEvent(
     const char* event,
-    std::initializer_list<std::pair<const char*, Json::Value>> fields = {}
+    const wchar_t* device,
+    const Json::Value& data = JsonObject()
 ) {
-    WriteJsonEvent("error", event, fields);
+    WriteEvent("info", event, device, data);
+}
+
+static void WriteErrorEvent(const char* event, const Json::Value& data = JsonObject()) {
+    WriteEvent("error", event, nullptr, data);
+}
+
+static void WriteErrorDeviceEvent(
+    const char* event,
+    const wchar_t* device,
+    const Json::Value& data = JsonObject()
+) {
+    WriteEvent("error", event, device, data);
 }
 
 static std::wstring GetLastErrorMessage(DWORD error) {
@@ -388,12 +416,12 @@ static bool TryFindSingleInfPath(
     std::error_code ec;
 
     if (!fs::exists(packageDir, ec) || !fs::is_directory(packageDir, ec)) {
-        WriteErrorEvent(
+        WriteErrorDeviceEvent(
             "package_dir_not_found",
-            {
-                {"device", JsonText(spec.name)},
-                {"path", JsonText(packageDir.native())}
-            });
+            spec.name,
+            JsonObject({
+                {"package_dir", JsonText(packageDir.native())}
+            }));
         return false;
     }
 
@@ -411,24 +439,24 @@ static bool TryFindSingleInfPath(
     }
 
     if (ec) {
-        WriteErrorEvent(
+        WriteErrorDeviceEvent(
             "package_dir_scan_failed",
-            {
-                {"device", JsonText(spec.name)},
-                {"path", JsonText(packageDir.native())},
+            spec.name,
+            JsonObject({
+                {"package_dir", JsonText(packageDir.native())},
                 {"error", JsonText(ec.message())}
-            });
+            }));
         return false;
     }
 
     std::sort(infFiles.begin(), infFiles.end());
     if (infFiles.empty()) {
-        WriteErrorEvent(
+        WriteErrorDeviceEvent(
             "inf_not_found",
-            {
-                {"device", JsonText(spec.name)},
-                {"path", JsonText(packageDir.native())}
-            });
+            spec.name,
+            JsonObject({
+                {"package_dir", JsonText(packageDir.native())}
+            }));
         return false;
     }
     if (infFiles.size() > 1) {
@@ -437,13 +465,13 @@ static bool TryFindSingleInfPath(
             found.append(WideToUtf8(candidate.filename().native()));
         }
 
-        WriteErrorEvent(
+        WriteErrorDeviceEvent(
             "multiple_inf_found",
-            {
-                {"device", JsonText(spec.name)},
-                {"path", JsonText(packageDir.native())},
+            spec.name,
+            JsonObject({
+                {"package_dir", JsonText(packageDir.native())},
                 {"files", found}
-            });
+            }));
         return false;
     }
 
@@ -465,14 +493,14 @@ static bool EnsureDriverPackage(const DeviceSpec& spec, const fs::path& infPath,
             nullptr)) {
         const DWORD error = GetLastError();
         if (error != ERROR_FILE_EXISTS) {
-            WriteErrorEvent(
+            WriteErrorDeviceEvent(
                 "package_stage_failed",
-                {
-                    {"device", JsonText(spec.name)},
-                    {"inf", JsonText(infPath.native())},
+                spec.name,
+                JsonObject({
+                    {"source_inf", JsonText(infPath.native())},
                     {"error_code", JsonUint(error)},
                     {"error", JsonText(GetLastErrorMessage(error))}
-                });
+                }));
             return false;
         }
 
@@ -481,12 +509,12 @@ static bool EnsureDriverPackage(const DeviceSpec& spec, const fs::path& infPath,
             state->publishedInf.clear();
         }
 
-        WriteInfoEvent(
+        WriteInfoDeviceEvent(
             "package_present",
-            {
-                {"device", JsonText(spec.name)},
-                {"inf", JsonText(infPath.native())}
-            });
+            spec.name,
+            JsonObject({
+                {"source_inf", JsonText(infPath.native())}
+            }));
         return true;
     }
 
@@ -495,12 +523,12 @@ static bool EnsureDriverPackage(const DeviceSpec& spec, const fs::path& infPath,
         state->publishedInf = publishedInf;
     }
 
-    WriteInfoEvent(
+    WriteInfoDeviceEvent(
         "package_staged",
-        {
-            {"device", JsonText(spec.name)},
-            {"inf", JsonText(publishedInf)}
-        });
+        spec.name,
+        JsonObject({
+            {"published_inf", JsonText(publishedInf)}
+        }));
     return true;
 }
 
@@ -508,13 +536,13 @@ static bool CreateRootDevice(const DeviceSpec& spec, std::wstring* createdInstan
     HDEVINFO info = SetupDiCreateDeviceInfoList(spec.classGuid, nullptr);
     if (info == INVALID_HANDLE_VALUE) {
         const DWORD error = GetLastError();
-        WriteErrorEvent(
+        WriteErrorDeviceEvent(
             "device_info_list_failed",
-            {
-                {"device", JsonText(spec.name)},
+            spec.name,
+            JsonObject({
                 {"error_code", JsonUint(error)},
                 {"error", JsonText(GetLastErrorMessage(error))}
-            });
+            }));
         return false;
     }
 
@@ -530,13 +558,13 @@ static bool CreateRootDevice(const DeviceSpec& spec, std::wstring* createdInstan
             DICD_GENERATE_ID,
             &devInfoData)) {
         const DWORD error = GetLastError();
-        WriteErrorEvent(
+        WriteErrorDeviceEvent(
             "device_create_failed",
-            {
-                {"device", JsonText(spec.name)},
+            spec.name,
+            JsonObject({
                 {"error_code", JsonUint(error)},
                 {"error", JsonText(GetLastErrorMessage(error))}
-            });
+            }));
         SetupDiDestroyDeviceInfoList(info);
         return false;
     }
@@ -552,26 +580,26 @@ static bool CreateRootDevice(const DeviceSpec& spec, std::wstring* createdInstan
             reinterpret_cast<const BYTE*>(hardwareIds.c_str()),
             static_cast<DWORD>(hardwareIds.size() * sizeof(wchar_t)))) {
         const DWORD error = GetLastError();
-        WriteErrorEvent(
+        WriteErrorDeviceEvent(
             "device_hwid_failed",
-            {
-                {"device", JsonText(spec.name)},
+            spec.name,
+            JsonObject({
                 {"error_code", JsonUint(error)},
                 {"error", JsonText(GetLastErrorMessage(error))}
-            });
+            }));
         SetupDiDestroyDeviceInfoList(info);
         return false;
     }
 
     if (!SetupDiCallClassInstaller(DIF_REGISTERDEVICE, info, &devInfoData)) {
         const DWORD error = GetLastError();
-        WriteErrorEvent(
+        WriteErrorDeviceEvent(
             "device_register_failed",
-            {
-                {"device", JsonText(spec.name)},
+            spec.name,
+            JsonObject({
                 {"error_code", JsonUint(error)},
                 {"error", JsonText(GetLastErrorMessage(error))}
-            });
+            }));
         SetupDiDestroyDeviceInfoList(info);
         return false;
     }
@@ -599,22 +627,26 @@ static bool EnsureUniqueDevice(const DeviceSpec& spec) {
             return false;
         }
 
-        WriteInfoEvent(
+        WriteInfoDeviceEvent(
             "device_created",
-            {
-                {"device", JsonText(spec.name)},
-                {"instance_id", JsonText(createdInstanceId)}
-            });
+            spec.name,
+            JsonObject({
+                {"instance_id", JsonText(createdInstanceId)},
+                {"instance_count", JsonSize(1)},
+                {"duplicate_count", JsonSize(0)}
+            }));
         return true;
     }
 
     const size_t keepIndex = ChoosePrimaryDeviceIndex(devices);
-    WriteInfoEvent(
+    WriteInfoDeviceEvent(
         "device_kept",
-        {
-            {"device", JsonText(spec.name)},
-            {"instance_id", JsonText(devices[keepIndex].instanceId)}
-        });
+        spec.name,
+        JsonObject({
+            {"instance_id", JsonText(devices[keepIndex].instanceId)},
+            {"instance_count", JsonSize(devices.size())},
+            {"duplicate_count", JsonSize(devices.size() - 1)}
+        }));
 
     bool ok = true;
     for (size_t index = 0; index < devices.size(); ++index) {
@@ -624,23 +656,23 @@ static bool EnsureUniqueDevice(const DeviceSpec& spec) {
 
         std::wstring errorMessage;
         if (!RemoveDeviceByInstanceId(devices[index].instanceId, &errorMessage)) {
-            WriteErrorEvent(
+            WriteErrorDeviceEvent(
                 "device_remove_failed",
-                {
-                    {"device", JsonText(spec.name)},
+                spec.name,
+                JsonObject({
                     {"instance_id", JsonText(devices[index].instanceId)},
                     {"error", JsonText(errorMessage)}
-                });
+                }));
             ok = false;
             continue;
         }
 
-        WriteInfoEvent(
+        WriteInfoDeviceEvent(
             "device_removed",
-            {
-                {"device", JsonText(spec.name)},
+            spec.name,
+            JsonObject({
                 {"instance_id", JsonText(devices[index].instanceId)}
-            });
+            }));
     }
 
     return ok;
@@ -649,9 +681,9 @@ static bool EnsureUniqueDevice(const DeviceSpec& spec) {
 static void PrintUsage() {
     WriteInfoEvent(
         "usage",
-        {
+        JsonObject({
             {"syntax", JsonText("devtidy [--package-root <path>]")}
-        });
+        }));
 }
 
 int wmain(int argc, wchar_t** argv) {
@@ -684,17 +716,18 @@ int wmain(int argc, wchar_t** argv) {
     if (packageRoot.empty()) {
         WriteErrorEvent(
             "package_root_not_found",
-            {
-                {"error", JsonText("pass --package-root <path>")}
-            });
+            JsonObject({
+                {"error", JsonText("unable to resolve package root from executable path")},
+                {"hint", JsonText("pass --package-root <path>")}
+            }));
         return 1;
     }
 
     WriteInfoEvent(
         "package_root",
-        {
-            {"path", JsonText(packageRoot.native())}
-        });
+        JsonObject({
+            {"package_root", JsonText(packageRoot.native())}
+        }));
 
     bool ok = true;
     for (const DeviceSpec& spec : kDeviceSpecs) {
@@ -717,8 +750,8 @@ int wmain(int argc, wchar_t** argv) {
 
     WriteInfoEvent(
         "summary",
-        {
+        JsonObject({
             {"ok", Json::Value(ok)}
-        });
+        }));
     return ok ? 0 : 1;
 }

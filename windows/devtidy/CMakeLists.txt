@@ -43,5 +43,8 @@ if (MINGW)
         devtidy
         PRIVATE
         -municode
+        -static
+        -static-libgcc
+        -static-libstdc++
     )
 endif()
