@@ -32,15 +32,15 @@ constexpr ULONG kDefaultTargetId = 0;
 constexpr ULONG kDefaultSectorSize = 4096;
 constexpr size_t kDefaultQueueDepth = 64;
 constexpr size_t kDefaultIoSize = 64 * 1024;
+constexpr size_t kDefaultWaitInlineDataCapacity = 8 * 1024 * 1024;
 constexpr uint64_t kDefaultDiskSizeBytes = 64ull * 1024ull * 1024ull;
-constexpr DWORD kDiskDiscoveryTimeoutMs = 15 * 1000;
-constexpr DWORD kPollIntervalMs = 200;
 
 struct AppConfig {
     ULONG targetId = kDefaultTargetId;
     ULONG sectorSize = kDefaultSectorSize;
     size_t queueDepth = kDefaultQueueDepth;
     size_t ioSize = kDefaultIoSize;
+    size_t waitInlineDataCapacity = kDefaultWaitInlineDataCapacity;
     uint64_t diskSizeBytes = kDefaultDiskSizeBytes;
 };
 
@@ -78,6 +78,16 @@ struct ManagedDisk {
     ULONG targetId = 0;
     DiskIdentity identity{};
     std::vector<unsigned char> medium;
+};
+
+struct BackendContext;
+
+struct WorkerContext {
+    BackendContext* backend = nullptr;
+    std::vector<unsigned char> waitBuffer;
+    std::vector<unsigned char> readReplyBuffer;
+    std::vector<unsigned char> writeAckBuffer;
+    OVERLAPPED overlapped{};
 };
 
 struct BackendContext {
@@ -180,13 +190,32 @@ std::vector<unsigned char> MakeMessageBuffer(ULONG command, ULONG payloadLength,
     return buffer;
 }
 
-bool SendCommand(HANDLE file, std::vector<unsigned char>& buffer, DWORD* bytesReturned = nullptr) {
-    OVERLAPPED overlapped{};
+bool SendCommand(
+    HANDLE file,
+    std::vector<unsigned char>& buffer,
+    DWORD* bytesReturned = nullptr,
+    OVERLAPPED* reusedOverlapped = nullptr
+) {
+    OVERLAPPED localOverlapped{};
     DWORD transferred = 0;
+    OVERLAPPED* overlapped = reusedOverlapped;
+    bool ownsEvent = false;
 
-    overlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (overlapped.hEvent == nullptr) {
-        return false;
+    if (overlapped == nullptr) {
+        localOverlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (localOverlapped.hEvent == nullptr) {
+            return false;
+        }
+        overlapped = &localOverlapped;
+        ownsEvent = true;
+    } else {
+        const HANDLE eventHandle = overlapped->hEvent;
+        OVERLAPPED reset{};
+        reset.hEvent = eventHandle;
+        *overlapped = reset;
+        if (eventHandle != nullptr) {
+            ResetEvent(eventHandle);
+        }
     }
 
     BOOL ok = DeviceIoControl(
@@ -197,18 +226,22 @@ bool SendCommand(HANDLE file, std::vector<unsigned char>& buffer, DWORD* bytesRe
         buffer.data(),
         static_cast<DWORD>(buffer.size()),
         &transferred,
-        &overlapped);
+        overlapped);
 
     if (!ok && GetLastError() == ERROR_IO_PENDING) {
-        if (WaitForSingleObject(overlapped.hEvent, INFINITE) != WAIT_OBJECT_0) {
-            CloseHandle(overlapped.hEvent);
+        if (WaitForSingleObject(overlapped->hEvent, INFINITE) != WAIT_OBJECT_0) {
+            if (ownsEvent) {
+                CloseHandle(overlapped->hEvent);
+            }
             return false;
         }
 
-        ok = GetOverlappedResult(file, &overlapped, &transferred, FALSE);
+        ok = GetOverlappedResult(file, overlapped, &transferred, FALSE);
     }
 
-    CloseHandle(overlapped.hEvent);
+    if (ownsEvent) {
+        CloseHandle(overlapped->hEvent);
+    }
     if (!ok) {
         return false;
     }
@@ -449,48 +482,26 @@ bool IsTargetDiskCandidate(const DiskIdentity& identity, const AppConfig& config
     return true;
 }
 
-std::set<std::wstring> SnapshotYumeDiskPaths(const AppConfig& config) {
-    std::set<std::wstring> paths;
+std::vector<DiskIdentity> EnumerateVisibleYumeDisks(const AppConfig& config) {
+    std::vector<DiskIdentity> identities;
     const auto interfaces = EnumerateDeviceInterfaces(&GUID_DEVINTERFACE_DISK);
     for (const auto& path : interfaces) {
         DiskIdentity identity;
         if (QueryDiskIdentity(path, &identity) && IsTargetDiskCandidate(identity, config)) {
-            paths.insert(path);
+            identities.push_back(identity);
         }
     }
-    return paths;
-}
 
-bool WaitForDiskPath(
-    const AppConfig& config,
-    const std::set<std::wstring>& baseline,
-    DiskIdentity* identity
-) {
-    const auto deadline = GetTickCount64() + kDiskDiscoveryTimeoutMs;
-    while (GetTickCount64() < deadline) {
-        const auto interfaces = EnumerateDeviceInterfaces(&GUID_DEVINTERFACE_DISK);
-        for (const auto& path : interfaces) {
-            DiskIdentity candidate;
-            if (!QueryDiskIdentity(path, &candidate)) {
-                continue;
+    std::sort(
+        identities.begin(),
+        identities.end(),
+        [](const DiskIdentity& left, const DiskIdentity& right) {
+            if (left.deviceNumber != right.deviceNumber) {
+                return left.deviceNumber < right.deviceNumber;
             }
-            if (!IsTargetDiskCandidate(candidate, config)) {
-                continue;
-            }
-            if (baseline.find(path) == baseline.end()) {
-                *identity = candidate;
-                return true;
-            }
-            if (baseline.empty()) {
-                *identity = candidate;
-                return true;
-            }
-        }
-
-        Sleep(kPollIntervalMs);
-    }
-
-    return false;
+            return left.path < right.path;
+        });
+    return identities;
 }
 
 bool SendWriteAck(BackendContext* context, uint64_t txId, LONG ioStatus) {
@@ -515,41 +526,89 @@ bool SendWriteAck(BackendContext* context, uint64_t txId, LONG ioStatus) {
     return true;
 }
 
+bool SendWorkerCommand(WorkerContext* worker, std::vector<unsigned char>& buffer, DWORD* bytesReturned = nullptr) {
+    return SendCommand(worker->backend->control.file, buffer, bytesReturned, &worker->overlapped);
+}
+
+void EnsureReadReplyBufferCapacity(WorkerContext* worker, ULONG dataLength) {
+    const size_t requiredSize =
+        static_cast<size_t>(YUMEDISK_MESSAGE_BASE_SIZE + YUMEDISK_READ_REPLY_BASE_SIZE + dataLength);
+    if (worker->readReplyBuffer.size() < requiredSize) {
+        worker->readReplyBuffer.resize(requiredSize, 0);
+    }
+}
+
+bool SendWriteAck(
+    WorkerContext* worker,
+    uint64_t txId,
+    LONG ioStatus
+) {
+    auto& buffer = worker->writeAckBuffer;
+    auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer.data());
+    auto* ack = reinterpret_cast<PYUMEDISK_WRITE_ACK>(message->Payload);
+
+    message->Header.Size = static_cast<ULONG>(YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_WRITE_ACK));
+    message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
+    message->Header.Command = YumeDiskCommandWriteAck;
+    message->Header.PayloadLength = sizeof(YUMEDISK_WRITE_ACK);
+    message->Header.SessionId = worker->backend->control.sessionId;
+    ack->TxId = txId;
+    ack->IoStatus = ioStatus;
+    ack->Reserved0 = 0;
+    ack->Reserved1 = 0;
+
+    if (!SendWorkerCommand(worker, buffer, nullptr)) {
+        worker->backend->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (message->Header.Status != kStatusSuccess) {
+        worker->backend->stats.protocolFailures.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
+    worker->backend->stats.writeAcks.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
 bool SendReadReply(
-    BackendContext* context,
+    WorkerContext* worker,
     uint64_t txId,
     LONG ioStatus,
     const unsigned char* data,
     ULONG dataLength
 ) {
-    auto buffer = MakeMessageBuffer(
-        YumeDiskCommandReadReply,
-        static_cast<ULONG>(YUMEDISK_READ_REPLY_BASE_SIZE + dataLength));
+    auto& buffer = worker->readReplyBuffer;
     auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer.data());
     auto* reply = reinterpret_cast<PYUMEDISK_READ_REPLY>(message->Payload);
 
-    message->Header.SessionId = context->control.sessionId;
+    message->Header.Size = static_cast<ULONG>(YUMEDISK_MESSAGE_BASE_SIZE + YUMEDISK_READ_REPLY_BASE_SIZE + dataLength);
+    message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
+    message->Header.Command = YumeDiskCommandReadReply;
+    message->Header.PayloadLength = static_cast<ULONG>(YUMEDISK_READ_REPLY_BASE_SIZE + dataLength);
+    message->Header.SessionId = worker->backend->control.sessionId;
     reply->TxId = txId;
     reply->IoStatus = ioStatus;
     reply->DataLength = dataLength;
+    reply->Reserved = 0;
     if (dataLength != 0 && data != nullptr) {
         std::memcpy(reply->Data, data, dataLength);
     }
 
-    if (!SendCommand(context->control.file, buffer, nullptr)) {
-        context->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
+    if (!SendWorkerCommand(worker, buffer, nullptr)) {
+        worker->backend->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     if (message->Header.Status != kStatusSuccess) {
-        context->stats.protocolFailures.fetch_add(1, std::memory_order_relaxed);
+        worker->backend->stats.protocolFailures.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
 
-    context->stats.readReplies.fetch_add(1, std::memory_order_relaxed);
+    worker->backend->stats.readReplies.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
 
-void ProcessWriteEvent(BackendContext* context, const YUMEDISK_EVENT& event, const unsigned char* inlineData) {
+void ProcessWriteEvent(WorkerContext* worker, const YUMEDISK_EVENT& event, const unsigned char* inlineData) {
+    BackendContext* context = worker->backend;
     LONG ioStatus = kStatusSuccess;
     {
         std::lock_guard<std::mutex> guard(context->diskLock);
@@ -559,9 +618,7 @@ void ProcessWriteEvent(BackendContext* context, const YUMEDISK_EVENT& event, con
         } else {
             const uint64_t offset = event.Lba * static_cast<uint64_t>(context->config.sectorSize);
             auto& medium = diskIt->second.medium;
-            if (event.DataLength > context->config.ioSize) {
-                ioStatus = kStatusBufferTooSmall;
-            } else if (offset > medium.size() ||
+            if (offset > medium.size() ||
                        static_cast<uint64_t>(event.DataLength) > medium.size() - offset) {
                 ioStatus = kStatusInvalidParameter;
             } else if (event.DataLength != 0 && inlineData == nullptr) {
@@ -572,15 +629,20 @@ void ProcessWriteEvent(BackendContext* context, const YUMEDISK_EVENT& event, con
         }
     }
 
-    if (!SendWriteAck(context, event.TxId, ioStatus) && !context->stop.load(std::memory_order_relaxed)) {
+    if (!SendWriteAck(worker, event.TxId, ioStatus) && !context->stop.load(std::memory_order_relaxed)) {
         LogLine(*context, L"WRITE_ACK failed");
     }
 }
 
-void ProcessReadEvent(BackendContext* context, const YUMEDISK_EVENT& event) {
+void ProcessReadEvent(WorkerContext* worker, const YUMEDISK_EVENT& event) {
+    BackendContext* context = worker->backend;
     LONG ioStatus = kStatusSuccess;
-    std::vector<unsigned char> replyData;
     ULONG dataLength = event.DataLength;
+
+    EnsureReadReplyBufferCapacity(worker, dataLength);
+    auto& replyBuffer = worker->readReplyBuffer;
+    auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(replyBuffer.data());
+    auto* reply = reinterpret_cast<PYUMEDISK_READ_REPLY>(message->Payload);
 
     {
         std::lock_guard<std::mutex> guard(context->diskLock);
@@ -591,25 +653,21 @@ void ProcessReadEvent(BackendContext* context, const YUMEDISK_EVENT& event) {
         } else {
             const uint64_t offset = event.Lba * static_cast<uint64_t>(context->config.sectorSize);
             const auto& medium = diskIt->second.medium;
-            if (dataLength > context->config.ioSize) {
-                ioStatus = kStatusBufferTooSmall;
-                dataLength = 0;
-            } else if (offset > medium.size() ||
+            if (offset > medium.size() ||
                        static_cast<uint64_t>(event.DataLength) > medium.size() - offset) {
                 ioStatus = kStatusInvalidParameter;
                 dataLength = 0;
             } else if (event.DataLength != 0) {
-                replyData.resize(event.DataLength);
-                std::memcpy(replyData.data(), medium.data() + offset, event.DataLength);
+                std::memcpy(reply->Data, medium.data() + offset, event.DataLength);
             }
         }
     }
 
     if (!SendReadReply(
-            context,
+            worker,
             event.TxId,
             ioStatus,
-            replyData.empty() ? nullptr : replyData.data(),
+            (dataLength == 0) ? nullptr : reply->Data,
             dataLength) &&
         !context->stop.load(std::memory_order_relaxed)) {
         LogLine(*context, L"READ_REPLY failed");
@@ -617,18 +675,34 @@ void ProcessReadEvent(BackendContext* context, const YUMEDISK_EVENT& event) {
 }
 
 void WaitWorker(BackendContext* context) {
-    std::vector<unsigned char> waitBuffer = MakeMessageBuffer(
+    WorkerContext worker{};
+    worker.backend = context;
+    worker.waitBuffer = MakeMessageBuffer(
         YumeDiskCommandWaitEvent,
         sizeof(YUMEDISK_WAIT_EVENT),
-        static_cast<ULONG>(sizeof(YUMEDISK_WAIT_EVENT) + sizeof(YUMEDISK_EVENT) + context->config.ioSize));
-    auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(waitBuffer.data());
+        static_cast<ULONG>(
+            sizeof(YUMEDISK_WAIT_EVENT) +
+            sizeof(YUMEDISK_EVENT) +
+            context->config.waitInlineDataCapacity));
+    worker.readReplyBuffer = MakeMessageBuffer(
+        YumeDiskCommandReadReply,
+        static_cast<ULONG>(YUMEDISK_READ_REPLY_BASE_SIZE),
+        static_cast<ULONG>(YUMEDISK_READ_REPLY_BASE_SIZE + context->config.ioSize));
+    worker.writeAckBuffer = MakeMessageBuffer(YumeDiskCommandWriteAck, sizeof(YUMEDISK_WRITE_ACK));
+    worker.overlapped.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (worker.overlapped.hEvent == nullptr) {
+        context->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(worker.waitBuffer.data());
     auto* waitRequest = reinterpret_cast<PYUMEDISK_WAIT_EVENT>(message->Payload);
 
     while (!context->stop.load(std::memory_order_relaxed)) {
-        std::memset(waitBuffer.data(), 0, waitBuffer.size());
-        message = reinterpret_cast<PYUMEDISK_MESSAGE>(waitBuffer.data());
+        std::memset(worker.waitBuffer.data(), 0, worker.waitBuffer.size());
+        message = reinterpret_cast<PYUMEDISK_MESSAGE>(worker.waitBuffer.data());
         waitRequest = reinterpret_cast<PYUMEDISK_WAIT_EVENT>(message->Payload);
-        message->Header.Size = static_cast<ULONG>(waitBuffer.size());
+        message->Header.Size = static_cast<ULONG>(worker.waitBuffer.size());
         message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
         message->Header.Command = YumeDiskCommandWaitEvent;
         message->Header.PayloadLength = sizeof(YUMEDISK_WAIT_EVENT);
@@ -636,7 +710,7 @@ void WaitWorker(BackendContext* context) {
         waitRequest->TimeoutMs = 0;
 
         DWORD bytesReturned = 0;
-        if (!SendCommand(context->control.file, waitBuffer, &bytesReturned)) {
+        if (!SendWorkerCommand(&worker, worker.waitBuffer, &bytesReturned)) {
             if (!context->stop.load(std::memory_order_relaxed)) {
                 context->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
             }
@@ -644,6 +718,11 @@ void WaitWorker(BackendContext* context) {
         }
 
         if (message->Header.Status != kStatusSuccess) {
+            if (message->Header.Status == kStatusBufferTooSmall) {
+                LogLine(
+                    *context,
+                    L"WAIT_EVENT buffer too small; increase wait inline capacity if the benchmark issues large writes");
+            }
             if (context->stop.load(std::memory_order_relaxed) &&
                 message->Header.Status == kStatusDeviceNotConnected) {
                 break;
@@ -664,11 +743,11 @@ void WaitWorker(BackendContext* context) {
         switch (event->EventType) {
         case YumeDiskEventReadRequest:
             context->stats.readEvents.fetch_add(1, std::memory_order_relaxed);
-            ProcessReadEvent(context, *event);
+            ProcessReadEvent(&worker, *event);
             break;
         case YumeDiskEventWriteRequest:
             context->stats.writeEvents.fetch_add(1, std::memory_order_relaxed);
-            ProcessWriteEvent(context, *event, inlineData);
+            ProcessWriteEvent(&worker, *event, inlineData);
             break;
         case YumeDiskEventDiskAdded:
         case YumeDiskEventDiskRemoved:
@@ -683,6 +762,8 @@ void WaitWorker(BackendContext* context) {
             break;
         }
     }
+
+    CloseHandle(worker.overlapped.hEvent);
 }
 
 void PrintRuntimeHelp() {
@@ -698,12 +779,13 @@ void PrintRuntimeHelp() {
 
 void PrintUsage() {
     std::cout
-        << "RWTestApp [--queue-depth N] [--io-size BYTES] [--disk-size-mb MB]\n"
-        << "          [--sector-size BYTES] [--target ID]\n"
+        << "RWTestApp [--queue-depth N] [--io-size BYTES] [--wait-inline-mb MB]\n"
+        << "          [--disk-size-mb MB] [--sector-size BYTES] [--target ID]\n"
         << "\n"
         << "defaults:\n"
         << "  queue-depth  = " << kDefaultQueueDepth << "\n"
         << "  io-size      = " << kDefaultIoSize << "\n"
+        << "  wait-inline-mb = " << (kDefaultWaitInlineDataCapacity / (1024ull * 1024ull)) << "\n"
         << "  disk-size-mb = " << (kDefaultDiskSizeBytes / (1024ull * 1024ull)) << "\n"
         << "  sector-size  = " << kDefaultSectorSize << "\n"
         << "  target       = " << kDefaultTargetId << "\n"
@@ -751,6 +833,13 @@ ParseResult ParseArgs(int argc, char** argv, AppConfig* config) {
             config->ioSize = static_cast<size_t>(value);
             continue;
         }
+        if (arg == "--wait-inline-mb") {
+            if (!nextValue(&value) || value == 0 || value > (std::numeric_limits<size_t>::max() / (1024ull * 1024ull))) {
+                return ParseResult::Error;
+            }
+            config->waitInlineDataCapacity = static_cast<size_t>(value * 1024ull * 1024ull);
+            continue;
+        }
         if (arg == "--disk-size-mb") {
             if (!nextValue(&value) || value == 0) {
                 return ParseResult::Error;
@@ -779,12 +868,10 @@ ParseResult ParseArgs(int argc, char** argv, AppConfig* config) {
     if (config->ioSize % config->sectorSize != 0) {
         return ParseResult::Error;
     }
-    if (config->diskSizeBytes % config->sectorSize != 0 || config->diskSizeBytes % config->ioSize != 0) {
-        return ParseResult::Error;
+    if (config->waitInlineDataCapacity < config->ioSize) {
+        config->waitInlineDataCapacity = config->ioSize;
     }
-
-    const uint64_t slotCount = config->diskSizeBytes / config->ioSize;
-    if (slotCount == 0 || config->queueDepth > slotCount || (slotCount % config->queueDepth) != 0) {
+    if (config->diskSizeBytes % config->sectorSize != 0 || config->diskSizeBytes % config->ioSize != 0) {
         return ParseResult::Error;
     }
 
@@ -813,19 +900,36 @@ ULONG FindFirstFreeTarget(BackendContext* context) {
 }
 
 void ListManagedDisks(BackendContext* context) {
-    std::lock_guard<std::mutex> guard(context->diskLock);
-    if (context->disks.empty()) {
-        std::wcout << L"disk_count=0" << std::endl;
-        return;
+    std::vector<ManagedDisk> managedDisks;
+    {
+        std::lock_guard<std::mutex> guard(context->diskLock);
+        managedDisks.reserve(context->disks.size());
+        for (const auto& entry : context->disks) {
+            managedDisks.push_back(entry.second);
+        }
     }
 
-    std::wcout << L"disk_count=" << context->disks.size() << std::endl;
-    for (const auto& entry : context->disks) {
-        const auto& disk = entry.second;
-        std::wcout << L"target=" << disk.targetId
-                   << L", path=" << (disk.identity.path.empty() ? L"<unknown>" : disk.identity.path)
-                   << L", device_number=" << disk.identity.deviceNumber
-                   << L", disk_bytes=" << disk.identity.lengthBytes
+    if (managedDisks.empty()) {
+        std::wcout << L"disk_count=0" << std::endl;
+    } else {
+        std::wcout << L"disk_count=" << managedDisks.size() << std::endl;
+        for (const auto& disk : managedDisks) {
+            std::wcout << L"target=" << disk.targetId
+                       << L", path=" << (disk.identity.path.empty() ? L"<unknown>" : disk.identity.path)
+                       << L", device_number=" << disk.identity.deviceNumber
+                       << L", disk_bytes=" << (disk.identity.lengthBytes == 0 ? context->config.diskSizeBytes : disk.identity.lengthBytes)
+                       << std::endl;
+        }
+    }
+
+    const auto visibleDisks = EnumerateVisibleYumeDisks(context->config);
+    std::wcout << L"visible_disk_count=" << visibleDisks.size() << std::endl;
+    for (size_t i = 0; i < visibleDisks.size(); ++i) {
+        const auto& disk = visibleDisks[i];
+        std::wcout << L"visible_disk[" << i << L"]"
+                   << L", path=" << disk.path
+                   << L", device_number=" << disk.deviceNumber
+                   << L", disk_bytes=" << disk.lengthBytes
                    << std::endl;
     }
 }
@@ -845,7 +949,6 @@ bool CreateManagedDisk(BackendContext* context, ULONG targetId) {
         context->disks.emplace(targetId, std::move(disk));
     }
 
-    const auto baselineDisks = SnapshotYumeDiskPaths(context->config);
     if (!CreateDisk(&context->control, context->config, targetId)) {
         std::lock_guard<std::mutex> guard(context->diskLock);
         context->disks.erase(targetId);
@@ -853,26 +956,8 @@ bool CreateManagedDisk(BackendContext* context, ULONG targetId) {
         return false;
     }
 
-    DiskIdentity identity;
-    if (!WaitForDiskPath(context->config, baselineDisks, &identity)) {
-        RemoveDisk(&context->control, targetId);
-        std::lock_guard<std::mutex> guard(context->diskLock);
-        context->disks.erase(targetId);
-        std::wcerr << L"create failed, disk path not found, target=" << targetId << std::endl;
-        return false;
-    }
-
-    {
-        std::lock_guard<std::mutex> guard(context->diskLock);
-        auto diskIt = context->disks.find(targetId);
-        if (diskIt != context->disks.end()) {
-            diskIt->second.identity = identity;
-        }
-    }
-
     std::wcout << L"created target=" << targetId
-               << L", path=" << identity.path
-               << L", device_number=" << identity.deviceNumber
+               << L", path=<pending-enumeration>"
                << std::endl;
     return true;
 }
@@ -1039,6 +1124,7 @@ int main(int argc, char** argv) {
     std::wcout << L"control_session=" << backend.control.sessionId << std::endl;
     std::wcout << L"queue_depth=" << config.queueDepth
                << L", io_size=" << config.ioSize
+               << L", wait_inline_bytes=" << config.waitInlineDataCapacity
                << L", sector_size=" << config.sectorSize
                << L", disk_bytes=" << config.diskSizeBytes
                << std::endl;
