@@ -9,6 +9,12 @@
 #define DRIVER_NAME "YumeDiskSCSI"
 #define MEM_TAG 'SDmY'
 
+#define YD_SCSI_LOG(_fmt_, ...) \
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, DRIVER_NAME ": " _fmt_ "\n", __VA_ARGS__)
+
+#define YD_SCSI_ERR(_fmt_, ...) \
+    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, DRIVER_NAME ": " _fmt_ "\n", __VA_ARGS__)
+
 typedef struct _REPORT_LUNS_DATA {
     UINT32 LunListLength;
     UINT32 Reserved;

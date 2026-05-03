@@ -3,6 +3,7 @@
 #include "..\control\file.h"
 #include "..\control\ioctl.h"
 #include "..\session\session.h"
+#include "..\transport\transport.h"
 
 NTSTATUS
 ControlAddDevice(
@@ -20,6 +21,7 @@ ControlAddDevice(
 
     UNREFERENCED_PARAMETER(Driver);
 
+    YD_KMDF_LOG("ControlAddDevice enter%s", "");
     WdfDeviceInitSetExclusive(DeviceInit, TRUE);
     WdfDeviceInitSetIoType(DeviceInit, WdfDeviceIoBuffered);
 
@@ -31,19 +33,23 @@ ControlAddDevice(
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&attributes, CTRL_DEVICE_CONTEXT);
     attributes.SynchronizationScope = WdfSynchronizationScopeNone;
+    attributes.ExecutionLevel = WdfExecutionLevelPassive;
 
     status = WdfDeviceCreate(&DeviceInit, &attributes, &device);
     if (!NT_SUCCESS(status)) {
+        YD_KMDF_ERR("WdfDeviceCreate failed, status=0x%08X", status);
         return status;
     }
 
     context = ControlGetContext(device);
     ControlSessionInitialize(context);
+    ControlTransportInitialize(context);
 
     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
     attributes.ParentObject = device;
     status = WdfSpinLockCreate(&attributes, &context->OpenLock);
     if (!NT_SUCCESS(status)) {
+        YD_KMDF_ERR("WdfSpinLockCreate failed, status=0x%08X", status);
         return status;
     }
 
@@ -51,9 +57,17 @@ ControlAddDevice(
     queueConfig.EvtIoDeviceControl = ControlEvtIoDeviceControl;
     status = WdfIoQueueCreate(device, &queueConfig, WDF_NO_OBJECT_ATTRIBUTES, WDF_NO_HANDLE);
     if (!NT_SUCCESS(status)) {
+        YD_KMDF_ERR("WdfIoQueueCreate failed, status=0x%08X", status);
         return status;
     }
 
-    return WdfDeviceCreateDeviceInterface(device, (LPGUID)&GUID_YUMEDISK_CONTROL, NULL);
+    status = WdfDeviceCreateDeviceInterface(device, (LPGUID)&GUID_YUMEDISK_CONTROL, NULL);
+    if (!NT_SUCCESS(status)) {
+        YD_KMDF_ERR("WdfDeviceCreateDeviceInterface failed, status=0x%08X", status);
+        return status;
+    }
+
+    YD_KMDF_LOG("ControlAddDevice ready%s", "");
+    return status;
 }
 
