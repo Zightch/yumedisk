@@ -31,8 +31,9 @@ ControlEvtFileCleanup(
     context = ControlGetContext(device);
     sessionId = ControlSessionClose(context, FileObject);
     if (sessionId != 0) {
-        ControlSendSessionCleanup(sessionId);
+        ControlSendSessionCleanup(context, sessionId);
     }
+    ControlCloseMiniportHandle(context);
 }
 
 VOID

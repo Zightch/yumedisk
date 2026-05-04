@@ -22,6 +22,7 @@ ControlSendMiniportBuffer(
     PUCHAR ioctlBuffer;
     PSRB_IO_CONTROL srbIoControl;
     IO_STATUS_BLOCK ioStatus;
+    KEVENT event;
     NTSTATUS status;
     ULONG transferLength;
     PYUMEDISK_MESSAGE message;
@@ -50,9 +51,10 @@ ControlSendMiniportBuffer(
     RtlCopyMemory(srbIoControl->Signature, YUMEDISK_MINIPORT_SIGNATURE, sizeof(srbIoControl->Signature));
     RtlCopyMemory(srbIoControl + 1, Buffer, InputLength);
 
+    KeInitializeEvent(&event, NotificationEvent, FALSE);
     status = ZwDeviceIoControlFile(
         Handle,
-        NULL,
+        &event,
         NULL,
         NULL,
         &ioStatus,
@@ -63,7 +65,10 @@ ControlSendMiniportBuffer(
         ioctlBufferSize
     );
 
-    if (NT_SUCCESS(status)) {
+    if (status == STATUS_PENDING) {
+        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
+        status = ioStatus.Status;
+    } else if (NT_SUCCESS(status)) {
         status = ioStatus.Status;
     }
 
@@ -169,14 +174,14 @@ ControlOpenMiniportHandle(
 
         openStatus = ZwCreateFile(
             &handle,
-            GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE,
+            GENERIC_READ | GENERIC_WRITE,
             &attributes,
             &ioStatus,
             NULL,
             FILE_ATTRIBUTE_NORMAL,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             FILE_OPEN,
-            FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
+            FILE_NON_DIRECTORY_FILE,
             NULL,
             0);
 
@@ -200,6 +205,7 @@ ControlOpenMiniportHandle(
 
 NTSTATUS
 ControlProxyCommand(
+    _Inout_ PCTRL_DEVICE_CONTEXT Context,
     _Inout_updates_bytes_(BufferCapacity) PUCHAR Buffer,
     _In_ ULONG InputLength,
     _In_ ULONG BufferCapacity,
@@ -207,21 +213,47 @@ ControlProxyCommand(
 )
 {
     HANDLE handle;
+    HANDLE newHandle;
     NTSTATUS status;
 
-    handle = NULL;
-    status = ControlOpenMiniportHandle(&handle);
-    if (!NT_SUCCESS(status)) {
-        return status;
+    handle = (HANDLE)InterlockedCompareExchangePointer(
+        (volatile PVOID*)&Context->MiniportHandle, NULL, NULL);
+
+    if (handle == NULL) {
+        status = ControlOpenMiniportHandle(&newHandle);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
+        if (InterlockedCompareExchangePointer(
+                (volatile PVOID*)&Context->MiniportHandle, newHandle, NULL) != NULL) {
+            ZwClose(newHandle);
+        }
+
+        handle = (HANDLE)InterlockedCompareExchangePointer(
+            (volatile PVOID*)&Context->MiniportHandle, NULL, NULL);
     }
 
-    status = ControlSendMiniportBuffer(handle, Buffer, InputLength, BufferCapacity, BytesReturned);
-    ZwClose(handle);
-    return status;
+    return ControlSendMiniportBuffer(handle, Buffer, InputLength, BufferCapacity, BytesReturned);
+}
+
+VOID
+ControlCloseMiniportHandle(
+    _Inout_ PCTRL_DEVICE_CONTEXT Context
+)
+{
+    HANDLE handle;
+
+    handle = (HANDLE)InterlockedExchangePointer(
+        (volatile PVOID*)&Context->MiniportHandle, NULL);
+    if (handle != NULL) {
+        ZwClose(handle);
+    }
 }
 
 VOID
 ControlSendSessionCleanup(
+    _Inout_ PCTRL_DEVICE_CONTEXT Context,
     _In_ UINT64 SessionId
 )
 {
@@ -237,6 +269,6 @@ ControlSendSessionCleanup(
     message->Header.SessionId = SessionId;
     message->Header.Flags = YUMEDISK_SESSION_CLOSE_FLAG;
 
-    (VOID)ControlProxyCommand(buffer, sizeof(buffer), sizeof(buffer), &bytesReturned);
+    (VOID)ControlProxyCommand(Context, buffer, sizeof(buffer), sizeof(buffer), &bytesReturned);
 }
 

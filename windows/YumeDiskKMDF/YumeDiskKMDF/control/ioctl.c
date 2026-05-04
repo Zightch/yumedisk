@@ -69,7 +69,7 @@ ControlEvtIoDeviceControl(
     }
 
     message->Header.SessionId = sessionId;
-    status = ControlProxyCommand(outputBuffer, requestLength, bufferCapacity, &bytesReturned);
+    status = ControlProxyCommand(context, outputBuffer, requestLength, bufferCapacity, &bytesReturned);
     if (bytesReturned == 0) {
         bytesReturned = YUMEDISK_MESSAGE_BASE_SIZE;
     }
