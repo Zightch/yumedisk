@@ -277,7 +277,7 @@ DiskHandleScsiCdb(
     case SCSIOP_VERIFY16:
         break;
     case SCSIOP_READ6:
-        startBlockIndex = (((UINT64)Cdb->CDB6READWRITE.LogicalBlockMsb1) << 13) |
+        startBlockIndex = (((UINT64)Cdb->CDB6READWRITE.LogicalBlockMsb1) << 16) |
             (((UINT64)Cdb->CDB6READWRITE.LogicalBlockMsb0) << 8) |
             Cdb->CDB6READWRITE.LogicalBlockLsb;
         blockCount = Cdb->CDB6READWRITE.TransferBlocks == 0 ? 256 : Cdb->CDB6READWRITE.TransferBlocks;
@@ -321,7 +321,7 @@ start_read:
         *SrbStatus = (ioStatus == STATUS_PENDING) ? SRB_STATUS_PENDING : DiskNtStatusToSrbStatus(ioStatus);
         break;
     case SCSIOP_WRITE6:
-        startBlockIndex = (((UINT64)Cdb->CDB6READWRITE.LogicalBlockMsb1) << 13) |
+        startBlockIndex = (((UINT64)Cdb->CDB6READWRITE.LogicalBlockMsb1) << 16) |
             (((UINT64)Cdb->CDB6READWRITE.LogicalBlockMsb0) << 8) |
             Cdb->CDB6READWRITE.LogicalBlockLsb;
         blockCount = Cdb->CDB6READWRITE.TransferBlocks == 0 ? 256 : Cdb->CDB6READWRITE.TransferBlocks;

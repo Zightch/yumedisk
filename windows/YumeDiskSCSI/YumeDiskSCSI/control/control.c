@@ -122,6 +122,9 @@ DiskHandleRemoveAllDisks(
 )
 {
     ULONG index;
+    BOOLEAN closeSession;
+
+    closeSession = ((Message->Header.Flags & YUMEDISK_SESSION_CLOSE_FLAG) != 0);
 
     for (index = YUMEDISK_MIN_TARGET_ID; index <= YUMEDISK_MAX_USABLE_TARGET_ID; ++index) {
         if (Extension->Disk[index].Present) {
@@ -131,14 +134,16 @@ DiskHandleRemoveAllDisks(
             DiskCancelPendingIoByTarget(DeviceExtension, Extension, index, STATUS_DEVICE_NOT_CONNECTED);
             DiskResetDiskStorage(&Extension->Disk[index]);
             Extension->Disk[index].Generation++;
-            DiskQueueSyntheticEvent(DeviceExtension, YumeDiskEventDiskRemoved, index);
+            if (!closeSession) {
+                DiskQueueSyntheticEvent(DeviceExtension, YumeDiskEventDiskRemoved, index);
+            }
         }
     }
 
-    if ((Message->Header.Flags & YUMEDISK_SESSION_CLOSE_FLAG) != 0) {
-        DiskQueueSyntheticEvent(DeviceExtension, YumeDiskEventShutdown, 0);
-        Extension->CurrentSessionId = 0;
+    if (closeSession) {
         DiskFreeQueuedState(DeviceExtension);
+        Extension->CurrentSessionId = 0;
+        DiskQueueSyntheticEvent(DeviceExtension, YumeDiskEventShutdown, 0);
         DiskCompleteAllPending(DeviceExtension, STATUS_DEVICE_NOT_CONNECTED);
     }
 

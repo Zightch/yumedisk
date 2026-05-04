@@ -7,7 +7,7 @@ project(MyApp5)
 
 include_directories(
         utils
-        ${CMAKE_CURRENT_SOURCE_DIR}/../shared
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../shared
 )
 add_executable(
         MyApp5

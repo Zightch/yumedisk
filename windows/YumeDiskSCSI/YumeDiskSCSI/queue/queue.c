@@ -490,11 +490,11 @@ DiskQueueSyntheticEvent(
 {
     PDEVICE_CONTEXT extension;
     PYUMEDISK_EVENT_NODE eventNode;
+    KIRQL oldIrql;
+    BOOLEAN allowWhenSessionClosed;
 
     extension = (PDEVICE_CONTEXT)DeviceExtension;
-    if (extension->CurrentSessionId == 0) {
-        return;
-    }
+    allowWhenSessionClosed = (EventType == YumeDiskEventShutdown);
 
     eventNode = (PYUMEDISK_EVENT_NODE)DiskAlloc(sizeof(YUMEDISK_EVENT_NODE));
     if (eventNode == NULL) {
@@ -504,7 +504,16 @@ DiskQueueSyntheticEvent(
     RtlZeroMemory(eventNode, sizeof(*eventNode));
     eventNode->Event.EventType = EventType;
     eventNode->Event.TargetId = TargetId;
-    DiskAssignEventTxId(extension, &eventNode->Event);
+
+    KeAcquireSpinLock(&extension->ControlLock, &oldIrql);
+    if (!allowWhenSessionClosed && extension->CurrentSessionId == 0) {
+        KeReleaseSpinLock(&extension->ControlLock, oldIrql);
+        DiskFree(eventNode);
+        return;
+    }
+
+    eventNode->Event.TxId = DiskAllocateTxIdLocked(extension);
+    KeReleaseSpinLock(&extension->ControlLock, oldIrql);
     DiskQueueOrDeliverEventNode(DeviceExtension, eventNode);
 }
 
@@ -635,7 +644,9 @@ DiskHandleWaitEvent(
     status = STATUS_SUCCESS;
 
     KeAcquireSpinLock(&Extension->ControlLock, &oldIrql);
-    if (!IsListEmpty(&Extension->PendingEvents)) {
+    if (Extension->CurrentSessionId == 0) {
+        status = STATUS_DEVICE_NOT_CONNECTED;
+    } else if (!IsListEmpty(&Extension->PendingEvents)) {
         PLIST_ENTRY entry;
         PYUMEDISK_EVENT_NODE candidate;
 

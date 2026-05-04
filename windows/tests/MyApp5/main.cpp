@@ -16,7 +16,7 @@ static const char* kHelpText =
     "  query\n"
     "  create [target=<id>|<id>] [sectors=<count>|sectorCount=<count>|<count>] [sectorSize=<bytes>]\n"
     "  remove [target=<id>|<id>]\n"
-    "  removeall\n"
+    "  removeall [close]\n"
     "  wait\n"
     "  exit\n";
 
@@ -334,12 +334,27 @@ static int RunRemove(ControlContext* context, const std::vector<std::string>& ar
     return message->Header.Status == kProtocolSuccess ? 0 : 1;
 }
 
-static int RunRemoveAll(ControlContext* context) {
+static int RunRemoveAll(ControlContext* context, const std::vector<std::string>& args) {
     auto buffer = MakeMessageBuffer(YumeDiskCommandRemoveAllDisks, 0);
     auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer.data());
+    bool closeSession = false;
+
+    for (size_t i = 1; i < args.size(); ++i) {
+        if (args[i] == "close") {
+            closeSession = true;
+            continue;
+        }
+
+        std::cout << "invalid removeall argument: " << args[i] << std::endl;
+        return 1;
+    }
 
     if (!AttachSession(context, message)) {
         return 1;
+    }
+
+    if (closeSession) {
+        message->Header.Flags = YUMEDISK_SESSION_CLOSE_FLAG;
     }
 
     if (!SendCommand(context->controlFile, buffer)) {
@@ -408,7 +423,7 @@ static int ExecuteCommand(ControlContext* context, const std::string& line, bool
         return RunRemove(context, args);
     }
     if (command == "removeall") {
-        return RunRemoveAll(context);
+        return RunRemoveAll(context, args);
     }
     if (command == "wait") {
         return RunWait(context);

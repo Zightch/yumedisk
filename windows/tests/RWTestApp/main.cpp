@@ -369,10 +369,11 @@ bool RemoveDisk(ControlContext* control, ULONG targetId) {
     return message->Header.Status == kStatusSuccess;
 }
 
-bool RemoveAllDisks(ControlContext* control) {
+bool RemoveAllDisks(ControlContext* control, ULONG flags = 0) {
     auto buffer = MakeMessageBuffer(YumeDiskCommandRemoveAllDisks, 0);
     auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer.data());
     message->Header.SessionId = control->sessionId;
+    message->Header.Flags = flags;
 
     if (!SendCommand(control->file, buffer, nullptr)) {
         return false;
@@ -676,6 +677,7 @@ void ProcessReadEvent(WorkerContext* worker, const YUMEDISK_EVENT& event) {
 
 void WaitWorker(BackendContext* context) {
     WorkerContext worker{};
+    bool shouldExit = false;
     worker.backend = context;
     worker.waitBuffer = MakeMessageBuffer(
         YumeDiskCommandWaitEvent,
@@ -756,9 +758,14 @@ void WaitWorker(BackendContext* context) {
         case YumeDiskEventShutdown:
             context->stats.syntheticEvents.fetch_add(1, std::memory_order_relaxed);
             context->stop.store(true, std::memory_order_relaxed);
-            return;
+            shouldExit = true;
+            break;
         default:
             context->stats.protocolFailures.fetch_add(1, std::memory_order_relaxed);
+            break;
+        }
+
+        if (shouldExit) {
             break;
         }
     }
@@ -985,8 +992,9 @@ bool RemoveManagedDisk(BackendContext* context, ULONG targetId) {
     return true;
 }
 
-bool RemoveAllManagedDisks(BackendContext* context) {
-    if (!RemoveAllDisks(&context->control)) {
+bool RemoveAllManagedDisks(BackendContext* context, bool closeSession = false) {
+    const ULONG flags = closeSession ? YUMEDISK_SESSION_CLOSE_FLAG : 0;
+    if (!RemoveAllDisks(&context->control, flags)) {
         std::wcerr << L"remove all failed" << std::endl;
         return false;
     }
@@ -1144,11 +1152,19 @@ int main(int argc, char** argv) {
                << L", backend_protocol_failures=" << backend.stats.protocolFailures.load(std::memory_order_relaxed)
                << std::endl;
 
-    RemoveAllManagedDisks(&backend);
-    CloseHandle(backend.control.file);
+    const bool sessionClosed = RemoveAllManagedDisks(&backend, true);
+    if (!sessionClosed) {
+        CloseHandle(backend.control.file);
+        backend.control.file = INVALID_HANDLE_VALUE;
+    }
 
     for (auto& worker : workers) {
         worker.join();
+    }
+
+    if (backend.control.file != INVALID_HANDLE_VALUE) {
+        CloseHandle(backend.control.file);
+        backend.control.file = INVALID_HANDLE_VALUE;
     }
 
     SetConsoleCtrlHandler(ConsoleCtrlHandler, FALSE);

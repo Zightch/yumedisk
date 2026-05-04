@@ -4,6 +4,30 @@
 
 #include "..\core\memory.h"
 
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwCreateEvent(
+    _Out_ PHANDLE EventHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
+    _In_ EVENT_TYPE EventType,
+    _In_ BOOLEAN InitialState
+);
+
+_When_(Timeout == NULL, _IRQL_requires_max_(APC_LEVEL))
+_When_(Timeout->QuadPart != 0, _IRQL_requires_max_(APC_LEVEL))
+_When_(Timeout->QuadPart == 0, _IRQL_requires_max_(DISPATCH_LEVEL))
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwWaitForSingleObject(
+    _In_ HANDLE Handle,
+    _In_ BOOLEAN Alertable,
+    _In_opt_ PLARGE_INTEGER Timeout
+);
+
 static const GUID ControlStoragePortGuid = {
     0x2accfe60, 0xc130, 0x11d2, { 0xb0, 0x82, 0x00, 0xa0, 0xc9, 0x1e, 0xfb, 0x8b }
 };
@@ -22,7 +46,8 @@ ControlSendMiniportBuffer(
     PUCHAR ioctlBuffer;
     PSRB_IO_CONTROL srbIoControl;
     IO_STATUS_BLOCK ioStatus;
-    KEVENT event;
+    OBJECT_ATTRIBUTES eventAttributes;
+    HANDLE eventHandle;
     NTSTATUS status;
     ULONG transferLength;
     PYUMEDISK_MESSAGE message;
@@ -51,10 +76,26 @@ ControlSendMiniportBuffer(
     RtlCopyMemory(srbIoControl->Signature, YUMEDISK_MINIPORT_SIGNATURE, sizeof(srbIoControl->Signature));
     RtlCopyMemory(srbIoControl + 1, Buffer, InputLength);
 
-    KeInitializeEvent(&event, NotificationEvent, FALSE);
+    InitializeObjectAttributes(
+        &eventAttributes,
+        NULL,
+        OBJ_KERNEL_HANDLE,
+        NULL,
+        NULL);
+    status = ZwCreateEvent(
+        &eventHandle,
+        SYNCHRONIZE | EVENT_MODIFY_STATE,
+        &eventAttributes,
+        NotificationEvent,
+        FALSE);
+    if (!NT_SUCCESS(status)) {
+        ControlFree(ioctlBuffer);
+        return status;
+    }
+
     status = ZwDeviceIoControlFile(
         Handle,
-        &event,
+        eventHandle,
         NULL,
         NULL,
         &ioStatus,
@@ -66,11 +107,15 @@ ControlSendMiniportBuffer(
     );
 
     if (status == STATUS_PENDING) {
-        KeWaitForSingleObject(&event, Executive, KernelMode, FALSE, NULL);
-        status = ioStatus.Status;
+        status = ZwWaitForSingleObject(eventHandle, FALSE, NULL);
+        if (NT_SUCCESS(status)) {
+            status = ioStatus.Status;
+        }
     } else if (NT_SUCCESS(status)) {
         status = ioStatus.Status;
     }
+
+    ZwClose(eventHandle);
 
     if (NT_SUCCESS(status)) {
         if (ioStatus.Information < sizeof(SRB_IO_CONTROL) + YUMEDISK_MESSAGE_BASE_SIZE) {
@@ -174,7 +219,7 @@ ControlOpenMiniportHandle(
 
         openStatus = ZwCreateFile(
             &handle,
-            GENERIC_READ | GENERIC_WRITE,
+            GENERIC_READ | GENERIC_WRITE | SYNCHRONIZE,
             &attributes,
             &ioStatus,
             NULL,
