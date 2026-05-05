@@ -166,8 +166,8 @@ bool SendCommand(
     BOOL ok = DeviceIoControl(
         file,
         IOCTL_YUMEDISK_APP_COMMAND,
-        nullptr,
-        0,
+        buffer.data(),
+        static_cast<DWORD>(buffer.size()),
         buffer.data(),
         static_cast<DWORD>(buffer.size()),
         &transferred,

@@ -26,12 +26,30 @@ typedef enum _YUMEDISK_COMMAND {
     YumeDiskCommandCreateDisk = 2,
     YumeDiskCommandRemoveDisk = 3,
     YumeDiskCommandRemoveAllDisks = 4,
-    YumeDiskCommandHeartbeat = 5
+    YumeDiskCommandHeartbeat = 5,
+    YumeDiskCommandPostReadSlot = 20,
+    YumeDiskCommandPostWriteSlot = 21,
+    YumeDiskCommandReadAck = 22,
+    YumeDiskCommandWriteAckBatch = 23,
+    YumeDiskCommandSubmitSlot = 24,
+    YumeDiskCommandCancelSlot = 25
 } YUMEDISK_COMMAND;
 
 typedef enum _YUMEDISK_FEATURE_FLAGS {
-    YumeDiskFeatureDynamicDisk = 0x00000002u
+    YumeDiskFeatureDynamicDisk = 0x00000002u,
+    YumeDiskFeatureAppOwnedQueue = 0x00000008u
 } YUMEDISK_FEATURE_FLAGS;
+
+typedef enum _YUMEDISK_SLOT_TYPE {
+    YumeDiskSlotTypeInvalid = 0,
+    YumeDiskSlotTypeRead = 1,
+    YumeDiskSlotTypeWrite = 2
+} YUMEDISK_SLOT_TYPE;
+
+typedef enum _YUMEDISK_SLOT_FLAGS {
+    YumeDiskSlotFlagNone = 0x00000000u,
+    YumeDiskSlotFlagAckTrailerPresent = 0x00000001u
+} YUMEDISK_SLOT_FLAGS;
 
 typedef struct _YUMEDISK_HEADER {
     ULONG Size;
@@ -73,3 +91,80 @@ typedef struct _YUMEDISK_REMOVE_DISK {
     ULONG TargetId;
     ULONG Flags;
 } YUMEDISK_REMOVE_DISK, *PYUMEDISK_REMOVE_DISK;
+
+typedef struct _YUMEDISK_SLOT_DESCRIPTOR {
+    UINT64 SessionId;
+    UINT64 SlotId;
+    UINT32 SlotType;
+    UINT32 TargetId;
+    UINT64 KernelVa;
+    UINT32 Capacity;
+    UINT32 Flags;
+} YUMEDISK_SLOT_DESCRIPTOR, *PYUMEDISK_SLOT_DESCRIPTOR;
+
+typedef struct _YUMEDISK_SUBMIT_SLOT {
+    YUMEDISK_SLOT_DESCRIPTOR Slot;
+    UINT32 AckPayloadLength;
+    UINT32 Reserved;
+    UCHAR AckPayload[1];
+} YUMEDISK_SUBMIT_SLOT, *PYUMEDISK_SUBMIT_SLOT;
+
+#define YUMEDISK_SUBMIT_SLOT_BASE_SIZE FIELD_OFFSET(YUMEDISK_SUBMIT_SLOT, AckPayload)
+#define YUMEDISK_SUBMIT_SLOT_SIZE(_ackPayloadLength) \
+    (YUMEDISK_SUBMIT_SLOT_BASE_SIZE + (_ackPayloadLength))
+
+typedef struct _YUMEDISK_CANCEL_SLOT {
+    UINT64 SlotId;
+    UINT32 SlotType;
+    UINT32 TargetId;
+} YUMEDISK_CANCEL_SLOT, *PYUMEDISK_CANCEL_SLOT;
+
+typedef struct _YUMEDISK_READ_SLOT_EVENT {
+    UINT64 EventId;
+    UINT32 TargetId;
+    UINT32 Reserved0;
+    UINT64 Lba;
+    UINT32 BlockCount;
+    UINT32 DataLength;
+} YUMEDISK_READ_SLOT_EVENT, *PYUMEDISK_READ_SLOT_EVENT;
+
+typedef struct _YUMEDISK_READ_ACK {
+    UINT64 EventId;
+    LONG IoStatus;
+    UINT32 DataLength;
+    UINT64 KernelVa;
+} YUMEDISK_READ_ACK, *PYUMEDISK_READ_ACK;
+
+typedef struct _YUMEDISK_WRITE_SLOT_HEADER {
+    UINT64 EventId;
+    UINT32 Seq;
+    UINT32 TotalSeq;
+    UINT32 TargetId;
+    UINT32 Reserved0;
+    UINT64 Lba;
+    UINT32 ByteOffsetInWrite;
+    UINT32 DataLength;
+    UINT32 Flags;
+    UINT32 Reserved1;
+    UCHAR Data[1];
+} YUMEDISK_WRITE_SLOT_HEADER, *PYUMEDISK_WRITE_SLOT_HEADER;
+
+#define YUMEDISK_WRITE_SLOT_HEADER_BASE_SIZE FIELD_OFFSET(YUMEDISK_WRITE_SLOT_HEADER, Data)
+
+typedef struct _YUMEDISK_WRITE_ACK_RANGE {
+    UINT64 EventId;
+    UINT32 SeqBase;
+    UINT32 SeqCount;
+    LONG IoStatus;
+    UINT32 Reserved;
+} YUMEDISK_WRITE_ACK_RANGE, *PYUMEDISK_WRITE_ACK_RANGE;
+
+typedef struct _YUMEDISK_WRITE_ACK_BATCH {
+    UINT32 RangeCount;
+    UINT32 Reserved;
+    YUMEDISK_WRITE_ACK_RANGE Ranges[1];
+} YUMEDISK_WRITE_ACK_BATCH, *PYUMEDISK_WRITE_ACK_BATCH;
+
+#define YUMEDISK_WRITE_ACK_BATCH_BASE_SIZE FIELD_OFFSET(YUMEDISK_WRITE_ACK_BATCH, Ranges)
+#define YUMEDISK_WRITE_ACK_BATCH_SIZE(_rangeCount) \
+    (YUMEDISK_WRITE_ACK_BATCH_BASE_SIZE + ((_rangeCount) * sizeof(YUMEDISK_WRITE_ACK_RANGE)))

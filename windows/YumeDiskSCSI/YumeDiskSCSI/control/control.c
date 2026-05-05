@@ -2,6 +2,33 @@
 
 static
 NTSTATUS
+DiskValidateWriteAckBatchPayload(
+    _In_reads_bytes_(PayloadLength) const UCHAR* Payload,
+    _In_ ULONG PayloadLength
+)
+{
+    PYUMEDISK_WRITE_ACK_BATCH batch;
+    ULONG expectedLength;
+
+    if (PayloadLength < (ULONG)YUMEDISK_WRITE_ACK_BATCH_BASE_SIZE) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    batch = (PYUMEDISK_WRITE_ACK_BATCH)Payload;
+    if (batch->RangeCount > ((MAXULONG - (ULONG)YUMEDISK_WRITE_ACK_BATCH_BASE_SIZE) / (ULONG)sizeof(YUMEDISK_WRITE_ACK_RANGE))) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    expectedLength = (ULONG)YUMEDISK_WRITE_ACK_BATCH_SIZE(batch->RangeCount);
+    if (PayloadLength != expectedLength) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
 DiskHandleQueryInfo(
     _In_ PDEVICE_CONTEXT Extension,
     _Inout_ PYUMEDISK_MESSAGE Message
@@ -17,7 +44,7 @@ DiskHandleQueryInfo(
     RtlZeroMemory(info, sizeof(*info));
     info->ProtocolVersion = YUMEDISK_PROTOCOL_VERSION;
     info->MaxTargets = YUMEDISK_USABLE_TARGET_COUNT;
-    info->Features = YumeDiskFeatureDynamicDisk;
+    info->Features = YumeDiskFeatureDynamicDisk | YumeDiskFeatureAppOwnedQueue;
     RtlCopyMemory(info->AdapterSignature, YUMEDISK_MINIPORT_SIGNATURE, sizeof(info->AdapterSignature));
     RtlCopyMemory(info->ServiceName, L"YumeDiskSCSI", sizeof(L"YumeDiskSCSI"));
 
@@ -144,6 +171,125 @@ DiskHandleRemoveAllDisks(
     return STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+DiskHandleSubmitSlot(
+    _Inout_ PYUMEDISK_MESSAGE Message
+)
+{
+    PYUMEDISK_SUBMIT_SLOT submitSlot;
+    ULONG expectedLength;
+
+    if (Message->Header.PayloadLength < (ULONG)YUMEDISK_SUBMIT_SLOT_BASE_SIZE) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    submitSlot = (PYUMEDISK_SUBMIT_SLOT)Message->Payload;
+    if (submitSlot->Slot.SessionId == 0 ||
+        submitSlot->Slot.SessionId != Message->Header.SessionId ||
+        submitSlot->Slot.TargetId > YUMEDISK_MAX_USABLE_TARGET_ID ||
+        submitSlot->Slot.KernelVa == 0 ||
+        submitSlot->Slot.Capacity == 0 ||
+        (submitSlot->Slot.SlotType != YumeDiskSlotTypeRead &&
+            submitSlot->Slot.SlotType != YumeDiskSlotTypeWrite)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    expectedLength = (ULONG)YUMEDISK_SUBMIT_SLOT_SIZE(submitSlot->AckPayloadLength);
+    if (Message->Header.PayloadLength != expectedLength) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (submitSlot->Slot.SlotType == YumeDiskSlotTypeRead) {
+        if (submitSlot->AckPayloadLength != 0 ||
+            (submitSlot->Slot.Flags & YumeDiskSlotFlagAckTrailerPresent) != 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+    } else {
+        if (submitSlot->AckPayloadLength == 0 &&
+            (submitSlot->Slot.Flags & YumeDiskSlotFlagAckTrailerPresent) != 0) {
+            return STATUS_INVALID_PARAMETER;
+        }
+
+        if (submitSlot->AckPayloadLength != 0) {
+            NTSTATUS status;
+
+            status = DiskValidateWriteAckBatchPayload(
+                submitSlot->AckPayload,
+                submitSlot->AckPayloadLength);
+            if (!NT_SUCCESS(status)) {
+                return status;
+            }
+        }
+    }
+
+    DiskInitMessageStatus(Message, YumeDiskCommandSubmitSlot, STATUS_NOT_SUPPORTED, 0);
+    return STATUS_NOT_SUPPORTED;
+}
+
+static
+NTSTATUS
+DiskHandleReadAck(
+    _Inout_ PYUMEDISK_MESSAGE Message
+)
+{
+    PYUMEDISK_READ_ACK readAck;
+
+    if (Message->Header.PayloadLength != sizeof(YUMEDISK_READ_ACK)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    readAck = (PYUMEDISK_READ_ACK)Message->Payload;
+    if (readAck->EventId == 0 ||
+        (readAck->DataLength != 0 && readAck->KernelVa == 0)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DiskInitMessageStatus(Message, YumeDiskCommandReadAck, STATUS_NOT_SUPPORTED, 0);
+    return STATUS_NOT_SUPPORTED;
+}
+
+static
+NTSTATUS
+DiskHandleWriteAckBatch(
+    _Inout_ PYUMEDISK_MESSAGE Message
+)
+{
+    NTSTATUS status;
+
+    status = DiskValidateWriteAckBatchPayload(Message->Payload, Message->Header.PayloadLength);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    DiskInitMessageStatus(Message, YumeDiskCommandWriteAckBatch, STATUS_NOT_SUPPORTED, 0);
+    return STATUS_NOT_SUPPORTED;
+}
+
+static
+NTSTATUS
+DiskHandleCancelSlot(
+    _Inout_ PYUMEDISK_MESSAGE Message
+)
+{
+    PYUMEDISK_CANCEL_SLOT cancelSlot;
+
+    if (Message->Header.PayloadLength != sizeof(YUMEDISK_CANCEL_SLOT)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    cancelSlot = (PYUMEDISK_CANCEL_SLOT)Message->Payload;
+    if (cancelSlot->SlotId == 0 ||
+        cancelSlot->TargetId > YUMEDISK_MAX_USABLE_TARGET_ID ||
+        (cancelSlot->SlotType != YumeDiskSlotTypeRead &&
+            cancelSlot->SlotType != YumeDiskSlotTypeWrite)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    DiskInitMessageStatus(Message, YumeDiskCommandCancelSlot, STATUS_NOT_SUPPORTED, 0);
+    return STATUS_NOT_SUPPORTED;
+}
+
 BOOLEAN
 DiskHandleIoControlSrb(
     _In_ PVOID DeviceExtension,
@@ -218,6 +364,18 @@ DiskHandleIoControlSrb(
     case YumeDiskCommandRemoveAllDisks:
         status = DiskHandleRemoveAllDisks(DeviceExtension, extension, message);
         break;
+    case YumeDiskCommandSubmitSlot:
+        status = DiskHandleSubmitSlot(message);
+        break;
+    case YumeDiskCommandReadAck:
+        status = DiskHandleReadAck(message);
+        break;
+    case YumeDiskCommandWriteAckBatch:
+        status = DiskHandleWriteAckBatch(message);
+        break;
+    case YumeDiskCommandCancelSlot:
+        status = DiskHandleCancelSlot(message);
+        break;
     default:
         DiskInitMessageStatus(message, message->Header.Command, STATUS_INVALID_DEVICE_REQUEST, 0);
         status = STATUS_INVALID_DEVICE_REQUEST;
@@ -237,4 +395,3 @@ DiskHandleIoControlSrb(
     StorPortNotification(RequestComplete, DeviceExtension, Srb);
     return TRUE;
 }
-
