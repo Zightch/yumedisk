@@ -1,7 +1,6 @@
 #include "protocol.h"
 
 #include <ntddscsi.h>
-#include <srbhelper.h>
 
 #include "memory.h"
 
@@ -51,17 +50,8 @@ DiskCompleteIoctlSrb(
 {
     SrbIoControl->ReturnCode = (ULONG)Status;
     SrbIoControl->Length = ResponseLength;
-    SrbSetDataTransferLength(Srb, sizeof(SRB_IO_CONTROL) + ResponseLength);
-    SrbSetSrbStatus(Srb, SRB_STATUS_SUCCESS);
-    SrbSetScsiStatus(Srb, SCSISTAT_GOOD);
-    YD_SCSI_LOG(
-        "DiskCompleteIoctlSrb, status=0x%08X returnCode=0x%08X response=%lu transfer=%lu srbStatus=0x%02X scsiStatus=0x%02X",
-        Status,
-        SrbIoControl->ReturnCode,
-        ResponseLength,
-        SrbGetDataTransferLength(Srb),
-        SrbGetSrbStatus(Srb),
-        SrbGetScsiStatus(Srb));
+    Srb->DataTransferLength = sizeof(SRB_IO_CONTROL) + ResponseLength;
+    Srb->SrbStatus = SRB_STATUS_SUCCESS;
 }
 
 ULONGLONG
