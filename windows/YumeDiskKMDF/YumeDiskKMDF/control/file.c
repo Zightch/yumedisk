@@ -1,7 +1,6 @@
 #include "file.h"
 
 #include "..\session\session.h"
-#include "..\transport\transport.h"
 
 VOID
 ControlEvtFileCreate(
@@ -25,15 +24,10 @@ ControlEvtFileCleanup(
 {
     WDFDEVICE device;
     PCTRL_DEVICE_CONTEXT context;
-    UINT64 sessionId;
 
     device = WdfFileObjectGetDevice(FileObject);
     context = ControlGetContext(device);
-    sessionId = ControlSessionClose(context, FileObject);
-    if (sessionId != 0) {
-        ControlSendSessionCleanup(context, sessionId);
-    }
-    ControlCloseMiniportHandle(context);
+    ControlSessionCleanup(context, FileObject);
 }
 
 VOID

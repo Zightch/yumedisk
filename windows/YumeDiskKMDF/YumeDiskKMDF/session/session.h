@@ -14,14 +14,26 @@ ControlSessionTryOpen(
     _Out_opt_ UINT64* SessionId
 );
 
-UINT64
-ControlSessionClose(
+VOID
+ControlSessionCleanup(
     _Inout_ PCTRL_DEVICE_CONTEXT Context,
     _In_ WDFFILEOBJECT FileObject
 );
 
-UINT64
-ControlSessionGetActiveId(
-    _In_ PCTRL_DEVICE_CONTEXT Context
+NTSTATUS
+ControlSessionHeartbeat(
+    _In_ WDFFILEOBJECT FileObject,
+    _Out_opt_ UINT64* SessionId
 );
 
+NTSTATUS
+ControlSessionAcquire(
+    _In_ WDFFILEOBJECT FileObject,
+    _Outptr_ PCTRL_FILE_CONTEXT* SessionContext,
+    _Out_opt_ UINT64* SessionId
+);
+
+VOID
+ControlSessionRelease(
+    _In_ PCTRL_FILE_CONTEXT SessionContext
+);

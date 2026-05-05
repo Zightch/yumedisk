@@ -16,6 +16,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "yumedisk_proto.h"
@@ -270,6 +271,18 @@ bool QuerySessionId(ControlContext* control) {
     return true;
 }
 
+bool SendHeartbeat(ControlContext* control) {
+    auto buffer = MakeMessageBuffer(YumeDiskCommandHeartbeat, 0);
+    auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer.data());
+    message->Header.SessionId = control->sessionId;
+
+    if (!SendCommand(control->file, buffer, nullptr)) {
+        return false;
+    }
+
+    return message->Header.Status == kStatusSuccess;
+}
+
 bool QueryInfo(ControlContext* control, YUMEDISK_QUERY_INFO* info) {
     auto buffer = MakeMessageBuffer(YumeDiskCommandQueryInfo, 0, sizeof(YUMEDISK_QUERY_INFO));
     auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer.data());
@@ -470,7 +483,10 @@ void PrintRuntimeHelp() {
         << "  rm <target>    remove one disk\n"
         << "  rm all         remove all disks\n"
         << "  ls             list managed and visible disks\n"
-        << "  exit           close session and quit\n";
+        << "  exit           close session and quit\n"
+        << "\n"
+        << "runtime:\n"
+        << "  heartbeat is sent automatically while the app is running\n";
 }
 
 void PrintUsage() {
@@ -798,9 +814,25 @@ int main(int argc, char** argv) {
     std::wcout << L"control_session=" << backend.control.sessionId << std::endl;
     std::wcout << L"state=ready(control-skeleton)" << std::endl;
 
+    std::thread heartbeatThread([&backend]() {
+        while (!backend.stop.load(std::memory_order_relaxed)) {
+            const DWORD waitStatus = WaitForSingleObject(g_StopEvent, 1000);
+            if (waitStatus != WAIT_TIMEOUT) {
+                break;
+            }
+
+            if (!SendHeartbeat(&backend.control)) {
+                backend.stop.store(true, std::memory_order_relaxed);
+                SetEvent(g_StopEvent);
+                break;
+            }
+        }
+    });
+
     RunCommandLoop(&backend);
     WaitForSingleObject(g_StopEvent, INFINITE);
     backend.stop.store(true, std::memory_order_relaxed);
+    heartbeatThread.join();
 
     const bool sessionClosed = RemoveAllManagedDisks(&backend, true);
     if (!sessionClosed) {

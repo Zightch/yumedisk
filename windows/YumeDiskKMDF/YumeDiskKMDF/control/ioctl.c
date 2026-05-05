@@ -157,7 +157,7 @@ ControlValidateCancelSlotPayload(
 static
 NTSTATUS
 ControlProxyMessage(
-    _Inout_ PCTRL_DEVICE_CONTEXT Context,
+    _In_ PCTRL_FILE_CONTEXT Context,
     _In_ WDFREQUEST Request,
     _In_ PCTRL_INPUT_MESSAGE InputMessage,
     _In_ size_t OutputBufferLength,
@@ -208,7 +208,7 @@ ControlProxyMessage(
 static
 NTSTATUS
 ControlProxySubmitSlot(
-    _Inout_ PCTRL_DEVICE_CONTEXT Context,
+    _In_ PCTRL_FILE_CONTEXT Context,
     _In_ UINT64 SessionId,
     _In_ UINT32 TargetId,
     _In_ UINT32 SlotType,
@@ -277,7 +277,7 @@ ControlProxySubmitSlot(
 static
 NTSTATUS
 ControlProxyReadAck(
-    _Inout_ PCTRL_DEVICE_CONTEXT Context,
+    _In_ PCTRL_FILE_CONTEXT Context,
     _In_ UINT64 SessionId,
     _In_ const YUMEDISK_HEADER* Header,
     _Inout_ PYUMEDISK_READ_ACK ReadAck,
@@ -346,7 +346,7 @@ ControlHandleHeartbeat(
 static
 VOID
 ControlHandlePostReadSlot(
-    _Inout_ PCTRL_DEVICE_CONTEXT Context,
+    _In_ PCTRL_FILE_CONTEXT Context,
     _In_ WDFREQUEST Request,
     _In_ const CTRL_INPUT_MESSAGE* InputMessage,
     _In_ size_t OutputBufferLength,
@@ -396,7 +396,7 @@ ControlHandlePostReadSlot(
 static
 VOID
 ControlHandlePostWriteSlot(
-    _Inout_ PCTRL_DEVICE_CONTEXT Context,
+    _In_ PCTRL_FILE_CONTEXT Context,
     _In_ WDFREQUEST Request,
     _In_ const CTRL_INPUT_MESSAGE* InputMessage,
     _In_ size_t OutputBufferLength,
@@ -457,7 +457,7 @@ ControlHandlePostWriteSlot(
 static
 VOID
 ControlHandleReadAck(
-    _Inout_ PCTRL_DEVICE_CONTEXT Context,
+    _In_ PCTRL_FILE_CONTEXT Context,
     _In_ WDFREQUEST Request,
     _In_ const CTRL_INPUT_MESSAGE* InputMessage,
     _In_ size_t OutputBufferLength,
@@ -513,14 +513,13 @@ ControlEvtIoDeviceControl(
     _In_ ULONG IoControlCode
 )
 {
-    WDFDEVICE device;
-    PCTRL_DEVICE_CONTEXT context;
+    WDFFILEOBJECT fileObject;
+    PCTRL_FILE_CONTEXT sessionContext;
     CTRL_INPUT_MESSAGE inputMessage;
     UINT64 sessionId;
     NTSTATUS status;
 
-    device = WdfIoQueueGetDevice(Queue);
-    context = ControlGetContext(device);
+    UNREFERENCED_PARAMETER(Queue);
 
     if (IoControlCode != IOCTL_YUMEDISK_APP_COMMAND) {
         WdfRequestComplete(Request, STATUS_INVALID_DEVICE_REQUEST);
@@ -533,9 +532,27 @@ ControlEvtIoDeviceControl(
         return;
     }
 
-    sessionId = ControlSessionGetActiveId(context);
-    if (sessionId == 0) {
-        WdfRequestComplete(Request, STATUS_DEVICE_NOT_READY);
+    fileObject = WdfRequestGetFileObject(Request);
+    if (fileObject == NULL) {
+        WdfRequestComplete(Request, STATUS_INVALID_DEVICE_REQUEST);
+        return;
+    }
+
+    if (inputMessage.Message->Header.Command == YumeDiskCommandHeartbeat) {
+        status = ControlSessionHeartbeat(fileObject, &sessionId);
+        if (!NT_SUCCESS(status)) {
+            WdfRequestComplete(Request, status);
+            return;
+        }
+
+        ControlHandleHeartbeat(Request, &inputMessage, OutputBufferLength, sessionId);
+        return;
+    }
+
+    sessionContext = NULL;
+    status = ControlSessionAcquire(fileObject, &sessionContext, &sessionId);
+    if (!NT_SUCCESS(status)) {
+        WdfRequestComplete(Request, status);
         return;
     }
 
@@ -544,52 +561,58 @@ ControlEvtIoDeviceControl(
     case YumeDiskCommandCreateDisk:
     case YumeDiskCommandRemoveDisk:
     case YumeDiskCommandRemoveAllDisks:
-        status = ControlProxyMessage(context, Request, &inputMessage, OutputBufferLength, sessionId);
+        status = ControlProxyMessage(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
         if (!NT_SUCCESS(status)) {
             WdfRequestComplete(Request, status);
         }
+        ControlSessionRelease(sessionContext);
         return;
     case YumeDiskCommandWriteAckBatch:
         status = ControlValidateWriteAckBatchPayload(
             inputMessage.Message->Payload,
             inputMessage.Message->Header.PayloadLength);
         if (!NT_SUCCESS(status)) {
+            ControlSessionRelease(sessionContext);
             WdfRequestComplete(Request, status);
             return;
         }
 
-        status = ControlProxyMessage(context, Request, &inputMessage, OutputBufferLength, sessionId);
+        status = ControlProxyMessage(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
         if (!NT_SUCCESS(status)) {
             WdfRequestComplete(Request, status);
         }
+        ControlSessionRelease(sessionContext);
         return;
     case YumeDiskCommandCancelSlot:
         status = ControlValidateCancelSlotPayload(
             inputMessage.Message->Payload,
             inputMessage.Message->Header.PayloadLength);
         if (!NT_SUCCESS(status)) {
+            ControlSessionRelease(sessionContext);
             WdfRequestComplete(Request, status);
             return;
         }
 
-        status = ControlProxyMessage(context, Request, &inputMessage, OutputBufferLength, sessionId);
+        status = ControlProxyMessage(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
         if (!NT_SUCCESS(status)) {
             WdfRequestComplete(Request, status);
         }
-        return;
-    case YumeDiskCommandHeartbeat:
-        ControlHandleHeartbeat(Request, &inputMessage, OutputBufferLength, sessionId);
+        ControlSessionRelease(sessionContext);
         return;
     case YumeDiskCommandPostReadSlot:
-        ControlHandlePostReadSlot(context, Request, &inputMessage, OutputBufferLength, sessionId);
+        ControlHandlePostReadSlot(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
+        ControlSessionRelease(sessionContext);
         return;
     case YumeDiskCommandPostWriteSlot:
-        ControlHandlePostWriteSlot(context, Request, &inputMessage, OutputBufferLength, sessionId);
+        ControlHandlePostWriteSlot(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
+        ControlSessionRelease(sessionContext);
         return;
     case YumeDiskCommandReadAck:
-        ControlHandleReadAck(context, Request, &inputMessage, OutputBufferLength, sessionId);
+        ControlHandleReadAck(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
+        ControlSessionRelease(sessionContext);
         return;
     default:
+        ControlSessionRelease(sessionContext);
         WdfRequestComplete(Request, STATUS_INVALID_DEVICE_REQUEST);
         return;
     }

@@ -54,7 +54,8 @@ ControlSendMiniportBuffer(
 
     *BytesReturned = 0;
 
-    if (Buffer == NULL ||
+    if (Handle == NULL ||
+        Buffer == NULL ||
         BufferCapacity < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
         InputLength < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
         InputLength > BufferCapacity) {
@@ -182,7 +183,6 @@ ControlProbeMiniportHandle(
     return STATUS_SUCCESS;
 }
 
-static
 NTSTATUS
 ControlOpenMiniportHandle(
     _Out_ HANDLE* Handle
@@ -250,47 +250,33 @@ ControlOpenMiniportHandle(
 
 NTSTATUS
 ControlProxyCommand(
-    _Inout_ PCTRL_DEVICE_CONTEXT Context,
+    _In_ PCTRL_FILE_CONTEXT Context,
     _Inout_updates_bytes_(BufferCapacity) PUCHAR Buffer,
     _In_ ULONG InputLength,
     _In_ ULONG BufferCapacity,
     _Out_ ULONG* BytesReturned
 )
 {
-    HANDLE handle;
-    HANDLE newHandle;
-    NTSTATUS status;
-
-    handle = (HANDLE)InterlockedCompareExchangePointer(
-        (volatile PVOID*)&Context->MiniportHandle, NULL, NULL);
-
-    if (handle == NULL) {
-        status = ControlOpenMiniportHandle(&newHandle);
-        if (!NT_SUCCESS(status)) {
-            return status;
-        }
-
-        if (InterlockedCompareExchangePointer(
-                (volatile PVOID*)&Context->MiniportHandle, newHandle, NULL) != NULL) {
-            ZwClose(newHandle);
-        }
-
-        handle = (HANDLE)InterlockedCompareExchangePointer(
-            (volatile PVOID*)&Context->MiniportHandle, NULL, NULL);
+    if (Context == NULL || Context->MiniportHandle == NULL) {
+        return STATUS_DEVICE_NOT_READY;
     }
 
-    return ControlSendMiniportBuffer(handle, Buffer, InputLength, BufferCapacity, BytesReturned);
+    return ControlSendMiniportBuffer(Context->MiniportHandle, Buffer, InputLength, BufferCapacity, BytesReturned);
 }
 
 VOID
 ControlCloseMiniportHandle(
-    _Inout_ PCTRL_DEVICE_CONTEXT Context
+    _Inout_ PCTRL_FILE_CONTEXT Context
 )
 {
     HANDLE handle;
 
-    handle = (HANDLE)InterlockedExchangePointer(
-        (volatile PVOID*)&Context->MiniportHandle, NULL);
+    if (Context == NULL) {
+        return;
+    }
+
+    handle = Context->MiniportHandle;
+    Context->MiniportHandle = NULL;
     if (handle != NULL) {
         ZwClose(handle);
     }
@@ -298,22 +284,24 @@ ControlCloseMiniportHandle(
 
 VOID
 ControlSendSessionCleanup(
-    _Inout_ PCTRL_DEVICE_CONTEXT Context,
-    _In_ UINT64 SessionId
+    _In_ PCTRL_FILE_CONTEXT Context
 )
 {
     UCHAR buffer[YUMEDISK_MESSAGE_BASE_SIZE];
     PYUMEDISK_MESSAGE message;
     ULONG bytesReturned;
 
+    if (Context == NULL || Context->MiniportHandle == NULL || Context->SessionId == 0) {
+        return;
+    }
+
     RtlZeroMemory(buffer, sizeof(buffer));
     message = (PYUMEDISK_MESSAGE)buffer;
     message->Header.Size = sizeof(buffer);
     message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
     message->Header.Command = YumeDiskCommandRemoveAllDisks;
-    message->Header.SessionId = SessionId;
+    message->Header.SessionId = Context->SessionId;
     message->Header.Flags = YUMEDISK_SESSION_CLOSE_FLAG;
 
     (VOID)ControlProxyCommand(Context, buffer, sizeof(buffer), sizeof(buffer), &bytesReturned);
 }
-

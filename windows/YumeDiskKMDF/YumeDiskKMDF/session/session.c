@@ -1,15 +1,145 @@
 #include "session.h"
 
+#include "..\transport\transport.h"
+
+#define CTRL_SESSION_WATCHDOG_PERIOD_MS 1000u
+#define CTRL_SESSION_WATCHDOG_TIMEOUT_MS 10000u
+#define CTRL_SESSION_LOCKED_STATUS STATUS_FILE_LOCK_CONFLICT
+
+EVT_WDF_TIMER ControlEvtSessionWatchdogTimer;
+
 static
-UINT64
-ControlGenerateSessionId(
+LONGLONG
+ControlSessionQueryTick(
     VOID
 )
 {
     LARGE_INTEGER tick;
 
     KeQuerySystemTimePrecise(&tick);
-    return ((UINT64)tick.QuadPart) ^ (UINT64)(ULONG_PTR)PsGetCurrentProcessId();
+    return tick.QuadPart;
+}
+
+static
+UINT64
+ControlGenerateSessionId(
+    VOID
+)
+{
+    return ((UINT64)ControlSessionQueryTick()) ^ (UINT64)(ULONG_PTR)PsGetCurrentProcessId();
+}
+
+static
+NTSTATUS
+ControlSessionCreateResources(
+    _Inout_ PCTRL_FILE_CONTEXT FileContext,
+    _In_ WDFFILEOBJECT FileObject
+)
+{
+    WDF_OBJECT_ATTRIBUTES attributes;
+    WDF_TIMER_CONFIG timerConfig;
+    NTSTATUS status;
+
+    if (FileContext->SessionLock == NULL) {
+        WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
+        attributes.ParentObject = FileObject;
+        status = WdfWaitLockCreate(&attributes, &FileContext->SessionLock);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+    }
+
+    if (FileContext->WatchdogTimer == NULL) {
+        WDF_TIMER_CONFIG_INIT_PERIODIC(&timerConfig, ControlEvtSessionWatchdogTimer, CTRL_SESSION_WATCHDOG_PERIOD_MS);
+
+        WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
+        attributes.ParentObject = FileObject;
+        attributes.ExecutionLevel = WdfExecutionLevelPassive;
+        status = WdfTimerCreate(&timerConfig, &attributes, &FileContext->WatchdogTimer);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+ControlSessionEnterLocked(
+    _In_ PCTRL_FILE_CONTEXT FileContext,
+    _Out_opt_ UINT64* SessionId
+)
+{
+    if (FileContext->State == CtrlSessionStateLocked) {
+        return CTRL_SESSION_LOCKED_STATUS;
+    }
+
+    if (FileContext->State != CtrlSessionStateActive ||
+        FileContext->MiniportHandle == NULL ||
+        FileContext->SessionId == 0) {
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    if (SessionId != NULL) {
+        *SessionId = FileContext->SessionId;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+ControlSessionReleaseDeviceOpen(
+    _Inout_ PCTRL_DEVICE_CONTEXT Context,
+    _In_ WDFFILEOBJECT FileObject
+)
+{
+    WdfSpinLockAcquire(Context->OpenLock);
+    if (Context->OpenCount != 0 && Context->OpenFileObject == FileObject) {
+        Context->OpenCount = 0;
+        Context->OpenFileObject = NULL;
+    }
+    WdfSpinLockRelease(Context->OpenLock);
+}
+
+VOID
+ControlEvtSessionWatchdogTimer(
+    _In_ WDFTIMER Timer
+)
+{
+    WDFFILEOBJECT fileObject;
+    PCTRL_FILE_CONTEXT fileContext;
+    LONGLONG nowTick;
+    LONGLONG elapsedTick;
+
+    fileObject = (WDFFILEOBJECT)WdfTimerGetParentObject(Timer);
+    fileContext = ControlGetFileContext(fileObject);
+    if (fileContext->SessionLock == NULL) {
+        return;
+    }
+
+    WdfWaitLockAcquire(fileContext->SessionLock, NULL);
+    if (fileContext->State != CtrlSessionStateActive ||
+        fileContext->MiniportHandle == NULL ||
+        fileContext->SessionId == 0) {
+        WdfWaitLockRelease(fileContext->SessionLock);
+        return;
+    }
+
+    nowTick = ControlSessionQueryTick();
+    elapsedTick = nowTick - fileContext->LastHeartbeatTick;
+    if (elapsedTick < ((LONGLONG)CTRL_SESSION_WATCHDOG_TIMEOUT_MS * 10000ll)) {
+        WdfWaitLockRelease(fileContext->SessionLock);
+        return;
+    }
+
+    fileContext->State = CtrlSessionStateLocked;
+    ControlSendSessionCleanup(fileContext);
+    ControlCloseMiniportHandle(fileContext);
+    WdfWaitLockRelease(fileContext->SessionLock);
+
+    WdfTimerStop(Timer, FALSE);
 }
 
 VOID
@@ -19,7 +149,6 @@ ControlSessionInitialize(
 {
     Context->OpenCount = 0;
     Context->OpenFileObject = NULL;
-    Context->SessionId = 0;
 }
 
 NTSTATUS
@@ -30,66 +159,159 @@ ControlSessionTryOpen(
 )
 {
     NTSTATUS status;
+    PCTRL_FILE_CONTEXT fileContext;
+    HANDLE handle;
     UINT64 sessionId;
 
-    status = STATUS_SUCCESS;
+    fileContext = ControlGetFileContext(FileObject);
+    handle = NULL;
     sessionId = 0;
 
     WdfSpinLockAcquire(Context->OpenLock);
     if (Context->OpenCount != 0) {
-        status = STATUS_SHARING_VIOLATION;
-    } else {
-        Context->OpenCount = 1;
-        Context->OpenFileObject = FileObject;
-        Context->SessionId = ControlGenerateSessionId();
-        sessionId = Context->SessionId;
+        WdfSpinLockRelease(Context->OpenLock);
+        if (SessionId != NULL) {
+            *SessionId = 0;
+        }
+        return STATUS_SHARING_VIOLATION;
     }
+
+    Context->OpenCount = 1;
+    Context->OpenFileObject = FileObject;
     WdfSpinLockRelease(Context->OpenLock);
+
+    status = ControlSessionCreateResources(fileContext, FileObject);
+    if (!NT_SUCCESS(status)) {
+        ControlSessionReleaseDeviceOpen(Context, FileObject);
+        if (SessionId != NULL) {
+            *SessionId = 0;
+        }
+        return status;
+    }
+
+    status = ControlOpenMiniportHandle(&handle);
+    if (!NT_SUCCESS(status)) {
+        ControlSessionReleaseDeviceOpen(Context, FileObject);
+        if (SessionId != NULL) {
+            *SessionId = 0;
+        }
+        return status;
+    }
+
+    sessionId = ControlGenerateSessionId();
+
+    WdfWaitLockAcquire(fileContext->SessionLock, NULL);
+    fileContext->MiniportHandle = handle;
+    fileContext->SessionId = sessionId;
+    fileContext->LastHeartbeatTick = ControlSessionQueryTick();
+    fileContext->State = CtrlSessionStateActive;
+    WdfWaitLockRelease(fileContext->SessionLock);
+
+    WdfTimerStart(fileContext->WatchdogTimer, WDF_REL_TIMEOUT_IN_MS(CTRL_SESSION_WATCHDOG_PERIOD_MS));
 
     if (SessionId != NULL) {
         *SessionId = sessionId;
     }
 
-    return status;
+    return STATUS_SUCCESS;
 }
 
-UINT64
-ControlSessionClose(
+VOID
+ControlSessionCleanup(
     _Inout_ PCTRL_DEVICE_CONTEXT Context,
     _In_ WDFFILEOBJECT FileObject
 )
 {
-    UINT64 sessionId;
+    PCTRL_FILE_CONTEXT fileContext;
 
-    sessionId = 0;
+    fileContext = ControlGetFileContext(FileObject);
 
-    WdfSpinLockAcquire(Context->OpenLock);
-    if (Context->OpenCount != 0 && Context->OpenFileObject == FileObject) {
-        sessionId = Context->SessionId;
-        Context->OpenCount = 0;
-        Context->OpenFileObject = NULL;
-        Context->SessionId = 0;
+    if (fileContext->WatchdogTimer != NULL) {
+        WdfTimerStop(fileContext->WatchdogTimer, TRUE);
     }
-    WdfSpinLockRelease(Context->OpenLock);
 
-    return sessionId;
+    if (fileContext->SessionLock != NULL) {
+        WdfWaitLockAcquire(fileContext->SessionLock, NULL);
+        if (fileContext->State == CtrlSessionStateActive && fileContext->MiniportHandle != NULL) {
+            ControlSendSessionCleanup(fileContext);
+        }
+        fileContext->State = CtrlSessionStateClosed;
+        ControlCloseMiniportHandle(fileContext);
+        fileContext->SessionId = 0;
+        fileContext->LastHeartbeatTick = 0;
+        WdfWaitLockRelease(fileContext->SessionLock);
+    }
+
+    ControlSessionReleaseDeviceOpen(Context, FileObject);
 }
 
-UINT64
-ControlSessionGetActiveId(
-    _In_ PCTRL_DEVICE_CONTEXT Context
+NTSTATUS
+ControlSessionHeartbeat(
+    _In_ WDFFILEOBJECT FileObject,
+    _Out_opt_ UINT64* SessionId
 )
 {
-    UINT64 sessionId;
+    NTSTATUS status;
+    PCTRL_FILE_CONTEXT fileContext;
 
-    sessionId = 0;
-
-    WdfSpinLockAcquire(Context->OpenLock);
-    if (Context->OpenCount == 1 && Context->OpenFileObject != NULL) {
-        sessionId = Context->SessionId;
+    fileContext = ControlGetFileContext(FileObject);
+    if (fileContext->SessionLock == NULL) {
+        if (SessionId != NULL) {
+            *SessionId = 0;
+        }
+        return STATUS_DEVICE_NOT_READY;
     }
-    WdfSpinLockRelease(Context->OpenLock);
 
-    return sessionId;
+    WdfWaitLockAcquire(fileContext->SessionLock, NULL);
+    status = ControlSessionEnterLocked(fileContext, SessionId);
+    if (NT_SUCCESS(status)) {
+        fileContext->LastHeartbeatTick = ControlSessionQueryTick();
+    }
+    WdfWaitLockRelease(fileContext->SessionLock);
+    return status;
 }
 
+NTSTATUS
+ControlSessionAcquire(
+    _In_ WDFFILEOBJECT FileObject,
+    _Outptr_ PCTRL_FILE_CONTEXT* SessionContext,
+    _Out_opt_ UINT64* SessionId
+)
+{
+    NTSTATUS status;
+    PCTRL_FILE_CONTEXT fileContext;
+
+    *SessionContext = NULL;
+    if (SessionId != NULL) {
+        *SessionId = 0;
+    }
+
+    if (FileObject == NULL) {
+        return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    fileContext = ControlGetFileContext(FileObject);
+    if (fileContext->SessionLock == NULL) {
+        return STATUS_DEVICE_NOT_READY;
+    }
+
+    WdfWaitLockAcquire(fileContext->SessionLock, NULL);
+    status = ControlSessionEnterLocked(fileContext, SessionId);
+    if (!NT_SUCCESS(status)) {
+        WdfWaitLockRelease(fileContext->SessionLock);
+        return status;
+    }
+
+    *SessionContext = fileContext;
+    return STATUS_SUCCESS;
+}
+
+VOID
+ControlSessionRelease(
+    _In_ PCTRL_FILE_CONTEXT SessionContext
+)
+{
+    if (SessionContext != NULL && SessionContext->SessionLock != NULL) {
+        WdfWaitLockRelease(SessionContext->SessionLock);
+    }
+}

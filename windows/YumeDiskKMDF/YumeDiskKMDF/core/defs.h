@@ -8,13 +8,27 @@
 #define DRIVER_NAME "YumeDiskKMDF"
 #define MEM_TAG 'KDmY'
 
+typedef enum _CTRL_SESSION_STATE {
+    CtrlSessionStateInvalid = 0,
+    CtrlSessionStateActive = 1,
+    CtrlSessionStateLocked = 2,
+    CtrlSessionStateClosed = 3
+} CTRL_SESSION_STATE;
+
 typedef struct _CTRL_DEVICE_CONTEXT {
     WDFSPINLOCK OpenLock;
     LONG OpenCount;
     WDFFILEOBJECT OpenFileObject;
-    UINT64 SessionId;
-    volatile HANDLE MiniportHandle;
 } CTRL_DEVICE_CONTEXT, *PCTRL_DEVICE_CONTEXT;
 
-WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CTRL_DEVICE_CONTEXT, ControlGetContext);
+typedef struct _CTRL_FILE_CONTEXT {
+    WDFWAITLOCK SessionLock;
+    WDFTIMER WatchdogTimer;
+    HANDLE MiniportHandle;
+    UINT64 SessionId;
+    LONGLONG LastHeartbeatTick;
+    ULONG State;
+} CTRL_FILE_CONTEXT, *PCTRL_FILE_CONTEXT;
 
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CTRL_DEVICE_CONTEXT, ControlGetContext);
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CTRL_FILE_CONTEXT, ControlGetFileContext);

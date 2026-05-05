@@ -11,6 +11,7 @@ ControlAddDevice(
 )
 {
     WDF_OBJECT_ATTRIBUTES attributes;
+    WDF_OBJECT_ATTRIBUTES fileAttributes;
     WDF_FILEOBJECT_CONFIG fileConfig;
     WDF_PNPPOWER_EVENT_CALLBACKS pnpCallbacks;
     WDF_IO_QUEUE_CONFIG queueConfig;
@@ -24,7 +25,8 @@ ControlAddDevice(
     WdfDeviceInitSetIoType(DeviceInit, WdfDeviceIoBuffered);
 
     WDF_FILEOBJECT_CONFIG_INIT(&fileConfig, ControlEvtFileCreate, ControlEvtFileClose, ControlEvtFileCleanup);
-    WdfDeviceInitSetFileObjectConfig(DeviceInit, &fileConfig, WDF_NO_OBJECT_ATTRIBUTES);
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&fileAttributes, CTRL_FILE_CONTEXT);
+    WdfDeviceInitSetFileObjectConfig(DeviceInit, &fileConfig, &fileAttributes);
 
     WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&pnpCallbacks);
     WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &pnpCallbacks);

@@ -17,6 +17,7 @@ static const char* kHelpText =
     "  create [target=<id>|<id>] [sectors=<count>|sectorCount=<count>|<count>] [sectorSize=<bytes>]\n"
     "  remove [target=<id>|<id>]\n"
     "  removeall [close]\n"
+    "  heartbeat\n"
     "  exit\n";
 
 static const LONG kProtocolSuccess = 0;
@@ -353,6 +354,25 @@ static int RunRemoveAll(ControlContext* context, const std::vector<std::string>&
     return message->Header.Status == kProtocolSuccess ? 0 : 1;
 }
 
+static int RunHeartbeat(ControlContext* context) {
+    auto buffer = MakeMessageBuffer(YumeDiskCommandHeartbeat, 0);
+    auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer.data());
+
+    if (!AttachSession(context, message)) {
+        return 1;
+    }
+
+    if (!SendCommand(context->controlFile, buffer)) {
+        return 1;
+    }
+
+    UpdateSessionId(context, message->Header);
+    std::cout << "HEARTBEAT status=0x" << std::hex << message->Header.Status << std::dec
+              << ", session=" << message->Header.SessionId
+              << std::endl;
+    return message->Header.Status == kProtocolSuccess ? 0 : 1;
+}
+
 static int ExecuteCommand(ControlContext* context, const std::string& line, bool* shouldExit) {
     auto args = SplitArgs(line);
     if (args.empty()) {
@@ -375,6 +395,9 @@ static int ExecuteCommand(ControlContext* context, const std::string& line, bool
     }
     if (command == "removeall") {
         return RunRemoveAll(context, args);
+    }
+    if (command == "heartbeat") {
+        return RunHeartbeat(context);
     }
     if (command == "exit" || command == "quit") {
         *shouldExit = true;
