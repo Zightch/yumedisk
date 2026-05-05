@@ -17,13 +17,14 @@ Rebuild the smallest closed loop for disk benchmark traffic with the new app-own
 - No extra abstraction layer unless a real bottleneck forces it.
 - The new protocol command space, KMDF file-bound session/watchdog, SCSI while-drain queue path, and App-side parallel slot workers are already in place.
 - App-side write ACK piggyback and idle flush fallback are already in place.
-- The remaining gap is reconnecting the benchmark loop and proving the new path no longer hangs under `Q1T1 / Q8 / Q32`.
+- The benchmark loop is reconnected on the tooling side: `RWTestApp` now resolves the visible `PhysicalDrive` and prints the suggested `diskspd` commands.
+- The remaining gap is manual validation: proving the new path no longer hangs under `Q1T1 / Q8 / Q32`, and collecting throughput plus kernel CPU data.
 - Do not advance to the next substep until the current one is complete, archived, and committed.
 
 ## Pending Substeps
 
-1. Reconnect the benchmark loop and validate `Q1T1 / Q8 / Q32` runs.
+1. Run the manual `Q1T1 / Q8 / Q32` benchmark matrix and record throughput, kernel CPU, and cleanup stability.
 
 ## Current Unique Next Step
 
-Reconnect the benchmark loop and validate `Q1T1 / Q8 / Q32` runs.
+Run the manual `Q1T1 / Q8 / Q32` benchmark matrix and record throughput, kernel CPU, and cleanup stability.

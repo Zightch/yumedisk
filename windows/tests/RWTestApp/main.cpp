@@ -42,6 +42,9 @@ constexpr uint64_t kDefaultDiskSizeBytes = 64ull * 1024ull * 1024ull;
 constexpr size_t kMediumStripeBytes = 256 * 1024;
 constexpr size_t kMaxAckBatchRanges = 128;
 constexpr DWORD kWriteAckFlushDelayMs = 10;
+constexpr DWORD kDiskArrivalPollMs = 100;
+constexpr DWORD kDiskArrivalTimeoutMs = 5000;
+constexpr DWORD kBenchmarkDurationSec = 15;
 
 struct AppConfig {
     ULONG targetId = kDefaultTargetId;
@@ -593,6 +596,114 @@ std::vector<DiskIdentity> EnumerateVisibleYumeDisks(const AppConfig& config) {
     return identities;
 }
 
+bool IsKnownDeviceNumber(DWORD deviceNumber) {
+    return deviceNumber != std::numeric_limits<DWORD>::max();
+}
+
+bool HasKnownDiskIdentity(const DiskIdentity& identity) {
+    return !identity.path.empty() && IsKnownDeviceNumber(identity.deviceNumber);
+}
+
+std::wstring MakePhysicalDrivePath(DWORD deviceNumber) {
+    if (!IsKnownDeviceNumber(deviceNumber)) {
+        return {};
+    }
+
+    return LR"(\\.\PhysicalDrive)" + std::to_wstring(deviceNumber);
+}
+
+bool ContainsVisibleDiskPath(const std::vector<DiskIdentity>& identities, const std::wstring& path) {
+    return std::any_of(
+        identities.begin(),
+        identities.end(),
+        [&](const DiskIdentity& identity) {
+            return identity.path == path;
+        });
+}
+
+bool ContainsPath(const std::vector<std::wstring>& paths, const std::wstring& path) {
+    return std::find(paths.begin(), paths.end(), path) != paths.end();
+}
+
+std::vector<std::wstring> SnapshotClaimedDiskPaths(BackendContext* context, ULONG excludedTargetId) {
+    std::vector<std::wstring> paths;
+
+    std::lock_guard<std::mutex> guard(context->disksLock);
+    paths.reserve(context->disks.size());
+    for (const auto& entry : context->disks) {
+        if (entry.first == excludedTargetId) {
+            continue;
+        }
+        if (!entry.second->identity.path.empty()) {
+            paths.push_back(entry.second->identity.path);
+        }
+    }
+
+    return paths;
+}
+
+bool TryRefreshManagedDiskIdentity(
+    BackendContext* context,
+    const std::shared_ptr<ManagedDisk>& disk,
+    const std::vector<DiskIdentity>* baselineVisibleDisks,
+    DWORD timeoutMs) {
+    const auto claimedPaths = SnapshotClaimedDiskPaths(context, disk->targetId);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+
+    for (;;) {
+        const auto visibleDisks = EnumerateVisibleYumeDisks(context->config);
+
+        if (!disk->identity.path.empty()) {
+            const auto existing = std::find_if(
+                visibleDisks.begin(),
+                visibleDisks.end(),
+                [&](const DiskIdentity& identity) {
+                    return identity.path == disk->identity.path;
+                });
+            if (existing != visibleDisks.end()) {
+                disk->identity = *existing;
+                return true;
+            }
+        }
+
+        auto pickCandidate = [&](bool preferNewPath) -> const DiskIdentity* {
+            for (const auto& identity : visibleDisks) {
+                if (ContainsPath(claimedPaths, identity.path)) {
+                    continue;
+                }
+                if (preferNewPath &&
+                    baselineVisibleDisks != nullptr &&
+                    ContainsVisibleDiskPath(*baselineVisibleDisks, identity.path)) {
+                    continue;
+                }
+                return &identity;
+            }
+
+            return nullptr;
+        };
+
+        const DiskIdentity* candidate = pickCandidate(true);
+        if (candidate == nullptr) {
+            candidate = pickCandidate(false);
+        }
+        if (candidate != nullptr) {
+            disk->identity = *candidate;
+            return true;
+        }
+
+        if (timeoutMs == 0 ||
+            context->stop.load(std::memory_order_relaxed) ||
+            disk->stop.load(std::memory_order_relaxed) ||
+            std::chrono::steady_clock::now() >= deadline) {
+            break;
+        }
+
+        Sleep(kDiskArrivalPollMs);
+    }
+
+    return HasKnownDiskIdentity(disk->identity);
+}
+
 size_t ComputeStripeCount(uint64_t diskSizeBytes) {
     const uint64_t stripeCount64 = (diskSizeBytes + kMediumStripeBytes - 1) / kMediumStripeBytes;
     if (stripeCount64 == 0) {
@@ -634,6 +745,33 @@ std::vector<std::shared_lock<std::shared_mutex>> AcquireReadStripeLocks(
     return locks;
 }
 
+void PrintBenchmarkCommands(const ManagedDisk* disk) {
+    const std::wstring physicalDrive = MakePhysicalDrivePath(disk->identity.deviceNumber);
+    if (physicalDrive.empty()) {
+        std::wcout << L"benchmark_target=pending-enumeration, target=" << disk->targetId << std::endl;
+        return;
+    }
+
+    std::wcout << L"benchmark_target=" << physicalDrive
+               << L", target=" << disk->targetId
+               << L", disk_bytes=" << disk->diskSizeBytes
+               << L", sector_size=" << disk->sectorSize
+               << std::endl;
+    std::wcout << L"benchmark_note=run from an elevated shell while RWTestApp keeps this disk alive" << std::endl;
+    std::wcout << L"diskspd_read_q1t1=diskspd.exe -b1M -d" << kBenchmarkDurationSec
+               << L" -o1 -t1 -Sh -w0 " << physicalDrive << std::endl;
+    std::wcout << L"diskspd_read_q8t1=diskspd.exe -b1M -d" << kBenchmarkDurationSec
+               << L" -o8 -t1 -Sh -w0 " << physicalDrive << std::endl;
+    std::wcout << L"diskspd_read_q32t1=diskspd.exe -b1M -d" << kBenchmarkDurationSec
+               << L" -o32 -t1 -Sh -w0 " << physicalDrive << std::endl;
+    std::wcout << L"diskspd_write_q1t1=diskspd.exe -b1M -d" << kBenchmarkDurationSec
+               << L" -o1 -t1 -Sh -w100 " << physicalDrive << std::endl;
+    std::wcout << L"diskspd_write_q8t1=diskspd.exe -b1M -d" << kBenchmarkDurationSec
+               << L" -o8 -t1 -Sh -w100 " << physicalDrive << std::endl;
+    std::wcout << L"diskspd_write_q32t1=diskspd.exe -b1M -d" << kBenchmarkDurationSec
+               << L" -o32 -t1 -Sh -w100 " << physicalDrive << std::endl;
+}
+
 std::vector<std::unique_lock<std::shared_mutex>> AcquireWriteStripeLocks(
     ManagedDisk* disk,
     size_t offset,
@@ -669,6 +807,23 @@ std::vector<std::shared_ptr<ManagedDisk>> SnapshotManagedDisks(BackendContext* c
     }
 
     return disks;
+}
+
+std::shared_ptr<ManagedDisk> ResolveDefaultManagedDisk(BackendContext* context) {
+    const auto disks = SnapshotManagedDisks(context);
+    if (disks.empty()) {
+        return nullptr;
+    }
+    if (disks.size() == 1) {
+        return disks.front();
+    }
+
+    const auto configured = FindManagedDisk(context, context->config.targetId);
+    if (configured != nullptr) {
+        return configured;
+    }
+
+    return nullptr;
 }
 
 void InsertManagedDisk(BackendContext* context, const std::shared_ptr<ManagedDisk>& disk) {
@@ -1180,12 +1335,14 @@ void PrintRuntimeHelp() {
         << "  rm <target>    remove one disk and stop its slot workers\n"
         << "  rm all         remove all disks and stop all slot workers\n"
         << "  ls             list managed and visible disks\n"
+        << "  bench [target] print the raw disk path and suggested DiskSpd commands\n"
         << "  stats          print backend counters\n"
         << "  exit           close session and quit\n"
         << "\n"
         << "runtime:\n"
         << "  heartbeat stays in the background while the app is running\n"
-        << "  each created disk gets read slot workers, write slot workers, and an idle ACK flush worker\n";
+        << "  each created disk gets read slot workers, write slot workers, and an idle ACK flush worker\n"
+        << "  `ct` waits for the new PhysicalDrive to appear and prints benchmark commands when available\n";
 }
 
 void PrintUsage() {
@@ -1201,7 +1358,8 @@ void PrintUsage() {
         << "  target      = " << kDefaultTargetId << "\n"
         << "\n"
         << "behavior:\n"
-        << "  create a disk with `ct`, then keep the app running while the benchmark hits the exposed PhysicalDrive\n";
+        << "  create a disk with `ct`, then keep the app running while the benchmark hits the exposed PhysicalDrive\n"
+        << "  use `bench` to reprint the suggested DiskSpd commands for Q1T1 / Q8 / Q32\n";
 }
 
 bool ParseUnsigned(const char* text, uint64_t* value) {
@@ -1294,8 +1452,12 @@ void ListManagedDisks(BackendContext* context) {
     } else {
         std::wcout << L"disk_count=" << managedDisks.size() << std::endl;
         for (const auto& disk : managedDisks) {
+            (void)TryRefreshManagedDiskIdentity(context, disk, nullptr, 0);
             std::wcout << L"target=" << disk->targetId
                        << L", path=" << (disk->identity.path.empty() ? L"<pending-enumeration>" : disk->identity.path)
+                       << L", physical_drive=" << (MakePhysicalDrivePath(disk->identity.deviceNumber).empty()
+                            ? L"<pending-enumeration>"
+                            : MakePhysicalDrivePath(disk->identity.deviceNumber))
                        << L", read_workers=" << disk->readWorkers.size()
                        << L", write_workers=" << disk->writeWorkers.size()
                        << std::endl;
@@ -1316,6 +1478,7 @@ void ListManagedDisks(BackendContext* context) {
 
 bool CreateManagedDisk(BackendContext* context, ULONG targetId) {
     std::shared_ptr<ManagedDisk> disk;
+    const auto visibleDisksBeforeCreate = EnumerateVisibleYumeDisks(context->config);
 
     if (ManagedDiskExists(context, targetId)) {
         std::wcerr << L"create failed, target already exists: " << targetId << std::endl;
@@ -1358,6 +1521,14 @@ bool CreateManagedDisk(BackendContext* context, ULONG targetId) {
                << L", queue_depth=" << context->config.queueDepth
                << L", slot_bytes=" << context->config.writeSlotBytes
                << std::endl;
+    if (TryRefreshManagedDiskIdentity(context, disk, &visibleDisksBeforeCreate, kDiskArrivalTimeoutMs)) {
+        std::wcout << L"visible_path=" << disk->identity.path
+                   << L", physical_drive=" << MakePhysicalDrivePath(disk->identity.deviceNumber)
+                   << std::endl;
+        PrintBenchmarkCommands(disk.get());
+    } else {
+        std::wcout << L"visible_path=<pending-enumeration>, target=" << targetId << std::endl;
+    }
     return true;
 }
 
@@ -1457,6 +1628,35 @@ void RunCommandLoop(BackendContext* context) {
         }
         if (command == "ls") {
             ListManagedDisks(context);
+            continue;
+        }
+        if (command == "bench") {
+            std::shared_ptr<ManagedDisk> disk;
+            std::string arg;
+
+            if (input >> arg) {
+                ULONG targetId = 0;
+                if (!ParseTargetToken(arg, &targetId)) {
+                    std::wcerr << L"invalid target: " << std::wstring(arg.begin(), arg.end()) << std::endl;
+                    continue;
+                }
+
+                disk = FindManagedDisk(context, targetId);
+            } else {
+                disk = ResolveDefaultManagedDisk(context);
+            }
+
+            if (disk == nullptr) {
+                std::wcerr << L"bench failed, managed target not found" << std::endl;
+                continue;
+            }
+
+            if (!TryRefreshManagedDiskIdentity(context, disk, nullptr, kDiskArrivalTimeoutMs)) {
+                std::wcerr << L"bench failed, visible PhysicalDrive not ready for target " << disk->targetId << std::endl;
+                continue;
+            }
+
+            PrintBenchmarkCommands(disk.get());
             continue;
         }
         if (command == "stats") {
