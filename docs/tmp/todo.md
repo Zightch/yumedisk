@@ -15,15 +15,15 @@ Rebuild the smallest closed loop for disk benchmark traffic with the new app-own
 - No old-version compatibility.
 - No parallel old/new protocol branch.
 - No extra abstraction layer unless a real bottleneck forces it.
-- The new protocol command space, KMDF file-bound session/watchdog, and SCSI while-drain queue path are already in place.
-- The next bottleneck is user-mode backend serialization: slot workers and ACK flow still need to be rebuilt around parallel handling and piggyback write ACK.
+- The new protocol command space, KMDF file-bound session/watchdog, SCSI while-drain queue path, and App-side parallel slot workers are already in place.
+- App-side write ACK piggyback and idle flush fallback are already in place.
+- The remaining gap is reconnecting the benchmark loop and proving the new path no longer hangs under `Q1T1 / Q8 / Q32`.
 - Do not advance to the next substep until the current one is complete, archived, and committed.
 
 ## Pending Substeps
 
-1. Rework App backend scheduling to remove whole-backend serialization and piggyback write ACK.
-2. Reconnect the benchmark loop and validate `Q1T1 / Q8 / Q32` runs.
+1. Reconnect the benchmark loop and validate `Q1T1 / Q8 / Q32` runs.
 
 ## Current Unique Next Step
 
-Rework App backend scheduling to remove whole-backend serialization and piggyback write ACK.
+Reconnect the benchmark loop and validate `Q1T1 / Q8 / Q32` runs.
