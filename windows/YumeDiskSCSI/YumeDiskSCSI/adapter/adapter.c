@@ -132,6 +132,11 @@ DiskStartStorageRequest(
     }
 
     if (Srb->SrbFunction == SRB_FUNCTION_IO_CONTROL) {
+        YD_SCSI_LOG(
+            "DiskStartStorageRequest IO_CONTROL, srb=%p dataBuffer=%p dataTransfer=%lu",
+            Srb,
+            Srb->DataBuffer,
+            Srb->DataTransferLength);
         return DiskHandleIoControlSrb(DeviceExtension, Srb);
     }
 
@@ -159,6 +164,7 @@ DiskFindAdapter(
     UNREFERENCED_PARAMETER(ArgumentString);
     UNREFERENCED_PARAMETER(Again);
 
+    YD_SCSI_LOG("DiskFindAdapter enter%s", "");
     ConfigInfo->WmiDataProvider = FALSE;
     ConfigInfo->VirtualDevice = TRUE;
     ConfigInfo->MaximumNumberOfTargets = YUMEDISK_MAX_TARGETS;
@@ -169,6 +175,10 @@ DiskFindAdapter(
     ConfigInfo->AlignmentMask = FILE_QUAD_ALIGNMENT;
     ConfigInfo->NumberOfBuses = 1;
     ConfigInfo->MapBuffers = STOR_MAP_ALL_BUFFERS_INCLUDING_READ_WRITE;
+    YD_SCSI_LOG(
+        "DiskFindAdapter configured, maxTargets=%lu, srbType=%lu",
+        ConfigInfo->MaximumNumberOfTargets,
+        ConfigInfo->SrbType);
     return SP_RETURN_FOUND;
 }
 
@@ -182,6 +192,7 @@ DiskInitializeAdapter(
     ULONG index;
 
     extension = (PDEVICE_CONTEXT)DeviceExtension;
+    YD_SCSI_LOG("DiskInitializeAdapter enter%s", "");
     RtlZeroMemory(extension, sizeof(*extension));
 
     KeInitializeSpinLock(&extension->ControlLock);
@@ -196,6 +207,7 @@ DiskInitializeAdapter(
         extension->Disk[index].SectorSize = YUMEDISK_DEFAULT_SECTOR_SIZE;
     }
 
+    YD_SCSI_LOG("DiskInitializeAdapter ready, maxTargets=%lu", extension->MaxTargets);
     return TRUE;
 }
 
@@ -296,7 +308,9 @@ DiskDriverEntry(
         (PHW_INITIALIZATION_DATA)&hwInitData,
         NULL);
     if (!NT_SUCCESS(status)) {
-        DbgPrint("%s StorPortInitialize failed: %08x\n", DRIVER_NAME, status);
+        YD_SCSI_ERR("StorPortInitialize failed, status=0x%08X", status);
+    } else {
+        YD_SCSI_LOG("StorPortInitialize ok%s", "");
     }
 
     return status;

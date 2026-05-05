@@ -1,5 +1,7 @@
 #include "control.h"
 
+#include <srbhelper.h>
+
 static
 NTSTATUS
 DiskHandleQueryInfo(
@@ -9,7 +11,12 @@ DiskHandleQueryInfo(
 {
     PYUMEDISK_QUERY_INFO info;
 
+    YD_SCSI_LOG(
+        "DiskHandleQueryInfo enter, sessionId=%I64u, messageSize=%lu",
+        Message->Header.SessionId,
+        Message->Header.Size);
     if (Message->Header.Size < YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_QUERY_INFO)) {
+        YD_SCSI_ERR("DiskHandleQueryInfo buffer too small, size=%lu", Message->Header.Size);
         return STATUS_BUFFER_TOO_SMALL;
     }
 
@@ -25,6 +32,10 @@ DiskHandleQueryInfo(
     if (Extension->CurrentSessionId != 0) {
         Message->Header.SessionId = Extension->CurrentSessionId;
     }
+    YD_SCSI_LOG(
+        "DiskHandleQueryInfo ok, currentSessionId=%I64u, service=%ws",
+        Message->Header.SessionId,
+        info->ServiceName);
     return STATUS_SUCCESS;
 }
 
@@ -165,9 +176,20 @@ DiskHandleIoControlSrb(
     KIRQL oldIrql;
 
     extension = (PDEVICE_CONTEXT)DeviceExtension;
+    SrbSetSrbStatus(Srb, SRB_STATUS_SUCCESS);
+    SrbSetScsiStatus(Srb, SCSISTAT_GOOD);
+    YD_SCSI_LOG(
+        "DiskHandleIoControlSrb enter, srb=%p dataBuffer=%p dataTransfer=%lu",
+        Srb,
+        Srb->DataBuffer,
+        Srb->DataTransferLength);
 
     if (Srb->DataBuffer == NULL ||
         Srb->DataTransferLength < (ULONG)(sizeof(SRB_IO_CONTROL) + YUMEDISK_MESSAGE_BASE_SIZE)) {
+        YD_SCSI_ERR(
+            "DiskHandleIoControlSrb invalid request, dataBuffer=%p dataTransfer=%lu",
+            Srb->DataBuffer,
+            Srb->DataTransferLength);
         Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
         StorPortNotification(RequestComplete, DeviceExtension, Srb);
         return TRUE;
@@ -179,6 +201,11 @@ DiskHandleIoControlSrb(
             srbIoControl->Signature,
             YUMEDISK_MINIPORT_SIGNATURE,
             sizeof(srbIoControl->Signature)) != sizeof(srbIoControl->Signature)) {
+        YD_SCSI_ERR(
+            "DiskHandleIoControlSrb signature/header mismatch, headerLength=%lu controlCode=0x%08X length=%lu",
+            srbIoControl->HeaderLength,
+            srbIoControl->ControlCode,
+            srbIoControl->Length);
         Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
         StorPortNotification(RequestComplete, DeviceExtension, Srb);
         return TRUE;
@@ -186,6 +213,10 @@ DiskHandleIoControlSrb(
 
     if (Srb->DataTransferLength < (ULONG)(sizeof(SRB_IO_CONTROL) + srbIoControl->Length) ||
         srbIoControl->Length < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE) {
+        YD_SCSI_ERR(
+            "DiskHandleIoControlSrb invalid length, transfer=%lu ioctlLength=%lu",
+            Srb->DataTransferLength,
+            srbIoControl->Length);
         Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
         StorPortNotification(RequestComplete, DeviceExtension, Srb);
         return TRUE;
@@ -196,17 +227,38 @@ DiskHandleIoControlSrb(
         message->Header.Size < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
         message->Header.Size > srbIoControl->Length ||
         (ULONG)(YUMEDISK_MESSAGE_BASE_SIZE + message->Header.PayloadLength) > message->Header.Size) {
+        YD_SCSI_ERR(
+            "DiskHandleIoControlSrb invalid message header, cmd=%lu version=%lu size=%lu payload=%lu ioctlLength=%lu",
+            message->Header.Command,
+            message->Header.Version,
+            message->Header.Size,
+            message->Header.PayloadLength,
+            srbIoControl->Length);
         DiskInitMessageStatus(message, message->Header.Command, STATUS_REVISION_MISMATCH, 0);
         DiskCompleteIoctlSrb(Srb, srbIoControl, STATUS_REVISION_MISMATCH, message->Header.Size);
         StorPortNotification(RequestComplete, DeviceExtension, Srb);
         return TRUE;
     }
 
+    YD_SCSI_LOG(
+        "DiskHandleIoControlSrb message, cmd=%lu session=%I64u size=%lu payload=%lu flags=0x%08X",
+        message->Header.Command,
+        message->Header.SessionId,
+        message->Header.Size,
+        message->Header.PayloadLength,
+        message->Header.Flags);
+
     KeAcquireSpinLock(&extension->ControlLock, &oldIrql);
     status = DiskClaimSessionLocked(extension, &message->Header);
     KeReleaseSpinLock(&extension->ControlLock, oldIrql);
 
     if (!NT_SUCCESS(status)) {
+        YD_SCSI_ERR(
+            "DiskClaimSessionLocked failed, cmd=%lu session=%I64u status=0x%08X currentSession=%I64u",
+            message->Header.Command,
+            message->Header.SessionId,
+            status,
+            extension->CurrentSessionId);
         DiskInitMessageStatus(message, message->Header.Command, status, 0);
         DiskCompleteIoctlSrb(Srb, srbIoControl, status, message->Header.Size);
         StorPortNotification(RequestComplete, DeviceExtension, Srb);
@@ -244,6 +296,13 @@ DiskHandleIoControlSrb(
         status = STATUS_INVALID_DEVICE_REQUEST;
         break;
     }
+
+    YD_SCSI_LOG(
+        "DiskHandleIoControlSrb complete, cmd=%lu status=0x%08X replyStatus=0x%08X replySize=%lu",
+        message->Header.Command,
+        status,
+        message->Header.Status,
+        message->Header.Size);
 
     if (status == STATUS_PENDING) {
         Srb->SrbStatus = SRB_STATUS_PENDING;
