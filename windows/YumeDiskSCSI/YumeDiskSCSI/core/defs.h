@@ -29,8 +29,15 @@ typedef struct _YUME_DISK {
 } YUME_DISK, *PYUME_DISK;
 
 typedef struct _DEVICE_CONTEXT {
-    KSPIN_LOCK ControlLock;
+    KSPIN_LOCK SessionLock;
+    KSPIN_LOCK ReadQueueLock;
+    KSPIN_LOCK WriteQueueLock;
     ULONG MaxTargets;
     UINT64 CurrentSessionId;
+    volatile LONG64 NextEventId;
+    LIST_ENTRY PostedReadSlots;
+    LIST_ENTRY PendingReads;
+    LIST_ENTRY PostedWriteSlots;
+    LIST_ENTRY PendingWrites;
     YUME_DISK Disk[YUMEDISK_MAX_TARGETS];
 } DEVICE_CONTEXT, *PDEVICE_CONTEXT;

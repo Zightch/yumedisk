@@ -35,6 +35,7 @@ DiskHandleQueryInfo(
 )
 {
     PYUMEDISK_QUERY_INFO info;
+    KIRQL oldIrql;
 
     if (Message->Header.Size < YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_QUERY_INFO)) {
         return STATUS_BUFFER_TOO_SMALL;
@@ -49,9 +50,11 @@ DiskHandleQueryInfo(
     RtlCopyMemory(info->ServiceName, L"YumeDiskSCSI", sizeof(L"YumeDiskSCSI"));
 
     DiskInitMessageStatus(Message, YumeDiskCommandQueryInfo, STATUS_SUCCESS, sizeof(YUMEDISK_QUERY_INFO));
+    KeAcquireSpinLock(&Extension->SessionLock, &oldIrql);
     if (Extension->CurrentSessionId != 0) {
         Message->Header.SessionId = Extension->CurrentSessionId;
     }
+    KeReleaseSpinLock(&Extension->SessionLock, oldIrql);
     return STATUS_SUCCESS;
 }
 
@@ -131,6 +134,7 @@ DiskHandleRemoveDisk(
     disk->Removing = TRUE;
     DiskResetDiskStorage(disk);
     disk->Generation++;
+    DiskCompleteTargetPending(DeviceExtension, request->TargetId, STATUS_DEVICE_NOT_CONNECTED);
 
     DiskInitMessageStatus(Message, YumeDiskCommandRemoveDisk, STATUS_SUCCESS, 0);
     StorPortNotification(BusChangeDetected, DeviceExtension, 0);
@@ -147,6 +151,7 @@ DiskHandleRemoveAllDisks(
 {
     ULONG index;
     BOOLEAN closeSession;
+    KIRQL oldIrql;
 
     closeSession = ((Message->Header.Flags & YUMEDISK_SESSION_CLOSE_FLAG) != 0);
 
@@ -160,10 +165,14 @@ DiskHandleRemoveAllDisks(
         }
     }
 
+    DiskCompleteAllPending(DeviceExtension, STATUS_DEVICE_NOT_CONNECTED);
+    DiskFreeQueuedState(DeviceExtension);
+
     if (closeSession) {
-        DiskFreeQueuedState(DeviceExtension);
+        KeAcquireSpinLock(&Extension->SessionLock, &oldIrql);
         Extension->CurrentSessionId = 0;
-        DiskCompleteAllPending(DeviceExtension, STATUS_DEVICE_NOT_CONNECTED);
+        Extension->NextEventId = 0;
+        KeReleaseSpinLock(&Extension->SessionLock, oldIrql);
     }
 
     DiskInitMessageStatus(Message, YumeDiskCommandRemoveAllDisks, STATUS_SUCCESS, 0);
@@ -174,7 +183,10 @@ DiskHandleRemoveAllDisks(
 static
 NTSTATUS
 DiskHandleSubmitSlot(
-    _Inout_ PYUMEDISK_MESSAGE Message
+    _In_ PVOID DeviceExtension,
+    _In_ PSTORAGE_REQUEST_BLOCK Srb,
+    _Inout_ PYUMEDISK_MESSAGE Message,
+    _Out_ BOOLEAN* RequestCompleted
 )
 {
     PYUMEDISK_SUBMIT_SLOT submitSlot;
@@ -223,13 +235,13 @@ DiskHandleSubmitSlot(
         }
     }
 
-    DiskInitMessageStatus(Message, YumeDiskCommandSubmitSlot, STATUS_NOT_SUPPORTED, 0);
-    return STATUS_NOT_SUPPORTED;
+    return DiskQueueSubmitSlot(DeviceExtension, Srb, Message, RequestCompleted);
 }
 
 static
 NTSTATUS
 DiskHandleReadAck(
+    _In_ PVOID DeviceExtension,
     _Inout_ PYUMEDISK_MESSAGE Message
 )
 {
@@ -245,13 +257,13 @@ DiskHandleReadAck(
         return STATUS_INVALID_PARAMETER;
     }
 
-    DiskInitMessageStatus(Message, YumeDiskCommandReadAck, STATUS_NOT_SUPPORTED, 0);
-    return STATUS_NOT_SUPPORTED;
+    return DiskQueueReadAck(DeviceExtension, Message);
 }
 
 static
 NTSTATUS
 DiskHandleWriteAckBatch(
+    _In_ PVOID DeviceExtension,
     _Inout_ PYUMEDISK_MESSAGE Message
 )
 {
@@ -262,13 +274,13 @@ DiskHandleWriteAckBatch(
         return status;
     }
 
-    DiskInitMessageStatus(Message, YumeDiskCommandWriteAckBatch, STATUS_NOT_SUPPORTED, 0);
-    return STATUS_NOT_SUPPORTED;
+    return DiskQueueWriteAckBatch(DeviceExtension, Message);
 }
 
 static
 NTSTATUS
 DiskHandleCancelSlot(
+    _In_ PVOID DeviceExtension,
     _Inout_ PYUMEDISK_MESSAGE Message
 )
 {
@@ -286,8 +298,7 @@ DiskHandleCancelSlot(
         return STATUS_INVALID_PARAMETER;
     }
 
-    DiskInitMessageStatus(Message, YumeDiskCommandCancelSlot, STATUS_NOT_SUPPORTED, 0);
-    return STATUS_NOT_SUPPORTED;
+    return DiskQueueCancelSlot(DeviceExtension, Message);
 }
 
 BOOLEAN
@@ -301,6 +312,7 @@ DiskHandleIoControlSrb(
     PYUMEDISK_MESSAGE message;
     NTSTATUS status;
     KIRQL oldIrql;
+    BOOLEAN requestCompleted;
 
     extension = (PDEVICE_CONTEXT)DeviceExtension;
 
@@ -340,9 +352,9 @@ DiskHandleIoControlSrb(
         return TRUE;
     }
 
-    KeAcquireSpinLock(&extension->ControlLock, &oldIrql);
+    KeAcquireSpinLock(&extension->SessionLock, &oldIrql);
     status = DiskClaimSessionLocked(extension, &message->Header);
-    KeReleaseSpinLock(&extension->ControlLock, oldIrql);
+    KeReleaseSpinLock(&extension->SessionLock, oldIrql);
 
     if (!NT_SUCCESS(status)) {
         DiskInitMessageStatus(message, message->Header.Command, status, 0);
@@ -351,6 +363,7 @@ DiskHandleIoControlSrb(
         return TRUE;
     }
 
+    requestCompleted = FALSE;
     switch (message->Header.Command) {
     case YumeDiskCommandQueryInfo:
         status = DiskHandleQueryInfo(extension, message);
@@ -365,16 +378,19 @@ DiskHandleIoControlSrb(
         status = DiskHandleRemoveAllDisks(DeviceExtension, extension, message);
         break;
     case YumeDiskCommandSubmitSlot:
-        status = DiskHandleSubmitSlot(message);
+        status = DiskHandleSubmitSlot(DeviceExtension, Srb, message, &requestCompleted);
+        if (requestCompleted) {
+            return TRUE;
+        }
         break;
     case YumeDiskCommandReadAck:
-        status = DiskHandleReadAck(message);
+        status = DiskHandleReadAck(DeviceExtension, message);
         break;
     case YumeDiskCommandWriteAckBatch:
-        status = DiskHandleWriteAckBatch(message);
+        status = DiskHandleWriteAckBatch(DeviceExtension, message);
         break;
     case YumeDiskCommandCancelSlot:
-        status = DiskHandleCancelSlot(message);
+        status = DiskHandleCancelSlot(DeviceExtension, message);
         break;
     default:
         DiskInitMessageStatus(message, message->Header.Command, STATUS_INVALID_DEVICE_REQUEST, 0);

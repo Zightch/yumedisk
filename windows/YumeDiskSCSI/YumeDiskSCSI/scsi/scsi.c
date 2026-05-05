@@ -3,6 +3,113 @@
 #include <ntddscsi.h>
 
 static
+UINT32
+DiskReadBigEndian32(
+    _In_reads_(4) const UCHAR* Bytes
+)
+{
+    return ((UINT32)Bytes[0] << 24) |
+        ((UINT32)Bytes[1] << 16) |
+        ((UINT32)Bytes[2] << 8) |
+        Bytes[3];
+}
+
+static
+UINT64
+DiskReadBigEndian64(
+    _In_reads_(8) const UCHAR* Bytes
+)
+{
+    return ((UINT64)Bytes[0] << 56) |
+        ((UINT64)Bytes[1] << 48) |
+        ((UINT64)Bytes[2] << 40) |
+        ((UINT64)Bytes[3] << 32) |
+        ((UINT64)Bytes[4] << 24) |
+        ((UINT64)Bytes[5] << 16) |
+        ((UINT64)Bytes[6] << 8) |
+        Bytes[7];
+}
+
+static
+BOOLEAN
+DiskTryParseReadWriteCdb(
+    _In_ const YUME_DISK* Disk,
+    _In_ PCDB Cdb,
+    _In_ ULONG TransferLength,
+    _Out_ UINT64* Lba,
+    _Out_ ULONG* BlockCount
+)
+{
+    const UCHAR* bytes;
+    UCHAR opcode;
+    UINT64 localLba;
+    ULONG localBlockCount;
+    ULONGLONG expectedLength;
+
+    bytes = Cdb->AsByte;
+    opcode = bytes[0];
+    localLba = 0;
+    localBlockCount = 0;
+
+    switch (opcode) {
+    case SCSIOP_READ6:
+    case SCSIOP_WRITE6:
+        localLba = ((UINT32)(bytes[1] & 0x1f) << 16) |
+            ((UINT32)bytes[2] << 8) |
+            bytes[3];
+        localBlockCount = (bytes[4] == 0) ? 256u : bytes[4];
+        break;
+    case SCSIOP_READ:
+    case SCSIOP_WRITE:
+        localLba = DiskReadBigEndian32(&bytes[2]);
+        localBlockCount = ((UINT32)bytes[7] << 8) | bytes[8];
+        break;
+    case SCSIOP_READ12:
+    case SCSIOP_WRITE12:
+        localLba = DiskReadBigEndian32(&bytes[2]);
+        localBlockCount = DiskReadBigEndian32(&bytes[6]);
+        break;
+    case SCSIOP_READ16:
+    case SCSIOP_WRITE16:
+        localLba = DiskReadBigEndian64(&bytes[2]);
+        localBlockCount = DiskReadBigEndian32(&bytes[10]);
+        break;
+    default:
+        return FALSE;
+    }
+
+    expectedLength = (ULONGLONG)localBlockCount * Disk->SectorSize;
+    if (expectedLength != TransferLength) {
+        return FALSE;
+    }
+
+    *Lba = localLba;
+    *BlockCount = localBlockCount;
+    return TRUE;
+}
+
+static
+UCHAR
+DiskMapQueueFailureToSrbStatus(
+    _In_ NTSTATUS Status
+)
+{
+    switch (Status) {
+    case STATUS_DEVICE_NOT_CONNECTED:
+    case STATUS_DEVICE_DOES_NOT_EXIST:
+    case STATUS_NO_SUCH_DEVICE:
+    case STATUS_NOT_FOUND:
+        return SRB_STATUS_NO_DEVICE;
+    case STATUS_BUFFER_TOO_SMALL:
+    case STATUS_INVALID_PARAMETER:
+    case STATUS_INVALID_DEVICE_REQUEST:
+        return SRB_STATUS_INVALID_REQUEST;
+    default:
+        return SRB_STATUS_ERROR;
+    }
+}
+
+static
 VOID
 DiskHandleReportLuns(
     _Inout_updates_bytes_(TransferLength) PUCHAR DataBuffer,
@@ -215,8 +322,10 @@ DiskHandleScsiCdb(
     PDEVICE_CONTEXT extension;
     PYUME_DISK disk;
     ULONG transferLength;
+    UINT64 lba;
+    ULONG blockCount;
+    NTSTATUS status;
 
-    UNREFERENCED_PARAMETER(Srb);
     UNREFERENCED_PARAMETER(SenseInfoBuffer);
     UNREFERENCED_PARAMETER(SenseInfoBufferLength);
 
@@ -272,13 +381,56 @@ DiskHandleScsiCdb(
     case SCSIOP_READ:
     case SCSIOP_READ12:
     case SCSIOP_READ16:
+        if (!DiskTryParseReadWriteCdb(disk, Cdb, transferLength, &lba, &blockCount)) {
+            *SrbStatus = SRB_STATUS_INVALID_REQUEST;
+            *ScsiStatus = SCSISTAT_CHECK_CONDITION;
+            *DataTransferLength = 0;
+            break;
+        }
+
+        status = DiskQueueReadSrb(DeviceExtension, Srb, TargetId, lba, blockCount, transferLength);
+        if (status == STATUS_PENDING) {
+            *SrbStatus = SRB_STATUS_PENDING;
+            return;
+        }
+
+        if (!NT_SUCCESS(status)) {
+            *SrbStatus = DiskMapQueueFailureToSrbStatus(status);
+            *ScsiStatus = SCSISTAT_CHECK_CONDITION;
+            *DataTransferLength = 0;
+            break;
+        }
+
+        *DataTransferLength = transferLength;
+        break;
     case SCSIOP_WRITE6:
     case SCSIOP_WRITE:
     case SCSIOP_WRITE12:
     case SCSIOP_WRITE16:
-        *SrbStatus = SRB_STATUS_INVALID_REQUEST;
+        if (!DiskTryParseReadWriteCdb(disk, Cdb, transferLength, &lba, &blockCount)) {
+            *SrbStatus = SRB_STATUS_INVALID_REQUEST;
+            *ScsiStatus = SCSISTAT_CHECK_CONDITION;
+            *DataTransferLength = 0;
+            break;
+        }
+
+        status = DiskQueueWriteSrb(DeviceExtension, Srb, TargetId, lba, blockCount, transferLength);
+        if (status == STATUS_PENDING) {
+            *SrbStatus = SRB_STATUS_PENDING;
+            return;
+        }
+
+        if (!NT_SUCCESS(status)) {
+            *SrbStatus = DiskMapQueueFailureToSrbStatus(status);
+            *ScsiStatus = SCSISTAT_CHECK_CONDITION;
+            *DataTransferLength = 0;
+            break;
+        }
+
+        *DataTransferLength = transferLength;
         break;
     default:
+        *DataTransferLength = 0;
         *SrbStatus = SRB_STATUS_INVALID_REQUEST;
         break;
     }

@@ -433,7 +433,8 @@ typedef struct _YUMEDISK_WRITE_ACK_BATCH {
 2. 查 `PendingWritesByEventId[EventId]`。
 3. 如果找不到:
    - 如果实现了 completed-event cache，且该 range 完全落在已完成请求内，可返回幂等成功。
-   - 初版建议返回 `STATUS_NOT_FOUND`，便于发现 App 重复 ACK 或错 ACK。
+   - 当前最小实现可以把“已经完成或已经因失败终止”的旧 range 当作幂等成功，以避免收尾阶段的 stale ACK 再次制造阻塞。
+   - 如果后续需要更强的 App bug 暴露，再把该策略收紧为 `STATUS_NOT_FOUND`。
 4. 校验 `SeqCount != 0`。
 5. 校验 `SeqBase + SeqCount` 不发生整数溢出。
 6. 校验 `SeqBase + SeqCount <= TotalSeq`。
@@ -712,7 +713,7 @@ WRITE:
 
 - 一旦任意 fragment 失败，立即完成原始 WRITE SRB 为失败。
 - 从 pending 表移除 WriteRequest。
-- 已投递但未 ACK 的 fragment 后续 ACK 返回 `STATUS_NOT_FOUND`。
+- 已投递但未 ACK 的 fragment 后续 ACK 可以接受为幂等成功，也可以返回 `STATUS_NOT_FOUND`；如果目标是先稳住压测闭环，优先接受幂等成功。
 
 这个策略实现简单，但 App 可能看到一些已完成 slot 的 ACK 被拒绝。需要在 App 侧接受这种 session 内失败语义。
 
@@ -731,10 +732,11 @@ WRITE:
 
 ### 9.7 miniport IOCTL timeout
 
-当前协议中 `SRB_IO_CONTROL.Timeout = 30s` 对长期 pending wait/slot 模型是危险的。
+当前协议中，长期 pending slot 如果仍承载在 `IOCTL_SCSI_MINIPORT` 上，`SRB_IO_CONTROL.Timeout` 不能维持在 `30s` 这种短值；否则 idle 或低流量窗口就会把正常 slot 误打成超时。
 
 需要处理:
 
+- 当前最小实现已经先把 timeout 抬高到 `3600s`，作为继续使用长期 pending slot 的止血措施，但这不是最终结构终点。
 - 如果继续使用 `IOCTL_SCSI_MINIPORT` 承载长期 pending slot，必须确认 timeout 语义，并实现取消路径。
 - posted slot 不应在 SCSI 中留下会被 StorPort 超时后仍访问的 stale SRB 指针。
 - 初版可以把 slot submit 设计为短操作: KMDF 保存 WDFREQUEST pending，发一个短 miniport command 注册 slot 描述符；SCSI 有事件时再通过短 command/通知让 KMDF 完成对应 WDFREQUEST。这样避免 miniport control SRB 长期 pending，但实现更复杂。

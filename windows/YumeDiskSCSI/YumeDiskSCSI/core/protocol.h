@@ -29,6 +29,14 @@ DiskCompleteIoctlSrb(
     _In_ ULONG ResponseLength
 );
 
+VOID
+DiskCompleteScsiSrb(
+    _In_ PVOID DeviceExtension,
+    _In_ PSTORAGE_REQUEST_BLOCK Srb,
+    _In_ NTSTATUS Status,
+    _In_ ULONG DataTransferLength
+);
+
 NTSTATUS
 DiskClaimSessionLocked(
     _Inout_ PDEVICE_CONTEXT Extension,

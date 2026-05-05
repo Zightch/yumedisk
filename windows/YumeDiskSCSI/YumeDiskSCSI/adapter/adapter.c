@@ -13,8 +13,8 @@ DiskFreeAdapterResources(
     ULONG index;
 
     extension = (PDEVICE_CONTEXT)DeviceExtension;
-    DiskFreeQueuedState(DeviceExtension);
     DiskCompleteAllPending(DeviceExtension, STATUS_DEVICE_DOES_NOT_EXIST);
+    DiskFreeQueuedState(DeviceExtension);
 
     for (index = 0; index < extension->MaxTargets; ++index) {
         DiskResetDiskStorage(&extension->Disk[index]);
@@ -184,8 +184,11 @@ DiskInitializeAdapter(
     extension = (PDEVICE_CONTEXT)DeviceExtension;
     RtlZeroMemory(extension, sizeof(*extension));
 
-    KeInitializeSpinLock(&extension->ControlLock);
+    KeInitializeSpinLock(&extension->SessionLock);
+    KeInitializeSpinLock(&extension->ReadQueueLock);
+    KeInitializeSpinLock(&extension->WriteQueueLock);
     extension->MaxTargets = YUMEDISK_MAX_TARGETS;
+    DiskInitializeQueueState(extension);
 
     for (index = 0; index < extension->MaxTargets; ++index) {
         KeInitializeSpinLock(&extension->Disk[index].BufferLock);
