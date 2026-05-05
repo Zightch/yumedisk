@@ -17,7 +17,7 @@ DiskHandleQueryInfo(
     RtlZeroMemory(info, sizeof(*info));
     info->ProtocolVersion = YUMEDISK_PROTOCOL_VERSION;
     info->MaxTargets = YUMEDISK_USABLE_TARGET_COUNT;
-    info->Features = YumeDiskFeatureWaitEvent | YumeDiskFeatureDynamicDisk | YumeDiskFeatureIoSkeleton;
+    info->Features = YumeDiskFeatureDynamicDisk;
     RtlCopyMemory(info->AdapterSignature, YUMEDISK_MINIPORT_SIGNATURE, sizeof(info->AdapterSignature));
     RtlCopyMemory(info->ServiceName, L"YumeDiskSCSI", sizeof(L"YumeDiskSCSI"));
 
@@ -69,7 +69,6 @@ DiskHandleCreateDisk(
     disk->Generation++;
 
     DiskInitMessageStatus(Message, YumeDiskCommandCreateDisk, STATUS_SUCCESS, 0);
-    DiskQueueSyntheticEvent(DeviceExtension, YumeDiskEventDiskAdded, request->TargetId);
     StorPortNotification(BusChangeDetected, DeviceExtension, 0);
     return STATUS_SUCCESS;
 }
@@ -103,12 +102,10 @@ DiskHandleRemoveDisk(
     disk->Configured = FALSE;
     disk->Present = FALSE;
     disk->Removing = TRUE;
-    DiskCancelPendingIoByTarget(DeviceExtension, Extension, request->TargetId, STATUS_DEVICE_NOT_CONNECTED);
     DiskResetDiskStorage(disk);
     disk->Generation++;
 
     DiskInitMessageStatus(Message, YumeDiskCommandRemoveDisk, STATUS_SUCCESS, 0);
-    DiskQueueSyntheticEvent(DeviceExtension, YumeDiskEventDiskRemoved, request->TargetId);
     StorPortNotification(BusChangeDetected, DeviceExtension, 0);
     return STATUS_SUCCESS;
 }
@@ -131,19 +128,14 @@ DiskHandleRemoveAllDisks(
             Extension->Disk[index].Configured = FALSE;
             Extension->Disk[index].Present = FALSE;
             Extension->Disk[index].Removing = TRUE;
-            DiskCancelPendingIoByTarget(DeviceExtension, Extension, index, STATUS_DEVICE_NOT_CONNECTED);
             DiskResetDiskStorage(&Extension->Disk[index]);
             Extension->Disk[index].Generation++;
-            if (!closeSession) {
-                DiskQueueSyntheticEvent(DeviceExtension, YumeDiskEventDiskRemoved, index);
-            }
         }
     }
 
     if (closeSession) {
         DiskFreeQueuedState(DeviceExtension);
         Extension->CurrentSessionId = 0;
-        DiskQueueSyntheticEvent(DeviceExtension, YumeDiskEventShutdown, 0);
         DiskCompleteAllPending(DeviceExtension, STATUS_DEVICE_NOT_CONNECTED);
     }
 
@@ -225,19 +217,6 @@ DiskHandleIoControlSrb(
         break;
     case YumeDiskCommandRemoveAllDisks:
         status = DiskHandleRemoveAllDisks(DeviceExtension, extension, message);
-        break;
-    case YumeDiskCommandWaitEvent:
-        status = DiskHandleWaitEvent(DeviceExtension, extension, message, Srb);
-        break;
-    case YumeDiskCommandHeartbeat:
-        DiskInitMessageStatus(message, YumeDiskCommandHeartbeat, STATUS_SUCCESS, 0);
-        status = STATUS_SUCCESS;
-        break;
-    case YumeDiskCommandReadReply:
-        status = DiskHandleReadReply(DeviceExtension, extension, message);
-        break;
-    case YumeDiskCommandWriteAck:
-        status = DiskHandleWriteAck(DeviceExtension, extension, message);
         break;
     default:
         DiskInitMessageStatus(message, message->Header.Command, STATUS_INVALID_DEVICE_REQUEST, 0);

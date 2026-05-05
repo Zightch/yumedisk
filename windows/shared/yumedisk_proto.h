@@ -26,29 +26,11 @@ typedef enum _YUMEDISK_COMMAND {
     YumeDiskCommandCreateDisk = 2,
     YumeDiskCommandRemoveDisk = 3,
     YumeDiskCommandRemoveAllDisks = 4,
-    YumeDiskCommandWaitEvent = 5,
-    YumeDiskCommandHeartbeat = 6,
-    YumeDiskCommandReadReply = 7,
-    YumeDiskCommandWriteAck = 8
+    YumeDiskCommandHeartbeat = 5
 } YUMEDISK_COMMAND;
 
-typedef enum _YUMEDISK_EVENT_TYPE {
-    YumeDiskEventNone = 0,
-    YumeDiskEventDiskAdded = 1,
-    YumeDiskEventDiskRemoved = 2,
-    YumeDiskEventShutdown = 3,
-    YumeDiskEventReadRequest = 4,
-    YumeDiskEventWriteRequest = 5
-} YUMEDISK_EVENT_TYPE;
-
-typedef enum _YUMEDISK_EVENT_FLAGS {
-    YumeDiskEventFlagHasInlineData = 0x00000001u
-} YUMEDISK_EVENT_FLAGS;
-
 typedef enum _YUMEDISK_FEATURE_FLAGS {
-    YumeDiskFeatureWaitEvent = 0x00000001u,
-    YumeDiskFeatureDynamicDisk = 0x00000002u,
-    YumeDiskFeatureIoSkeleton = 0x00000004u
+    YumeDiskFeatureDynamicDisk = 0x00000002u
 } YUMEDISK_FEATURE_FLAGS;
 
 typedef struct _YUMEDISK_HEADER {
@@ -91,36 +73,3 @@ typedef struct _YUMEDISK_REMOVE_DISK {
     ULONG TargetId;
     ULONG Flags;
 } YUMEDISK_REMOVE_DISK, *PYUMEDISK_REMOVE_DISK;
-
-typedef struct _YUMEDISK_WAIT_EVENT {
-    ULONG TimeoutMs;
-    ULONG Reserved;
-} YUMEDISK_WAIT_EVENT, *PYUMEDISK_WAIT_EVENT;
-
-typedef struct _YUMEDISK_EVENT {
-    ULONG EventType;
-    ULONG EventFlags;
-    ULONG TargetId;
-    ULONG Reserved;
-    ULONGLONG TxId;
-    ULONGLONG Lba;
-    ULONG BlockCount;
-    ULONG DataLength;
-} YUMEDISK_EVENT, *PYUMEDISK_EVENT;
-
-typedef struct _YUMEDISK_READ_REPLY {
-    ULONGLONG TxId;
-    LONG IoStatus;
-    ULONG DataLength;
-    ULONG Reserved;
-    UCHAR Data[1];
-} YUMEDISK_READ_REPLY, *PYUMEDISK_READ_REPLY;
-
-#define YUMEDISK_READ_REPLY_BASE_SIZE FIELD_OFFSET(YUMEDISK_READ_REPLY, Data)
-
-typedef struct _YUMEDISK_WRITE_ACK {
-    ULONGLONG TxId;
-    LONG IoStatus;
-    ULONG Reserved0;
-    ULONG Reserved1;
-} YUMEDISK_WRITE_ACK, *PYUMEDISK_WRITE_ACK;

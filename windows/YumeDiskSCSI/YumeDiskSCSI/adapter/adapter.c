@@ -185,11 +185,7 @@ DiskInitializeAdapter(
     RtlZeroMemory(extension, sizeof(*extension));
 
     KeInitializeSpinLock(&extension->ControlLock);
-    InitializeListHead(&extension->PendingEvents);
-    InitializeListHead(&extension->PendingWaiters);
-    InitializeListHead(&extension->PendingIo);
     extension->MaxTargets = YUMEDISK_MAX_TARGETS;
-    extension->NextTxId = 0;
 
     for (index = 0; index < extension->MaxTargets; ++index) {
         KeInitializeSpinLock(&extension->Disk[index].BufferLock);

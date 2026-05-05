@@ -215,12 +215,8 @@ DiskHandleScsiCdb(
     PDEVICE_CONTEXT extension;
     PYUME_DISK disk;
     ULONG transferLength;
-    UINT64 startBlockIndex;
-    UINT64 startByte;
-    UINT64 byteCount;
-    ULONG blockCount;
-    NTSTATUS ioStatus;
 
+    UNREFERENCED_PARAMETER(Srb);
     UNREFERENCED_PARAMETER(SenseInfoBuffer);
     UNREFERENCED_PARAMETER(SenseInfoBufferLength);
 
@@ -241,10 +237,6 @@ DiskHandleScsiCdb(
     }
 
     disk = &extension->Disk[TargetId];
-    startBlockIndex = 0;
-    startByte = 0;
-    byteCount = 0;
-    blockCount = 0;
 
     switch (Cdb->CDB6GENERIC.OperationCode) {
     case SCSIOP_REPORT_LUNS:
@@ -277,92 +269,14 @@ DiskHandleScsiCdb(
     case SCSIOP_VERIFY16:
         break;
     case SCSIOP_READ6:
-        startBlockIndex = (((UINT64)Cdb->CDB6READWRITE.LogicalBlockMsb1) << 16) |
-            (((UINT64)Cdb->CDB6READWRITE.LogicalBlockMsb0) << 8) |
-            Cdb->CDB6READWRITE.LogicalBlockLsb;
-        blockCount = Cdb->CDB6READWRITE.TransferBlocks == 0 ? 256 : Cdb->CDB6READWRITE.TransferBlocks;
-        goto start_read;
     case SCSIOP_READ:
-        REVERSE_BYTES_4(&startBlockIndex, &Cdb->CDB10.LogicalBlockByte0);
-        REVERSE_BYTES_2(&blockCount, &Cdb->CDB10.TransferBlocksMsb);
-        goto start_read;
     case SCSIOP_READ12:
-        REVERSE_BYTES_4(&startBlockIndex, Cdb->READ12.LogicalBlock);
-        REVERSE_BYTES_4(&blockCount, Cdb->READ12.TransferLength);
-        goto start_read;
     case SCSIOP_READ16:
-        REVERSE_BYTES_8(&startBlockIndex, Cdb->READ16.LogicalBlock);
-        REVERSE_BYTES_4(&blockCount, Cdb->READ16.TransferLength);
-start_read:
-        if (!DiskValidateDiskRange(disk, startBlockIndex, blockCount, transferLength, &startByte, &byteCount)) {
-            *SrbStatus = SRB_STATUS_INVALID_REQUEST;
-            break;
-        }
-
-        if (!disk->Present) {
-            *SrbStatus = SRB_STATUS_INVALID_TARGET_ID;
-            break;
-        }
-
-        if (byteCount == 0) {
-            *DataTransferLength = 0;
-            break;
-        }
-
-        ioStatus = DiskQueuePendingScsiIo(
-            DeviceExtension,
-            extension,
-            Srb,
-            DiskPendingIoRead,
-            TargetId,
-            startBlockIndex,
-            blockCount,
-            (ULONG)byteCount);
-        *SrbStatus = (ioStatus == STATUS_PENDING) ? SRB_STATUS_PENDING : DiskNtStatusToSrbStatus(ioStatus);
-        break;
     case SCSIOP_WRITE6:
-        startBlockIndex = (((UINT64)Cdb->CDB6READWRITE.LogicalBlockMsb1) << 16) |
-            (((UINT64)Cdb->CDB6READWRITE.LogicalBlockMsb0) << 8) |
-            Cdb->CDB6READWRITE.LogicalBlockLsb;
-        blockCount = Cdb->CDB6READWRITE.TransferBlocks == 0 ? 256 : Cdb->CDB6READWRITE.TransferBlocks;
-        goto start_write;
     case SCSIOP_WRITE:
-        REVERSE_BYTES_4(&startBlockIndex, &Cdb->CDB10.LogicalBlockByte0);
-        REVERSE_BYTES_2(&blockCount, &Cdb->CDB10.TransferBlocksMsb);
-        goto start_write;
     case SCSIOP_WRITE12:
-        REVERSE_BYTES_4(&startBlockIndex, Cdb->WRITE12.LogicalBlock);
-        REVERSE_BYTES_4(&blockCount, Cdb->WRITE12.TransferLength);
-        goto start_write;
     case SCSIOP_WRITE16:
-        REVERSE_BYTES_8(&startBlockIndex, Cdb->WRITE16.LogicalBlock);
-        REVERSE_BYTES_4(&blockCount, Cdb->WRITE16.TransferLength);
-start_write:
-        if (!DiskValidateDiskRange(disk, startBlockIndex, blockCount, transferLength, &startByte, &byteCount)) {
-            *SrbStatus = SRB_STATUS_INVALID_REQUEST;
-            break;
-        }
-
-        if (!disk->Present) {
-            *SrbStatus = SRB_STATUS_INVALID_TARGET_ID;
-            break;
-        }
-
-        if (byteCount == 0) {
-            *DataTransferLength = 0;
-            break;
-        }
-
-        ioStatus = DiskQueuePendingScsiIo(
-            DeviceExtension,
-            extension,
-            Srb,
-            DiskPendingIoWrite,
-            TargetId,
-            startBlockIndex,
-            blockCount,
-            (ULONG)byteCount);
-        *SrbStatus = (ioStatus == STATUS_PENDING) ? SRB_STATUS_PENDING : DiskNtStatusToSrbStatus(ioStatus);
+        *SrbStatus = SRB_STATUS_INVALID_REQUEST;
         break;
     default:
         *SrbStatus = SRB_STATUS_INVALID_REQUEST;

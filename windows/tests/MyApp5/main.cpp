@@ -17,11 +17,9 @@ static const char* kHelpText =
     "  create [target=<id>|<id>] [sectors=<count>|sectorCount=<count>|<count>] [sectorSize=<bytes>]\n"
     "  remove [target=<id>|<id>]\n"
     "  removeall [close]\n"
-    "  wait\n"
     "  exit\n";
 
 static const LONG kProtocolSuccess = 0;
-static const ULONG kWaitInlineDataCapacity = 8u * 1024u * 1024u;
 
 struct ControlContext {
     HANDLE controlFile{INVALID_HANDLE_VALUE};
@@ -168,19 +166,6 @@ static bool AttachSession(ControlContext* context, PYUMEDISK_MESSAGE message) {
 
     message->Header.SessionId = context->sessionId;
     return true;
-}
-
-static void PrepareWaitBuffer(ControlContext* context, std::vector<unsigned char>* buffer) {
-    *buffer = MakeMessageBuffer(
-        YumeDiskCommandWaitEvent,
-        sizeof(YUMEDISK_WAIT_EVENT),
-        sizeof(YUMEDISK_WAIT_EVENT) + sizeof(YUMEDISK_EVENT) + kWaitInlineDataCapacity
-    );
-
-    auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer->data());
-    auto* waitRequest = reinterpret_cast<PYUMEDISK_WAIT_EVENT>(message->Payload);
-    message->Header.SessionId = context->sessionId;
-    waitRequest->TimeoutMs = 0;
 }
 
 static int RunQuery(ControlContext* context) {
@@ -368,40 +353,6 @@ static int RunRemoveAll(ControlContext* context, const std::vector<std::string>&
     return message->Header.Status == kProtocolSuccess ? 0 : 1;
 }
 
-static int RunWait(ControlContext* context) {
-    std::vector<unsigned char> buffer;
-    PYUMEDISK_MESSAGE message = nullptr;
-
-    if (!EnsureSessionId(context)) {
-        return 1;
-    }
-
-    PrepareWaitBuffer(context, &buffer);
-    message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer.data());
-
-    if (!SendCommand(context->controlFile, buffer)) {
-        return 1;
-    }
-
-    if (message->Header.Status != kProtocolSuccess || message->Header.PayloadLength < sizeof(YUMEDISK_EVENT)) {
-        PrintProtocolFailure("WAIT_EVENT", message->Header);
-        return 1;
-    }
-
-    UpdateSessionId(context, message->Header);
-    auto* event = reinterpret_cast<PYUMEDISK_EVENT>(message->Payload);
-    ULONG inlineDataLength = message->Header.PayloadLength - sizeof(YUMEDISK_EVENT);
-    std::cout << "eventType=" << event->EventType
-              << ", target=" << event->TargetId
-              << ", txId=" << event->TxId
-              << ", lba=" << event->Lba
-              << ", blocks=" << event->BlockCount
-              << ", dataLength=" << event->DataLength
-              << ", inlineData=" << inlineDataLength
-              << std::endl;
-    return 0;
-}
-
 static int ExecuteCommand(ControlContext* context, const std::string& line, bool* shouldExit) {
     auto args = SplitArgs(line);
     if (args.empty()) {
@@ -424,9 +375,6 @@ static int ExecuteCommand(ControlContext* context, const std::string& line, bool
     }
     if (command == "removeall") {
         return RunRemoveAll(context, args);
-    }
-    if (command == "wait") {
-        return RunWait(context);
     }
     if (command == "exit" || command == "quit") {
         *shouldExit = true;

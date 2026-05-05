@@ -11,3 +11,4 @@ jsoncpp/
 **/.vscode/
 **/build/
 **/cmake-build-*/
+/out/
