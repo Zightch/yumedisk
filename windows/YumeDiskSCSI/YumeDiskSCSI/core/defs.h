@@ -39,5 +39,16 @@ typedef struct _DEVICE_CONTEXT {
     LIST_ENTRY PendingReads;
     LIST_ENTRY PostedWriteSlots;
     LIST_ENTRY PendingWrites;
+    volatile LONG64 DebugProgressCounter;
+    volatile LONG64 DebugReadRequestsQueued;
+    volatile LONG64 DebugReadSlotsIssued;
+    volatile LONG64 DebugReadAcksApplied;
+    volatile LONG64 DebugReadRequestsCompleted;
+    volatile LONG64 DebugReadRequestsFailed;
+    volatile LONG64 DebugWriteRequestsQueued;
+    volatile LONG64 DebugWriteFragmentsIssued;
+    volatile LONG64 DebugWriteAcksApplied;
+    volatile LONG64 DebugWriteRequestsCompleted;
+    volatile LONG64 DebugWriteRequestsFailed;
     YUME_DISK Disk[YUMEDISK_MAX_TARGETS];
 } DEVICE_CONTEXT, *PDEVICE_CONTEXT;

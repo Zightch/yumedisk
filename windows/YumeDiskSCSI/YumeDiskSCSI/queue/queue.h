@@ -70,3 +70,9 @@ DiskQueueWriteSrb(
     _In_ ULONG BlockCount,
     _In_ ULONG DataLength
 );
+
+NTSTATUS
+DiskQueryDebugState(
+    _In_ PVOID DeviceExtension,
+    _Out_ PYUMEDISK_DEBUG_STATE DebugState
+);

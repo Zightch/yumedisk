@@ -45,6 +45,7 @@ constexpr DWORD kWriteAckFlushDelayMs = 10;
 constexpr DWORD kDiskArrivalPollMs = 100;
 constexpr DWORD kDiskArrivalTimeoutMs = 5000;
 constexpr DWORD kBenchmarkDurationSec = 15;
+constexpr DWORD kStallSnapshotThresholdSec = 5;
 
 struct AppConfig {
     ULONG targetId = kDefaultTargetId;
@@ -63,6 +64,26 @@ enum class ParseResult {
 struct ControlContext {
     HANDLE file = INVALID_HANDLE_VALUE;
     uint64_t sessionId = 0;
+};
+
+enum class ReadWorkerState : uint32_t {
+    Idle = 0,
+    PostSlot = 1,
+    CopyMedium = 2,
+    SendAck = 3
+};
+
+enum class WriteWorkerState : uint32_t {
+    Idle = 0,
+    PostSlot = 1,
+    ApplyMedium = 2,
+    QueueAck = 3
+};
+
+enum class AckFlushState : uint32_t {
+    Idle = 0,
+    Delay = 1,
+    Send = 2
 };
 
 struct DiskIdentity {
@@ -103,6 +124,10 @@ struct ManagedDisk {
     std::vector<std::thread> readWorkers;
     std::vector<std::thread> writeWorkers;
     std::thread ackFlushThread;
+    size_t workerCount = 0;
+    std::unique_ptr<std::atomic<uint32_t>[]> readWorkerStates;
+    std::unique_ptr<std::atomic<uint32_t>[]> writeWorkerStates;
+    std::atomic<uint32_t> ackFlushState{static_cast<uint32_t>(AckFlushState::Idle)};
 };
 
 struct BackendContext {
@@ -223,6 +248,30 @@ void InitMessageHeader(
     message->Header.Flags = flags;
     message->Header.PayloadLength = payloadLength;
     message->Header.Reserved = 0;
+}
+
+void SetReadWorkerState(ManagedDisk* disk, size_t workerIndex, ReadWorkerState state) {
+    if (disk == nullptr || workerIndex >= disk->workerCount || !disk->readWorkerStates) {
+        return;
+    }
+
+    disk->readWorkerStates[workerIndex].store(static_cast<uint32_t>(state), std::memory_order_relaxed);
+}
+
+void SetWriteWorkerState(ManagedDisk* disk, size_t workerIndex, WriteWorkerState state) {
+    if (disk == nullptr || workerIndex >= disk->workerCount || !disk->writeWorkerStates) {
+        return;
+    }
+
+    disk->writeWorkerStates[workerIndex].store(static_cast<uint32_t>(state), std::memory_order_relaxed);
+}
+
+void SetAckFlushState(ManagedDisk* disk, AckFlushState state) {
+    if (disk == nullptr) {
+        return;
+    }
+
+    disk->ackFlushState.store(static_cast<uint32_t>(state), std::memory_order_relaxed);
 }
 
 bool SendIoControl(
@@ -423,6 +472,24 @@ bool QueryInfo(ControlContext* control, YUMEDISK_QUERY_INFO* info) {
     }
 
     *info = *reinterpret_cast<PYUMEDISK_QUERY_INFO>(message->Payload);
+    return true;
+}
+
+bool QueryDebugState(ControlContext* control, YUMEDISK_DEBUG_STATE* debugState) {
+    auto buffer = MakeMessageBuffer(YumeDiskCommandQueryDebugState, 0, sizeof(YUMEDISK_DEBUG_STATE));
+    auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer.data());
+    message->Header.SessionId = control->sessionId;
+
+    if (!SendCommand(control->file, buffer, nullptr)) {
+        return false;
+    }
+
+    if (message->Header.Status != kStatusSuccess ||
+        message->Header.PayloadLength < sizeof(YUMEDISK_DEBUG_STATE)) {
+        return false;
+    }
+
+    *debugState = *reinterpret_cast<PYUMEDISK_DEBUG_STATE>(message->Payload);
     return true;
 }
 
@@ -964,6 +1031,7 @@ bool SendWriteAckBatch(
 }
 
 void WriteAckFlushWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>& disk) {
+    SetAckFlushState(disk.get(), AckFlushState::Idle);
     for (;;) {
         std::vector<YUMEDISK_WRITE_ACK_RANGE> ranges;
 
@@ -979,6 +1047,7 @@ void WriteAckFlushWorker(BackendContext* context, const std::shared_ptr<ManagedD
                 break;
             }
 
+            SetAckFlushState(disk.get(), AckFlushState::Delay);
             disk->ackCv.wait_for(lock, std::chrono::milliseconds(kWriteAckFlushDelayMs), [&]() {
                 return context->stop.load(std::memory_order_relaxed) ||
                     disk->stop.load(std::memory_order_relaxed) ||
@@ -990,23 +1059,29 @@ void WriteAckFlushWorker(BackendContext* context, const std::shared_ptr<ManagedD
             }
 
             if (disk->pendingWriteAcks.empty()) {
+                SetAckFlushState(disk.get(), AckFlushState::Idle);
                 continue;
             }
 
             ranges = StealWriteAckRangesLocked(disk.get(), kMaxAckBatchRanges);
         }
 
+        SetAckFlushState(disk.get(), AckFlushState::Send);
         if (!SendWriteAckBatch(context, disk.get(), ranges)) {
             if (!context->stop.load(std::memory_order_relaxed) && !disk->stop.load(std::memory_order_relaxed)) {
                 RequeueWriteAckRanges(disk.get(), ranges);
                 LogLine(context, L"WRITE_ACK_BATCH flush failed");
             }
+            SetAckFlushState(disk.get(), AckFlushState::Idle);
             continue;
         }
 
         context->stats.flushedAckCommands.fetch_add(1, std::memory_order_relaxed);
         context->stats.flushedAckRanges.fetch_add(ranges.size(), std::memory_order_relaxed);
+        SetAckFlushState(disk.get(), AckFlushState::Idle);
     }
+
+    SetAckFlushState(disk.get(), AckFlushState::Idle);
 }
 
 bool IsExpectedWorkerStop(BackendContext* context, ManagedDisk* disk) {
@@ -1052,7 +1127,7 @@ LONG CopyReadData(
     return kStatusSuccess;
 }
 
-void ReadSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>& disk) {
+void ReadSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>& disk, size_t workerIndex) {
     OVERLAPPED overlapped{};
     YUMEDISK_READ_SLOT_EVENT event{};
     std::vector<unsigned char> requestBuffer;
@@ -1067,6 +1142,7 @@ void ReadSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>&
 
     requestBuffer = MakeMessageBuffer(YumeDiskCommandPostReadSlot, 0);
     readAckMessage = MakeMessageBuffer(YumeDiskCommandReadAck, sizeof(YUMEDISK_READ_ACK));
+    SetReadWorkerState(disk.get(), workerIndex, ReadWorkerState::Idle);
 
     while (!IsExpectedWorkerStop(context, disk.get())) {
         auto* requestMessage = reinterpret_cast<PYUMEDISK_MESSAGE>(requestBuffer.data());
@@ -1080,6 +1156,7 @@ void ReadSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>&
             disk->targetId);
 
         context->stats.readSlotPosts.fetch_add(1, std::memory_order_relaxed);
+        SetReadWorkerState(disk.get(), workerIndex, ReadWorkerState::PostSlot);
         if (!SendIoControl(
                 context->control.file,
                 requestBuffer.data(),
@@ -1100,10 +1177,12 @@ void ReadSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>&
         }
 
         if (!ValidateReadSlotEvent(context, disk.get(), event)) {
+            SetReadWorkerState(disk.get(), workerIndex, ReadWorkerState::Idle);
             continue;
         }
 
         ULONG dataLength = 0;
+        SetReadWorkerState(disk.get(), workerIndex, ReadWorkerState::CopyMedium);
         const LONG ioStatus = CopyReadData(disk.get(), event, &readDataBuffer, &dataLength);
         auto* readAckRequest = reinterpret_cast<PYUMEDISK_MESSAGE>(readAckMessage.data());
         auto* readAck = reinterpret_cast<PYUMEDISK_READ_ACK>(readAckRequest->Payload);
@@ -1120,6 +1199,7 @@ void ReadSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>&
         readAck->DataLength = dataLength;
         readAck->KernelVa = 0;
 
+        SetReadWorkerState(disk.get(), workerIndex, ReadWorkerState::SendAck);
         if (!SendIoControl(
                 context->control.file,
                 readAckMessage.data(),
@@ -1137,8 +1217,10 @@ void ReadSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>&
 
         context->stats.readSlotCompletions.fetch_add(1, std::memory_order_relaxed);
         context->stats.readAckCommands.fetch_add(1, std::memory_order_relaxed);
+        SetReadWorkerState(disk.get(), workerIndex, ReadWorkerState::Idle);
     }
 
+    SetReadWorkerState(disk.get(), workerIndex, ReadWorkerState::Idle);
     CloseHandle(overlapped.hEvent);
 }
 
@@ -1178,7 +1260,7 @@ LONG ApplyWriteSlotToMedium(ManagedDisk* disk, const YUMEDISK_WRITE_SLOT_HEADER&
     return kStatusSuccess;
 }
 
-void WriteSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>& disk) {
+void WriteSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>& disk, size_t workerIndex) {
     OVERLAPPED overlapped{};
     const size_t slotCapacity = YUMEDISK_WRITE_SLOT_HEADER_BASE_SIZE + context->config.writeSlotBytes;
     std::vector<unsigned char> requestBuffer;
@@ -1190,6 +1272,7 @@ void WriteSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>
         return;
     }
 
+    SetWriteWorkerState(disk.get(), workerIndex, WriteWorkerState::Idle);
     while (!IsExpectedWorkerStop(context, disk.get())) {
         const auto ackRanges = StealWriteAckRanges(disk.get(), kMaxAckBatchRanges);
         const size_t payloadLength = ComputeWriteAckBatchPayloadLength(ackRanges.size());
@@ -1213,6 +1296,7 @@ void WriteSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>
         }
 
         context->stats.writeSlotPosts.fetch_add(1, std::memory_order_relaxed);
+        SetWriteWorkerState(disk.get(), workerIndex, WriteWorkerState::PostSlot);
         if (!SendIoControl(
                 context->control.file,
                 requestBuffer.data(),
@@ -1242,9 +1326,11 @@ void WriteSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>
 
         const auto* slotHeader = reinterpret_cast<const YUMEDISK_WRITE_SLOT_HEADER*>(slotBuffer.data());
         if (!ValidateWriteSlotHeader(context, disk.get(), *slotHeader, slotCapacity)) {
+            SetWriteWorkerState(disk.get(), workerIndex, WriteWorkerState::Idle);
             continue;
         }
 
+        SetWriteWorkerState(disk.get(), workerIndex, WriteWorkerState::ApplyMedium);
         const LONG ioStatus = ApplyWriteSlotToMedium(disk.get(), *slotHeader);
         YUMEDISK_WRITE_ACK_RANGE range{};
         range.EventId = slotHeader->EventId;
@@ -1252,11 +1338,14 @@ void WriteSlotWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>
         range.SeqCount = 1;
         range.IoStatus = ioStatus;
         range.Reserved = 0;
+        SetWriteWorkerState(disk.get(), workerIndex, WriteWorkerState::QueueAck);
         EnqueueWriteAckRange(disk.get(), range);
 
         context->stats.writeSlotCompletions.fetch_add(1, std::memory_order_relaxed);
+        SetWriteWorkerState(disk.get(), workerIndex, WriteWorkerState::Idle);
     }
 
+    SetWriteWorkerState(disk.get(), workerIndex, WriteWorkerState::Idle);
     CloseHandle(overlapped.hEvent);
 }
 
@@ -1299,10 +1388,10 @@ bool StartManagedDiskWorkers(BackendContext* context, const std::shared_ptr<Mana
         disk->writeWorkers.reserve(context->config.queueDepth);
 
         for (size_t index = 0; index < context->config.queueDepth; ++index) {
-            disk->readWorkers.emplace_back(ReadSlotWorker, context, disk);
+            disk->readWorkers.emplace_back(ReadSlotWorker, context, disk, index);
         }
         for (size_t index = 0; index < context->config.queueDepth; ++index) {
-            disk->writeWorkers.emplace_back(WriteSlotWorker, context, disk);
+            disk->writeWorkers.emplace_back(WriteSlotWorker, context, disk, index);
         }
     } catch (const std::exception&) {
         JoinManagedDiskWorkers(disk.get());
@@ -1310,6 +1399,102 @@ bool StartManagedDiskWorkers(BackendContext* context, const std::shared_ptr<Mana
     }
 
     return true;
+}
+
+void PrintBackendStats(const BackendContext* context);
+
+size_t GetPendingWriteAckDepth(ManagedDisk* disk) {
+    std::lock_guard<std::mutex> guard(disk->ackLock);
+    return disk->pendingWriteAcks.size();
+}
+
+const wchar_t* AckFlushStateName(AckFlushState state) {
+    switch (state) {
+    case AckFlushState::Idle:
+        return L"idle";
+    case AckFlushState::Delay:
+        return L"delay";
+    case AckFlushState::Send:
+        return L"send";
+    default:
+        return L"unknown";
+    }
+}
+
+void PrintManagedDiskDebugState(const std::shared_ptr<ManagedDisk>& disk) {
+    uint32_t readStateCounts[4]{};
+    uint32_t writeStateCounts[4]{};
+
+    if (disk->readWorkerStates) {
+        for (size_t index = 0; index < disk->workerCount; ++index) {
+            const uint32_t state = disk->readWorkerStates[index].load(std::memory_order_relaxed);
+            if (state < _countof(readStateCounts)) {
+                readStateCounts[state]++;
+            }
+        }
+    }
+
+    if (disk->writeWorkerStates) {
+        for (size_t index = 0; index < disk->workerCount; ++index) {
+            const uint32_t state = disk->writeWorkerStates[index].load(std::memory_order_relaxed);
+            if (state < _countof(writeStateCounts)) {
+                writeStateCounts[state]++;
+            }
+        }
+    }
+
+    std::wcout << L"debug_disk target=" << disk->targetId
+               << L", pending_write_acks=" << GetPendingWriteAckDepth(disk.get())
+               << L", read_idle=" << readStateCounts[static_cast<uint32_t>(ReadWorkerState::Idle)]
+               << L", read_post_slot=" << readStateCounts[static_cast<uint32_t>(ReadWorkerState::PostSlot)]
+               << L", read_copy=" << readStateCounts[static_cast<uint32_t>(ReadWorkerState::CopyMedium)]
+               << L", read_send_ack=" << readStateCounts[static_cast<uint32_t>(ReadWorkerState::SendAck)]
+               << L", write_idle=" << writeStateCounts[static_cast<uint32_t>(WriteWorkerState::Idle)]
+               << L", write_post_slot=" << writeStateCounts[static_cast<uint32_t>(WriteWorkerState::PostSlot)]
+               << L", write_apply=" << writeStateCounts[static_cast<uint32_t>(WriteWorkerState::ApplyMedium)]
+               << L", write_queue_ack=" << writeStateCounts[static_cast<uint32_t>(WriteWorkerState::QueueAck)]
+               << L", ack_flusher=" << AckFlushStateName(
+                    static_cast<AckFlushState>(disk->ackFlushState.load(std::memory_order_relaxed)))
+               << std::endl;
+}
+
+void PrintScsiDebugState(BackendContext* context) {
+    YUMEDISK_DEBUG_STATE debugState{};
+
+    if (!QueryDebugState(&context->control, &debugState)) {
+        std::wcout << L"debug_scsi query_failed=true, last_error=" << GetLastError() << std::endl;
+        return;
+    }
+
+    std::wcout << L"debug_scsi active_session=" << debugState.ActiveSessionId
+               << L", progress=" << debugState.ProgressCounter
+               << L", posted_read_slots=" << debugState.PostedReadSlots
+               << L", pending_reads=" << debugState.PendingReads
+               << L", pending_reads_issued=" << debugState.PendingReadsIssued
+               << L", posted_write_slots=" << debugState.PostedWriteSlots
+               << L", pending_writes=" << debugState.PendingWrites
+               << L", pending_write_fragments_issued=" << debugState.PendingWriteFragmentsIssued
+               << L", pending_write_fragments_acked=" << debugState.PendingWriteFragmentsAcked
+               << L", read_queued=" << debugState.ReadRequestsQueued
+               << L", read_slots_issued_total=" << debugState.ReadSlotsIssued
+               << L", read_acks_applied_total=" << debugState.ReadAcksApplied
+               << L", read_completed=" << debugState.ReadRequestsCompleted
+               << L", read_failed=" << debugState.ReadRequestsFailed
+               << L", write_queued=" << debugState.WriteRequestsQueued
+               << L", write_fragments_issued_total=" << debugState.WriteFragmentsIssued
+               << L", write_acks_applied_total=" << debugState.WriteAcksApplied
+               << L", write_completed=" << debugState.WriteRequestsCompleted
+               << L", write_failed=" << debugState.WriteRequestsFailed
+               << std::endl;
+}
+
+void PrintDebugSnapshot(BackendContext* context, const wchar_t* reason) {
+    std::wcout << L"debug_snapshot reason=" << reason << std::endl;
+    PrintBackendStats(context);
+    for (const auto& disk : SnapshotManagedDisks(context)) {
+        PrintManagedDiskDebugState(disk);
+    }
+    PrintScsiDebugState(context);
 }
 
 void PrintBackendStats(const BackendContext* context) {
@@ -1337,12 +1522,14 @@ void PrintRuntimeHelp() {
         << "  ls             list managed and visible disks\n"
         << "  bench [target] print the raw disk path and suggested DiskSpd commands\n"
         << "  stats          print backend counters\n"
+        << "  debug          print app plus SCSI queue snapshot\n"
         << "  exit           close session and quit\n"
         << "\n"
         << "runtime:\n"
         << "  heartbeat stays in the background while the app is running\n"
         << "  each created disk gets read slot workers, write slot workers, and an idle ACK flush worker\n"
-        << "  `ct` waits for the new PhysicalDrive to appear and prints benchmark commands when available\n";
+        << "  `ct` waits for the new PhysicalDrive to appear and prints benchmark commands when available\n"
+        << "  if progress stalls for " << kStallSnapshotThresholdSec << "s, the app auto-prints a debug snapshot\n";
 }
 
 void PrintUsage() {
@@ -1496,7 +1683,14 @@ bool CreateManagedDisk(BackendContext* context, ULONG targetId) {
         disk->targetId = targetId;
         disk->sectorSize = context->config.sectorSize;
         disk->diskSizeBytes = context->config.diskSizeBytes;
+        disk->workerCount = context->config.queueDepth;
         disk->medium.resize(static_cast<size_t>(context->config.diskSizeBytes), 0);
+        disk->readWorkerStates = std::make_unique<std::atomic<uint32_t>[]>(disk->workerCount);
+        disk->writeWorkerStates = std::make_unique<std::atomic<uint32_t>[]>(disk->workerCount);
+        for (size_t index = 0; index < disk->workerCount; ++index) {
+            disk->readWorkerStates[index].store(static_cast<uint32_t>(ReadWorkerState::Idle), std::memory_order_relaxed);
+            disk->writeWorkerStates[index].store(static_cast<uint32_t>(WriteWorkerState::Idle), std::memory_order_relaxed);
+        }
         const size_t stripeCount = ComputeStripeCount(context->config.diskSizeBytes);
         disk->stripeLocks.reserve(stripeCount);
         for (size_t index = 0; index < stripeCount; ++index) {
@@ -1663,6 +1857,10 @@ void RunCommandLoop(BackendContext* context) {
             PrintBackendStats(context);
             continue;
         }
+        if (command == "debug") {
+            PrintDebugSnapshot(context, L"manual");
+            continue;
+        }
         if (command == "exit" || command == "quit") {
             SetEvent(g_StopEvent);
             break;
@@ -1774,12 +1972,56 @@ int main(int argc, char** argv) {
             }
         }
     });
+    std::thread stallMonitorThread([&backend]() {
+        uint64_t lastProgress = 0;
+        DWORD stalledSeconds = 0;
+        bool snapshotPrinted = false;
+
+        while (!backend.stop.load(std::memory_order_relaxed)) {
+            const DWORD waitStatus = WaitForSingleObject(g_StopEvent, 1000);
+            if (waitStatus != WAIT_TIMEOUT) {
+                break;
+            }
+
+            const auto managedDisks = SnapshotManagedDisks(&backend);
+            const uint64_t progress =
+                backend.stats.readSlotCompletions.load(std::memory_order_relaxed) +
+                backend.stats.writeSlotCompletions.load(std::memory_order_relaxed) +
+                backend.stats.readAckCommands.load(std::memory_order_relaxed) +
+                backend.stats.piggybackAckRanges.load(std::memory_order_relaxed) +
+                backend.stats.flushedAckRanges.load(std::memory_order_relaxed);
+
+            if (managedDisks.empty()) {
+                lastProgress = progress;
+                stalledSeconds = 0;
+                snapshotPrinted = false;
+                continue;
+            }
+
+            if (progress != lastProgress) {
+                lastProgress = progress;
+                stalledSeconds = 0;
+                snapshotPrinted = false;
+                continue;
+            }
+
+            if (stalledSeconds < MAXDWORD) {
+                stalledSeconds++;
+            }
+
+            if (!snapshotPrinted && stalledSeconds >= kStallSnapshotThresholdSec) {
+                PrintDebugSnapshot(&backend, L"auto_no_progress");
+                snapshotPrinted = true;
+            }
+        }
+    });
 
     RunCommandLoop(&backend);
     WaitForSingleObject(g_StopEvent, INFINITE);
     backend.stop.store(true, std::memory_order_relaxed);
     const bool sessionClosed = RemoveAllManagedDisks(&backend, true);
     heartbeatThread.join();
+    stallMonitorThread.join();
 
     PrintBackendStats(&backend);
 

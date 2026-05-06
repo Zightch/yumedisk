@@ -558,6 +558,7 @@ ControlEvtIoDeviceControl(
 
     switch (inputMessage.Message->Header.Command) {
     case YumeDiskCommandQueryInfo:
+    case YumeDiskCommandQueryDebugState:
     case YumeDiskCommandCreateDisk:
     case YumeDiskCommandRemoveDisk:
     case YumeDiskCommandRemoveAllDisks:

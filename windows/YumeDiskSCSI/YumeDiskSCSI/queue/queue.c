@@ -75,6 +75,38 @@ DiskAllocateEventId(
 }
 
 static
+VOID
+DiskDebugMarkProgress(
+    _Inout_ PDEVICE_CONTEXT Extension
+)
+{
+    InterlockedIncrement64(&Extension->DebugProgressCounter);
+}
+
+static
+VOID
+DiskDebugIncrement(
+    _Inout_ PDEVICE_CONTEXT Extension,
+    _Inout_ volatile LONG64* Counter
+)
+{
+    InterlockedIncrement64(Counter);
+    DiskDebugMarkProgress(Extension);
+}
+
+static
+VOID
+DiskDebugAdd(
+    _Inout_ PDEVICE_CONTEXT Extension,
+    _Inout_ volatile LONG64* Counter,
+    _In_ LONG64 Delta
+)
+{
+    InterlockedAdd64(Counter, Delta);
+    DiskDebugMarkProgress(Extension);
+}
+
+static
 BOOLEAN
 DiskGetIoctlResponseBuffers(
     _In_ PSTORAGE_REQUEST_BLOCK Srb,
@@ -160,10 +192,18 @@ DiskCompleteDetachedReads(
     _In_ NTSTATUS Status
 )
 {
+    PDEVICE_CONTEXT extension;
+
+    extension = (PDEVICE_CONTEXT)DeviceExtension;
     while (!IsListEmpty(CompletedReads)) {
         PDISK_PENDING_READ request;
 
         request = CONTAINING_RECORD(RemoveHeadList(CompletedReads), DISK_PENDING_READ, Link);
+        if (NT_SUCCESS(Status)) {
+            DiskDebugIncrement(extension, &extension->DebugReadRequestsCompleted);
+        } else {
+            DiskDebugIncrement(extension, &extension->DebugReadRequestsFailed);
+        }
         DiskCompleteScsiSrb(DeviceExtension, request->Srb, Status, 0);
         DiskFree(request);
     }
@@ -177,10 +217,18 @@ DiskCompleteDetachedWrites(
     _In_ NTSTATUS Status
 )
 {
+    PDEVICE_CONTEXT extension;
+
+    extension = (PDEVICE_CONTEXT)DeviceExtension;
     while (!IsListEmpty(CompletedWrites)) {
         PDISK_PENDING_WRITE request;
 
         request = CONTAINING_RECORD(RemoveHeadList(CompletedWrites), DISK_PENDING_WRITE, Link);
+        if (NT_SUCCESS(Status)) {
+            DiskDebugIncrement(extension, &extension->DebugWriteRequestsCompleted);
+        } else {
+            DiskDebugIncrement(extension, &extension->DebugWriteRequestsFailed);
+        }
         DiskCompleteScsiSrb(DeviceExtension, request->Srb, Status, 0);
         DiskFree(request);
     }
@@ -423,6 +471,7 @@ DiskDrainReadSlots(
         event->Lba = request->Lba;
         event->BlockCount = request->BlockCount;
         event->DataLength = request->DataLength;
+        DiskDebugIncrement(extension, &extension->DebugReadSlotsIssued);
 
         if (CurrentControlSrb != NULL &&
             CurrentCompleted != NULL &&
@@ -475,6 +524,7 @@ DiskDrainWriteSlots(
             slotHeader->Data,
             (PUCHAR)request->Srb->DataBuffer + byteOffset,
             dataLength);
+        DiskDebugIncrement(extension, &extension->DebugWriteFragmentsIssued);
 
         if (CurrentControlSrb != NULL &&
             CurrentCompleted != NULL &&
@@ -668,6 +718,7 @@ DiskApplyWriteAckRange(
         shouldComplete = TRUE;
         completeStatus = Range->IoStatus;
     } else {
+        DiskDebugAdd(extension, &extension->DebugWriteAcksApplied, Range->SeqCount);
         for (seq = Range->SeqBase; seq < (ULONG)endSeq64; ++seq) {
             if (!RtlCheckBit(&request->AckedBitmap, seq)) {
                 RtlSetBits(&request->AckedBitmap, seq, 1);
@@ -685,6 +736,11 @@ DiskApplyWriteAckRange(
     KeReleaseSpinLock(&extension->WriteQueueLock, oldIrql);
 
     if (shouldComplete) {
+        if (NT_SUCCESS(completeStatus)) {
+            DiskDebugIncrement(extension, &extension->DebugWriteRequestsCompleted);
+        } else {
+            DiskDebugIncrement(extension, &extension->DebugWriteRequestsFailed);
+        }
         DiskCompleteScsiSrb(DeviceExtension, request->Srb, completeStatus, transferLength);
         DiskFree(request);
     }
@@ -893,6 +949,13 @@ DiskQueueReadAck(
             request->DataLength);
     }
 
+    DiskDebugIncrement(extension, &extension->DebugReadAcksApplied);
+    if (NT_SUCCESS(readAck->IoStatus)) {
+        DiskDebugIncrement(extension, &extension->DebugReadRequestsCompleted);
+    } else {
+        DiskDebugIncrement(extension, &extension->DebugReadRequestsFailed);
+    }
+
     DiskCompleteScsiSrb(
         DeviceExtension,
         request->Srb,
@@ -1030,6 +1093,7 @@ DiskQueueReadSrb(
     KeAcquireSpinLock(&extension->ReadQueueLock, &oldIrql);
     InsertTailList(&extension->PendingReads, &request->Link);
     KeReleaseSpinLock(&extension->ReadQueueLock, oldIrql);
+    DiskDebugIncrement(extension, &extension->DebugReadRequestsQueued);
 
     DiskDrainReadSlots(DeviceExtension, NULL, NULL);
     return STATUS_PENDING;
@@ -1096,7 +1160,104 @@ DiskQueueWriteSrb(
     KeAcquireSpinLock(&extension->WriteQueueLock, &oldIrql);
     InsertTailList(&extension->PendingWrites, &request->Link);
     KeReleaseSpinLock(&extension->WriteQueueLock, oldIrql);
+    DiskDebugIncrement(extension, &extension->DebugWriteRequestsQueued);
 
     DiskDrainWriteSlots(DeviceExtension, NULL, NULL);
     return STATUS_PENDING;
+}
+
+NTSTATUS
+DiskQueryDebugState(
+    _In_ PVOID DeviceExtension,
+    _Out_ PYUMEDISK_DEBUG_STATE DebugState
+)
+{
+    PDEVICE_CONTEXT extension;
+    KIRQL oldIrql;
+    PLIST_ENTRY entry;
+    ULONG postedReadSlots;
+    ULONG pendingReads;
+    ULONG pendingReadsIssued;
+    ULONG postedWriteSlots;
+    ULONG pendingWrites;
+    ULONG pendingWriteFragmentsIssued;
+    ULONG pendingWriteFragmentsAcked;
+
+    if (DeviceExtension == NULL || DebugState == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    extension = (PDEVICE_CONTEXT)DeviceExtension;
+    RtlZeroMemory(DebugState, sizeof(*DebugState));
+
+    postedReadSlots = 0;
+    pendingReads = 0;
+    pendingReadsIssued = 0;
+    postedWriteSlots = 0;
+    pendingWrites = 0;
+    pendingWriteFragmentsIssued = 0;
+    pendingWriteFragmentsAcked = 0;
+
+    KeAcquireSpinLock(&extension->SessionLock, &oldIrql);
+    DebugState->ActiveSessionId = extension->CurrentSessionId;
+    KeReleaseSpinLock(&extension->SessionLock, oldIrql);
+
+    KeAcquireSpinLock(&extension->ReadQueueLock, &oldIrql);
+    for (entry = extension->PostedReadSlots.Flink;
+        entry != &extension->PostedReadSlots;
+        entry = entry->Flink) {
+        postedReadSlots++;
+    }
+
+    for (entry = extension->PendingReads.Flink;
+        entry != &extension->PendingReads;
+        entry = entry->Flink) {
+        PDISK_PENDING_READ request;
+
+        pendingReads++;
+        request = CONTAINING_RECORD(entry, DISK_PENDING_READ, Link);
+        if (request->SlotIssued) {
+            pendingReadsIssued++;
+        }
+    }
+    KeReleaseSpinLock(&extension->ReadQueueLock, oldIrql);
+
+    KeAcquireSpinLock(&extension->WriteQueueLock, &oldIrql);
+    for (entry = extension->PostedWriteSlots.Flink;
+        entry != &extension->PostedWriteSlots;
+        entry = entry->Flink) {
+        postedWriteSlots++;
+    }
+
+    for (entry = extension->PendingWrites.Flink;
+        entry != &extension->PendingWrites;
+        entry = entry->Flink) {
+        PDISK_PENDING_WRITE request;
+
+        pendingWrites++;
+        request = CONTAINING_RECORD(entry, DISK_PENDING_WRITE, Link);
+        pendingWriteFragmentsIssued += request->NextIssueSeq;
+        pendingWriteFragmentsAcked += request->AckedCount;
+    }
+    KeReleaseSpinLock(&extension->WriteQueueLock, oldIrql);
+
+    DebugState->ProgressCounter = (UINT64)InterlockedCompareExchange64(&extension->DebugProgressCounter, 0, 0);
+    DebugState->ReadRequestsQueued = (UINT64)InterlockedCompareExchange64(&extension->DebugReadRequestsQueued, 0, 0);
+    DebugState->ReadSlotsIssued = (UINT64)InterlockedCompareExchange64(&extension->DebugReadSlotsIssued, 0, 0);
+    DebugState->ReadAcksApplied = (UINT64)InterlockedCompareExchange64(&extension->DebugReadAcksApplied, 0, 0);
+    DebugState->ReadRequestsCompleted = (UINT64)InterlockedCompareExchange64(&extension->DebugReadRequestsCompleted, 0, 0);
+    DebugState->ReadRequestsFailed = (UINT64)InterlockedCompareExchange64(&extension->DebugReadRequestsFailed, 0, 0);
+    DebugState->WriteRequestsQueued = (UINT64)InterlockedCompareExchange64(&extension->DebugWriteRequestsQueued, 0, 0);
+    DebugState->WriteFragmentsIssued = (UINT64)InterlockedCompareExchange64(&extension->DebugWriteFragmentsIssued, 0, 0);
+    DebugState->WriteAcksApplied = (UINT64)InterlockedCompareExchange64(&extension->DebugWriteAcksApplied, 0, 0);
+    DebugState->WriteRequestsCompleted = (UINT64)InterlockedCompareExchange64(&extension->DebugWriteRequestsCompleted, 0, 0);
+    DebugState->WriteRequestsFailed = (UINT64)InterlockedCompareExchange64(&extension->DebugWriteRequestsFailed, 0, 0);
+    DebugState->PostedReadSlots = postedReadSlots;
+    DebugState->PendingReads = pendingReads;
+    DebugState->PendingReadsIssued = pendingReadsIssued;
+    DebugState->PostedWriteSlots = postedWriteSlots;
+    DebugState->PendingWrites = pendingWrites;
+    DebugState->PendingWriteFragmentsIssued = pendingWriteFragmentsIssued;
+    DebugState->PendingWriteFragmentsAcked = pendingWriteFragmentsAcked;
+    return STATUS_SUCCESS;
 }

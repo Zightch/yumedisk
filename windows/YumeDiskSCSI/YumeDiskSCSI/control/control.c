@@ -60,6 +60,38 @@ DiskHandleQueryInfo(
 
 static
 NTSTATUS
+DiskHandleQueryDebugState(
+    _In_ PVOID DeviceExtension,
+    _Inout_ PYUMEDISK_MESSAGE Message
+)
+{
+    NTSTATUS status;
+    PYUMEDISK_DEBUG_STATE debugState;
+
+    if (Message->Header.PayloadLength != 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Message->Header.Size < YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_DEBUG_STATE)) {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+
+    debugState = (PYUMEDISK_DEBUG_STATE)Message->Payload;
+    status = DiskQueryDebugState(DeviceExtension, debugState);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    DiskInitMessageStatus(
+        Message,
+        YumeDiskCommandQueryDebugState,
+        STATUS_SUCCESS,
+        sizeof(YUMEDISK_DEBUG_STATE));
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
 DiskHandleCreateDisk(
     _In_ PVOID DeviceExtension,
     _Inout_ PDEVICE_CONTEXT Extension,
@@ -367,6 +399,9 @@ DiskHandleIoControlSrb(
     switch (message->Header.Command) {
     case YumeDiskCommandQueryInfo:
         status = DiskHandleQueryInfo(extension, message);
+        break;
+    case YumeDiskCommandQueryDebugState:
+        status = DiskHandleQueryDebugState(DeviceExtension, message);
         break;
     case YumeDiskCommandCreateDisk:
         status = DiskHandleCreateDisk(DeviceExtension, extension, message);

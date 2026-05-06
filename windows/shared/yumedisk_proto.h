@@ -32,7 +32,8 @@ typedef enum _YUMEDISK_COMMAND {
     YumeDiskCommandReadAck = 22,
     YumeDiskCommandWriteAckBatch = 23,
     YumeDiskCommandSubmitSlot = 24,
-    YumeDiskCommandCancelSlot = 25
+    YumeDiskCommandCancelSlot = 25,
+    YumeDiskCommandQueryDebugState = 26
 } YUMEDISK_COMMAND;
 
 typedef enum _YUMEDISK_FEATURE_FLAGS {
@@ -168,3 +169,26 @@ typedef struct _YUMEDISK_WRITE_ACK_BATCH {
 #define YUMEDISK_WRITE_ACK_BATCH_BASE_SIZE FIELD_OFFSET(YUMEDISK_WRITE_ACK_BATCH, Ranges)
 #define YUMEDISK_WRITE_ACK_BATCH_SIZE(_rangeCount) \
     (YUMEDISK_WRITE_ACK_BATCH_BASE_SIZE + ((_rangeCount) * sizeof(YUMEDISK_WRITE_ACK_RANGE)))
+
+typedef struct _YUMEDISK_DEBUG_STATE {
+    UINT64 ActiveSessionId;
+    UINT64 ProgressCounter;
+    UINT64 ReadRequestsQueued;
+    UINT64 ReadSlotsIssued;
+    UINT64 ReadAcksApplied;
+    UINT64 ReadRequestsCompleted;
+    UINT64 ReadRequestsFailed;
+    UINT64 WriteRequestsQueued;
+    UINT64 WriteFragmentsIssued;
+    UINT64 WriteAcksApplied;
+    UINT64 WriteRequestsCompleted;
+    UINT64 WriteRequestsFailed;
+    UINT32 PostedReadSlots;
+    UINT32 PendingReads;
+    UINT32 PendingReadsIssued;
+    UINT32 PostedWriteSlots;
+    UINT32 PendingWrites;
+    UINT32 PendingWriteFragmentsIssued;
+    UINT32 PendingWriteFragmentsAcked;
+    UINT32 Reserved;
+} YUMEDISK_DEBUG_STATE, *PYUMEDISK_DEBUG_STATE;
