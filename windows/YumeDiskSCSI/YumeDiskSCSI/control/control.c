@@ -234,37 +234,15 @@ DiskHandleSubmitSlot(
         submitSlot->Slot.TargetId > YUMEDISK_MAX_USABLE_TARGET_ID ||
         submitSlot->Slot.KernelVa == 0 ||
         submitSlot->Slot.Capacity == 0 ||
+        submitSlot->Slot.Flags != YumeDiskSlotFlagNone ||
         (submitSlot->Slot.SlotType != YumeDiskSlotTypeRead &&
             submitSlot->Slot.SlotType != YumeDiskSlotTypeWrite)) {
         return STATUS_INVALID_PARAMETER;
     }
 
-    expectedLength = (ULONG)YUMEDISK_SUBMIT_SLOT_SIZE(submitSlot->AckPayloadLength);
+    expectedLength = (ULONG)YUMEDISK_SUBMIT_SLOT_SIZE();
     if (Message->Header.PayloadLength != expectedLength) {
         return STATUS_INVALID_PARAMETER;
-    }
-
-    if (submitSlot->Slot.SlotType == YumeDiskSlotTypeRead) {
-        if (submitSlot->AckPayloadLength != 0 ||
-            (submitSlot->Slot.Flags & YumeDiskSlotFlagAckTrailerPresent) != 0) {
-            return STATUS_INVALID_PARAMETER;
-        }
-    } else {
-        if (submitSlot->AckPayloadLength == 0 &&
-            (submitSlot->Slot.Flags & YumeDiskSlotFlagAckTrailerPresent) != 0) {
-            return STATUS_INVALID_PARAMETER;
-        }
-
-        if (submitSlot->AckPayloadLength != 0) {
-            NTSTATUS status;
-
-            status = DiskValidateWriteAckBatchPayload(
-                submitSlot->AckPayload,
-                submitSlot->AckPayloadLength);
-            if (!NT_SUCCESS(status)) {
-                return status;
-            }
-        }
     }
 
     return DiskQueueSubmitSlot(DeviceExtension, Srb, Message, RequestCompleted);

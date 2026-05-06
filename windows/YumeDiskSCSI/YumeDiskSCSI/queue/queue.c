@@ -17,6 +17,7 @@ typedef struct _DISK_PENDING_READ {
     LIST_ENTRY Link;
     PSTORAGE_REQUEST_BLOCK Srb;
     UINT64 EventId;
+    UINT64 IssuedSlotId;
     ULONG TargetId;
     UINT64 Lba;
     ULONG BlockCount;
@@ -37,6 +38,7 @@ typedef struct _DISK_PENDING_WRITE {
     LIST_ENTRY Link;
     PSTORAGE_REQUEST_BLOCK Srb;
     UINT64 EventId;
+    UINT64 LastIssuedSlotId;
     ULONG TargetId;
     UINT64 BaseLba;
     ULONG TotalBytes;
@@ -359,6 +361,7 @@ DiskPopReadDispatchLocked(
 
             RemoveEntryList(&candidateSlot->Link);
             candidateRequest->SlotIssued = TRUE;
+            candidateRequest->IssuedSlotId = candidateSlot->SlotId;
             *Slot = candidateSlot;
             *Request = candidateRequest;
             return TRUE;
@@ -422,6 +425,7 @@ DiskPopWriteDispatchLocked(
             fragmentBytes = min(candidateRequest->FragmentBytes, remainingBytes);
 
             candidateRequest->NextIssueSeq++;
+            candidateRequest->LastIssuedSlotId = candidateSlot->SlotId;
             RemoveEntryList(&candidateSlot->Link);
 
             *Slot = candidateSlot;
@@ -670,6 +674,26 @@ DiskDetachMatchingPending(
 }
 
 static
+VOID
+DiskDetachMatchingPendingIo(
+    _Inout_ PDEVICE_CONTEXT Extension,
+    _In_ ULONG TargetId,
+    _Inout_ PLIST_ENTRY DetachedReads,
+    _Inout_ PLIST_ENTRY DetachedWrites
+)
+{
+    KIRQL oldIrql;
+
+    KeAcquireSpinLock(&Extension->ReadQueueLock, &oldIrql);
+    DiskExtractMatchingPendingReadsLocked(Extension, TargetId, DetachedReads);
+    KeReleaseSpinLock(&Extension->ReadQueueLock, oldIrql);
+
+    KeAcquireSpinLock(&Extension->WriteQueueLock, &oldIrql);
+    DiskExtractMatchingPendingWritesLocked(Extension, TargetId, DetachedWrites);
+    KeReleaseSpinLock(&Extension->WriteQueueLock, oldIrql);
+}
+
+static
 NTSTATUS
 DiskApplyWriteAckRange(
     _In_ PVOID DeviceExtension,
@@ -703,7 +727,7 @@ DiskApplyWriteAckRange(
     request = DiskLookupWriteRequestLocked(extension, Range->EventId);
     if (request == NULL) {
         KeReleaseSpinLock(&extension->WriteQueueLock, oldIrql);
-        return STATUS_SUCCESS;
+        return STATUS_NOT_FOUND;
     }
 
     if (request->FragmentBytes == 0 ||
@@ -816,6 +840,40 @@ DiskCompleteAllPending(
     DiskCompleteTargetPending(DeviceExtension, DISK_QUEUE_ALL_TARGETS, Status);
 }
 
+VOID
+DiskCompleteTargetPendingIo(
+    _In_ PVOID DeviceExtension,
+    _In_ ULONG TargetId,
+    _In_ NTSTATUS Status
+)
+{
+    PDEVICE_CONTEXT extension;
+    LIST_ENTRY detachedReads;
+    LIST_ENTRY detachedWrites;
+
+    extension = (PDEVICE_CONTEXT)DeviceExtension;
+    InitializeListHead(&detachedReads);
+    InitializeListHead(&detachedWrites);
+
+    DiskDetachMatchingPendingIo(
+        extension,
+        TargetId,
+        &detachedReads,
+        &detachedWrites);
+
+    DiskCompleteDetachedReads(DeviceExtension, &detachedReads, Status);
+    DiskCompleteDetachedWrites(DeviceExtension, &detachedWrites, Status);
+}
+
+VOID
+DiskCompleteAllPendingIo(
+    _In_ PVOID DeviceExtension,
+    _In_ NTSTATUS Status
+)
+{
+    DiskCompleteTargetPendingIo(DeviceExtension, DISK_QUEUE_ALL_TARGETS, Status);
+}
+
 NTSTATUS
 DiskQueueSubmitSlot(
     _In_ PVOID DeviceExtension,
@@ -863,20 +921,6 @@ DiskQueueSubmitSlot(
         return *RequestCompleted ? STATUS_SUCCESS : STATUS_PENDING;
     }
 
-    if (submitSlot->AckPayloadLength != 0) {
-        PYUMEDISK_WRITE_ACK_BATCH batch;
-        ULONG index;
-        NTSTATUS status;
-
-        batch = (PYUMEDISK_WRITE_ACK_BATCH)submitSlot->AckPayload;
-        for (index = 0; index < batch->RangeCount; ++index) {
-            status = DiskApplyWriteAckRange(DeviceExtension, &batch->Ranges[index]);
-            if (!NT_SUCCESS(status)) {
-                return status;
-            }
-        }
-    }
-
     {
         PDISK_POSTED_WRITE_SLOT slot;
         ULONG sectorSize;
@@ -918,9 +962,15 @@ DiskQueueReadAck(
     PYUMEDISK_READ_ACK readAck;
     PDISK_PENDING_READ request;
     KIRQL oldIrql;
+    BOOLEAN shouldComplete;
+    NTSTATUS completeStatus;
+    ULONG transferLength;
 
     extension = (PDEVICE_CONTEXT)DeviceExtension;
     readAck = (PYUMEDISK_READ_ACK)Message->Payload;
+    shouldComplete = FALSE;
+    completeStatus = STATUS_SUCCESS;
+    transferLength = 0;
 
     KeAcquireSpinLock(&extension->ReadQueueLock, &oldIrql);
     request = DiskLookupReadRequestLocked(extension, readAck->EventId);
@@ -935,7 +985,11 @@ DiskQueueReadAck(
     }
 
     if (NT_SUCCESS(readAck->IoStatus) && readAck->DataLength != request->DataLength) {
+        RemoveEntryList(&request->Link);
         KeReleaseSpinLock(&extension->ReadQueueLock, oldIrql);
+        DiskDebugIncrement(extension, &extension->DebugReadRequestsFailed);
+        DiskCompleteScsiSrb(DeviceExtension, request->Srb, STATUS_IO_DEVICE_ERROR, 0);
+        DiskFree(request);
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -951,16 +1005,24 @@ DiskQueueReadAck(
 
     DiskDebugIncrement(extension, &extension->DebugReadAcksApplied);
     if (NT_SUCCESS(readAck->IoStatus)) {
+        shouldComplete = TRUE;
+        completeStatus = STATUS_SUCCESS;
+        transferLength = request->DataLength;
         DiskDebugIncrement(extension, &extension->DebugReadRequestsCompleted);
     } else {
+        shouldComplete = TRUE;
+        completeStatus = readAck->IoStatus;
+        transferLength = 0;
         DiskDebugIncrement(extension, &extension->DebugReadRequestsFailed);
     }
 
-    DiskCompleteScsiSrb(
-        DeviceExtension,
-        request->Srb,
-        readAck->IoStatus,
-        NT_SUCCESS(readAck->IoStatus) ? request->DataLength : 0);
+    if (shouldComplete) {
+        DiskCompleteScsiSrb(
+            DeviceExtension,
+            request->Srb,
+            completeStatus,
+            transferLength);
+    }
     DiskFree(request);
 
     DiskInitMessageStatus(Message, YumeDiskCommandReadAck, STATUS_SUCCESS, 0);
@@ -974,18 +1036,31 @@ DiskQueueWriteAckBatch(
 )
 {
     PYUMEDISK_WRITE_ACK_BATCH batch;
+    PYUMEDISK_WRITE_ACK_BATCH_RESULT result;
+    PYUMEDISK_WRITE_ACK_FAILURE failures;
     NTSTATUS status;
+    ULONG failureCount;
+    ULONG responseLength;
     ULONG index;
 
     batch = (PYUMEDISK_WRITE_ACK_BATCH)Message->Payload;
+    result = (PYUMEDISK_WRITE_ACK_BATCH_RESULT)Message->Payload;
+    failures = result->Failures;
+    failureCount = 0;
+
     for (index = 0; index < batch->RangeCount; ++index) {
         status = DiskApplyWriteAckRange(DeviceExtension, &batch->Ranges[index]);
         if (!NT_SUCCESS(status)) {
-            return status;
+            failures[failureCount].RangeIndex = index;
+            failures[failureCount].Status = status;
+            failureCount++;
         }
     }
 
-    DiskInitMessageStatus(Message, YumeDiskCommandWriteAckBatch, STATUS_SUCCESS, 0);
+    responseLength = (ULONG)YUMEDISK_WRITE_ACK_BATCH_RESULT_SIZE(failureCount);
+    result->FailureCount = failureCount;
+    result->Reserved = 0;
+    DiskInitMessageStatus(Message, YumeDiskCommandWriteAckBatch, STATUS_SUCCESS, responseLength);
     return STATUS_SUCCESS;
 }
 
@@ -998,11 +1073,17 @@ DiskQueueCancelSlot(
     PDEVICE_CONTEXT extension;
     PYUMEDISK_CANCEL_SLOT cancelSlot;
     PSTORAGE_REQUEST_BLOCK slotSrb;
+    PSTORAGE_REQUEST_BLOCK issuedSrb;
+    ULONG transferLength;
+    NTSTATUS completeStatus;
     KIRQL oldIrql;
 
     extension = (PDEVICE_CONTEXT)DeviceExtension;
     cancelSlot = (PYUMEDISK_CANCEL_SLOT)Message->Payload;
     slotSrb = NULL;
+    issuedSrb = NULL;
+    transferLength = 0;
+    completeStatus = STATUS_CANCELLED;
 
     if (cancelSlot->SlotType == YumeDiskSlotTypeRead) {
         PLIST_ENTRY entry;
@@ -1019,6 +1100,24 @@ DiskQueueCancelSlot(
                 slotSrb = slot->ControlSrb;
                 RemoveEntryList(entry);
                 DiskFree(slot);
+                break;
+            }
+        }
+
+        if (slotSrb == NULL) {
+            for (entry = extension->PendingReads.Flink;
+                entry != &extension->PendingReads;
+                entry = entry->Flink) {
+                PDISK_PENDING_READ request;
+
+                request = CONTAINING_RECORD(entry, DISK_PENDING_READ, Link);
+                if (!request->SlotIssued || request->IssuedSlotId != cancelSlot->SlotId) {
+                    continue;
+                }
+
+                issuedSrb = request->Srb;
+                RemoveEntryList(entry);
+                DiskFree(request);
                 break;
             }
         }
@@ -1041,14 +1140,40 @@ DiskQueueCancelSlot(
                 break;
             }
         }
+
+        if (slotSrb == NULL) {
+            for (entry = extension->PendingWrites.Flink;
+                entry != &extension->PendingWrites;
+                entry = entry->Flink) {
+                PDISK_PENDING_WRITE request;
+
+                request = CONTAINING_RECORD(entry, DISK_PENDING_WRITE, Link);
+                if (request->LastIssuedSlotId != cancelSlot->SlotId) {
+                    continue;
+                }
+
+                issuedSrb = request->Srb;
+                RemoveEntryList(entry);
+                DiskFree(request);
+                break;
+            }
+        }
         KeReleaseSpinLock(&extension->WriteQueueLock, oldIrql);
     }
 
-    if (slotSrb == NULL) {
+    if (slotSrb != NULL) {
+        DiskCompleteSubmitSlotSrb(DeviceExtension, slotSrb, STATUS_CANCELLED);
+    } else if (issuedSrb != NULL) {
+        if (cancelSlot->SlotType == YumeDiskSlotTypeRead) {
+            DiskDebugIncrement(extension, &extension->DebugReadRequestsFailed);
+        } else {
+            DiskDebugIncrement(extension, &extension->DebugWriteRequestsFailed);
+        }
+        DiskCompleteScsiSrb(DeviceExtension, issuedSrb, completeStatus, transferLength);
+    } else {
         return STATUS_NOT_FOUND;
     }
 
-    DiskCompleteSubmitSlotSrb(DeviceExtension, slotSrb, STATUS_CANCELLED);
     DiskInitMessageStatus(Message, YumeDiskCommandCancelSlot, STATUS_SUCCESS, 0);
     return STATUS_SUCCESS;
 }
@@ -1084,6 +1209,7 @@ DiskQueueReadSrb(
     RtlZeroMemory(request, sizeof(*request));
     request->Srb = Srb;
     request->EventId = DiskAllocateEventId(extension);
+    request->IssuedSlotId = 0;
     request->TargetId = TargetId;
     request->Lba = Lba;
     request->BlockCount = BlockCount;
@@ -1147,6 +1273,7 @@ DiskQueueWriteSrb(
     RtlZeroMemory(request, allocationSize);
     request->Srb = Srb;
     request->EventId = DiskAllocateEventId(extension);
+    request->LastIssuedSlotId = 0;
     request->TargetId = TargetId;
     request->BaseLba = Lba;
     request->TotalBytes = DataLength;

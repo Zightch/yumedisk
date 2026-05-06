@@ -25,6 +25,19 @@ DiskCompleteAllPending(
     _In_ NTSTATUS Status
 );
 
+VOID
+DiskCompleteTargetPendingIo(
+    _In_ PVOID DeviceExtension,
+    _In_ ULONG TargetId,
+    _In_ NTSTATUS Status
+);
+
+VOID
+DiskCompleteAllPendingIo(
+    _In_ PVOID DeviceExtension,
+    _In_ NTSTATUS Status
+);
+
 NTSTATUS
 DiskQueueSubmitSlot(
     _In_ PVOID DeviceExtension,

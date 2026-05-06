@@ -127,6 +127,33 @@ DiskStartStorageRequest(
     _In_ PSTORAGE_REQUEST_BLOCK Srb
 )
 {
+    UCHAR targetId;
+
+    switch (Srb->SrbFunction) {
+#ifdef SRB_FUNCTION_ABORT_COMMAND
+    case SRB_FUNCTION_ABORT_COMMAND:
+#endif
+#ifdef SRB_FUNCTION_RESET_DEVICE
+    case SRB_FUNCTION_RESET_DEVICE:
+#endif
+#ifdef SRB_FUNCTION_RESET_LOGICAL_UNIT
+    case SRB_FUNCTION_RESET_LOGICAL_UNIT:
+#endif
+#ifdef SRB_FUNCTION_RESET_BUS
+    case SRB_FUNCTION_RESET_BUS:
+#endif
+        if (DiskExtractTargetId(Srb, &targetId)) {
+            DiskCompleteTargetPendingIo(DeviceExtension, targetId, STATUS_CANCELLED);
+        } else {
+            DiskCompleteAllPendingIo(DeviceExtension, STATUS_CANCELLED);
+        }
+        Srb->SrbStatus = SRB_STATUS_SUCCESS;
+        StorPortNotification(RequestComplete, DeviceExtension, Srb);
+        return TRUE;
+    default:
+        break;
+    }
+
     if (Srb->SrbFunction == SRB_FUNCTION_EXECUTE_SCSI) {
         return DiskHandleExecuteScsi(DeviceExtension, Srb);
     }
@@ -221,7 +248,7 @@ DiskResetBus(
     _In_ ULONG PathId
 )
 {
-    UNREFERENCED_PARAMETER(DeviceExtension);
+    DiskCompleteAllPendingIo(DeviceExtension, STATUS_CANCELLED);
     UNREFERENCED_PARAMETER(PathId);
     return TRUE;
 }

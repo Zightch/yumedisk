@@ -375,18 +375,21 @@ sequenceDiagram
     KMDF-->>App: WRITE_ACK_BATCH complete
 ```
 
-### 7.5 写确认优化
+### 7.5 写确认边界
 
-推荐的 steady-state 路径不是单独发 `WRITE_ACK_BATCH`，而是把已完成的确认范围作为下一次 `POST_WRITE_SLOT` 的输入尾部一起带回去。
+`POST_WRITE_SLOT` 只负责申请新的 write slot，不再复用输入尾部捎带旧 ACK。
 
-语义上：
+原因：
 
-- App 每次重新提交 write slot 时，顺便带上上一批已经完成的 `eventId + seq range`。
-- KMDF 在完成该 `POST_WRITE_SLOT` 之前，先消费这些 ACK range，再把新的 write fragment 交给 App。
-- 这样确认和续租 slot credit 合并成一次 IOCTL。
-- 单独的 `WRITE_ACK_BATCH` 只保留给收尾、空窗 flush、异常回收和没有新 slot 可提交时的兜底路径。
+- 取消模型下，一个 `POST_WRITE_SLOT` 同时混入“旧 ACK 确认”和“新 slot 申请”会把两代状态绑死。
+- 一旦 batch 里的个别 ACK 已经因为系统取消、请求结束或 stale 而失效，App 需要拿到逐项失败结果；这种语义不适合继续塞在 `POST_WRITE_SLOT` 的成功/失败里。
+- steady-state 也必须保持单一语义：`POST_WRITE_SLOT` 只看 slot，`WRITE_ACK_BATCH` 只看 ACK。
 
-下面的 `WRITE_ACK_BATCH` 结构继续保留，既可作为独立兜底命令，也可复用到 `POST_WRITE_SLOT` 的输入尾部。
+因此：
+
+- `POST_WRITE_SLOT` 输入 payload 固定为空。
+- `WRITE_ACK_BATCH` 是唯一 ACK 入口。
+- App 侧可继续做累计确认和多请求合并，但必须通过独立 `WRITE_ACK_BATCH` 发送。
 
 ### 7.6 WRITE_ACK_BATCH
 
@@ -406,6 +409,17 @@ typedef struct _YUMEDISK_WRITE_ACK_BATCH {
     UINT32 Reserved;
     YUMEDISK_WRITE_ACK_RANGE Ranges[1];
 } YUMEDISK_WRITE_ACK_BATCH;
+
+typedef struct _YUMEDISK_WRITE_ACK_FAILURE {
+    UINT32 RangeIndex;
+    LONG Status;
+} YUMEDISK_WRITE_ACK_FAILURE;
+
+typedef struct _YUMEDISK_WRITE_ACK_BATCH_RESULT {
+    UINT32 FailureCount;
+    UINT32 Reserved;
+    YUMEDISK_WRITE_ACK_FAILURE Failures[1];
+} YUMEDISK_WRITE_ACK_BATCH_RESULT;
 ```
 
 示例:
@@ -423,6 +437,14 @@ typedef struct _YUMEDISK_WRITE_ACK_BATCH {
   ranges[2] = eventId=102, seqBase=0, seqCount=8
 ```
 
+返回语义：
+
+- `WRITE_ACK_BATCH` 命令本身只要解析成功，就返回命令成功。
+- 如果 batch 内部有个别 range 无法落账，返回 `YUMEDISK_WRITE_ACK_BATCH_RESULT`。
+- `RangeIndex` 指回本次输入里的第几个 range。
+- `Status` 给出该 range 失败原因，例如 `STATUS_NOT_FOUND`、`STATUS_INVALID_PARAMETER`、`STATUS_CANCELLED`。
+- App 看到失败项后，可选择记录、忽略、补偿或回滚；初版可以先只记录。
+
 ### 7.7 seq 正确性规则
 
 驱动不能直接相信 App 的累计 ACK。ACK 必须按 bitmap 落账。
@@ -432,16 +454,15 @@ typedef struct _YUMEDISK_WRITE_ACK_BATCH {
 1. 校验 `EventId != 0`。
 2. 查 `PendingWritesByEventId[EventId]`。
 3. 如果找不到:
-   - 如果实现了 completed-event cache，且该 range 完全落在已完成请求内，可返回幂等成功。
-   - 当前最小实现可以把“已经完成或已经因失败终止”的旧 range 当作幂等成功，以避免收尾阶段的 stale ACK 再次制造阻塞。
-   - 如果后续需要更强的 App bug 暴露，再把该策略收紧为 `STATUS_NOT_FOUND`。
+   - 返回该 range 的失败结果，初版建议直接给 `STATUS_NOT_FOUND`。
+   - 不因为某个 stale/cancelled ACK 失败而让整条 `WRITE_ACK_BATCH` 传输失败。
 4. 校验 `SeqCount != 0`。
 5. 校验 `SeqBase + SeqCount` 不发生整数溢出。
 6. 校验 `SeqBase + SeqCount <= TotalSeq`。
 7. 校验 `SeqBase + SeqCount <= NextIssueSeq`，禁止 ACK 尚未投递给 App 的 fragment。
 8. 对 range 内每个 seq:
    - 如果 bitmap 未置位，置位并 `AckedCount++`。
-   - 如果 bitmap 已置位，视为重复 ACK。初版建议允许幂等成功。
+   - 如果 bitmap 已置位，视为重复 ACK。初版建议返回该 range 失败结果，而不是静默吞掉。
 9. 如果 `IoStatus` 失败:
    - `FinalStatus` 从 success 变成该失败状态。
    - 该失败只归属当前 `eventId` 对应的大 WRITE 请求，不得因此把磁盘判死，也不应影响后续独立 WRITE 请求。

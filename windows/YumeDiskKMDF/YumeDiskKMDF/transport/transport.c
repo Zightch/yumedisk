@@ -132,6 +132,8 @@ ControlSendMiniportBuffer(
             if (transferLength < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
                 message->Header.Size > transferLength) {
                 status = STATUS_DEVICE_PROTOCOL_ERROR;
+            } else {
+                status = (NTSTATUS)srbIoControl->ReturnCode;
             }
         }
     }

@@ -16,7 +16,7 @@ Source:
 - `YumeDiskKMDF` still synchronously waits on `IOCTL_SCSI_MINIPORT`.
 - `YumeDiskSCSI` still uses one `ControlLock` to cover too many queue states.
 - `RWTestApp` still serializes medium access with one global `diskLock`.
-- Write confirmation still carries too much control traffic.
+- Dedicated `WRITE_ACK_BATCH` is in place, but `Q8/Q32` still need proof that stale/cancelled ACKs do not wedge the queue.
 
 ## Work Plan
 
@@ -25,7 +25,7 @@ Source:
 | 1 | Cut over the protocol entrypoints | Replace old `WAIT_EVENT / READ_REPLY / WRITE_ACK` semantics with slot-based commands | Old inline wait path is gone and no caller depends on old payload layout |
 | 2 | Rework KMDF session handling | File-bound session lifecycle, locked state on timeout, no long-pending miniport control request | Session close is deterministic and does not wedge worker threads |
 | 3 | Rewrite SCSI queue processing | Split lock scope, drain while work is available, avoid linear scan under a single global lock | Read/write dispatch can keep draining at `Q8` and `Q32` without stall |
-| 4 | Rework App backend scheduling | Per-disk concurrency, slot pool, piggyback write ACK, no whole-backend serialization lock | App can keep multiple workers active without blocking on one global lock |
+| 4 | Rework App backend scheduling | Per-disk concurrency, slot pool, dedicated `WRITE_ACK_BATCH`, no whole-backend serialization lock | App can keep multiple workers active without blocking on one global lock |
 | 5 | Reconnect the benchmark loop | Run sequential 1M read/write through the new path and collect throughput/CPU numbers | `Q1T1 / Q8 / Q32` complete without hang, stuck disk, or session leak |
 
 ## Non-goals
@@ -41,4 +41,3 @@ Source:
 - Exit and cleanup path must not leave disk stuck at 100%.
 - Repeated runs must not accumulate pending sessions, pending SRBs, or leaked handles.
 - Throughput and kernel CPU must improve relative to the current baseline.
-

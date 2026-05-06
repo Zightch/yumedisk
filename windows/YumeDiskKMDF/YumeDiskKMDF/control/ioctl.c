@@ -210,13 +210,11 @@ NTSTATUS
 ControlProxySubmitSlot(
     _In_ PCTRL_FILE_CONTEXT Context,
     _In_ UINT64 SessionId,
+    _In_ UINT64 SlotId,
     _In_ UINT32 TargetId,
     _In_ UINT32 SlotType,
     _In_ PUCHAR DirectBuffer,
-    _In_ size_t DirectBufferSize,
-    _In_ UINT32 SlotFlags,
-    _In_reads_bytes_opt_(AckPayloadLength) const UCHAR* AckPayload,
-    _In_ ULONG AckPayloadLength
+    _In_ size_t DirectBufferSize
 )
 {
     NTSTATUS status;
@@ -230,11 +228,7 @@ ControlProxySubmitSlot(
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (AckPayloadLength > MAXULONG - YUMEDISK_SUBMIT_SLOT_BASE_SIZE) {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    bufferSize = YUMEDISK_MESSAGE_BASE_SIZE + YUMEDISK_SUBMIT_SLOT_SIZE(AckPayloadLength);
+    bufferSize = YUMEDISK_MESSAGE_BASE_SIZE + YUMEDISK_SUBMIT_SLOT_SIZE();
     messageBuffer = (PUCHAR)ControlAlloc(bufferSize);
     if (messageBuffer == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -247,20 +241,16 @@ ControlProxySubmitSlot(
     message->Header.Command = YumeDiskCommandSubmitSlot;
     message->Header.SessionId = SessionId;
     message->Header.TargetId = TargetId;
-    message->Header.PayloadLength = YUMEDISK_SUBMIT_SLOT_SIZE(AckPayloadLength);
+    message->Header.PayloadLength = YUMEDISK_SUBMIT_SLOT_SIZE();
 
     submitSlot = (PYUMEDISK_SUBMIT_SLOT)message->Payload;
     submitSlot->Slot.SessionId = SessionId;
-    submitSlot->Slot.SlotId = 0;
+    submitSlot->Slot.SlotId = SlotId;
     submitSlot->Slot.SlotType = SlotType;
     submitSlot->Slot.TargetId = TargetId;
     submitSlot->Slot.KernelVa = (UINT64)(ULONG_PTR)DirectBuffer;
     submitSlot->Slot.Capacity = (UINT32)DirectBufferSize;
-    submitSlot->Slot.Flags = SlotFlags;
-    submitSlot->AckPayloadLength = AckPayloadLength;
-    if (AckPayloadLength != 0) {
-        RtlCopyMemory(submitSlot->AckPayload, AckPayload, AckPayloadLength);
-    }
+    submitSlot->Slot.Flags = YumeDiskSlotFlagNone;
 
     status = ControlProxyCommand(
         Context,
@@ -383,13 +373,11 @@ ControlHandlePostReadSlot(
     status = ControlProxySubmitSlot(
         Context,
         SessionId,
+        InputMessage->Message->Header.TxId,
         InputMessage->Message->Header.TargetId,
         YumeDiskSlotTypeRead,
         outputBuffer,
-        outputSize,
-        YumeDiskSlotFlagNone,
-        NULL,
-        0);
+        outputSize);
     WdfRequestCompleteWithInformation(Request, status, 0);
 }
 
@@ -406,7 +394,6 @@ ControlHandlePostWriteSlot(
     NTSTATUS status;
     PUCHAR outputBuffer;
     size_t outputSize;
-    UINT32 slotFlags;
 
     outputBuffer = NULL;
     outputSize = 0;
@@ -427,30 +414,18 @@ ControlHandlePostWriteSlot(
     }
 
     if (InputMessage->Message->Header.PayloadLength != 0) {
-        status = ControlValidateWriteAckBatchPayload(
-            InputMessage->Message->Payload,
-            InputMessage->Message->Header.PayloadLength);
-        if (!NT_SUCCESS(status)) {
-            WdfRequestComplete(Request, status);
-            return;
-        }
-    }
-
-    slotFlags = YumeDiskSlotFlagNone;
-    if (InputMessage->Message->Header.PayloadLength != 0) {
-        slotFlags |= YumeDiskSlotFlagAckTrailerPresent;
+        WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
     }
 
     status = ControlProxySubmitSlot(
         Context,
         SessionId,
+        InputMessage->Message->Header.TxId,
         InputMessage->Message->Header.TargetId,
         YumeDiskSlotTypeWrite,
         outputBuffer,
-        outputSize,
-        slotFlags,
-        InputMessage->Message->Header.PayloadLength == 0 ? NULL : InputMessage->Message->Payload,
-        InputMessage->Message->Header.PayloadLength);
+        outputSize);
     WdfRequestCompleteWithInformation(Request, status, 0);
 }
 
