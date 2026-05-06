@@ -12,7 +12,8 @@ typedef enum _CTRL_SESSION_STATE {
     CtrlSessionStateInvalid = 0,
     CtrlSessionStateActive = 1,
     CtrlSessionStateLocked = 2,
-    CtrlSessionStateClosed = 3
+    CtrlSessionStateClosing = 3,
+    CtrlSessionStateClosed = 4
 } CTRL_SESSION_STATE;
 
 typedef struct _CTRL_DEVICE_CONTEXT {
@@ -31,6 +32,8 @@ typedef struct _CTRL_FILE_CONTEXT {
     LONGLONG LastHeartbeatTick;
     KEVENT InFlightZeroEvent;
     volatile LONG InFlightRequestCount;
+    KEVENT PendingSlotZeroEvent;
+    volatile LONG PendingSlotCount;
     ULONG State;
 } CTRL_FILE_CONTEXT, *PCTRL_FILE_CONTEXT;
 

@@ -4,6 +4,7 @@
 
 #define CTRL_SESSION_WATCHDOG_TIMEOUT_MS 10000u
 #define CTRL_SESSION_LOCKED_STATUS STATUS_FILE_LOCK_CONFLICT
+#define CTRL_SESSION_CLOSING_STATUS STATUS_DELETE_PENDING
 
 EVT_WDF_TIMER ControlEvtSessionWatchdogTimer;
 
@@ -49,6 +50,9 @@ ControlSessionCreateResources(
 
         KeInitializeEvent(&FileContext->InFlightZeroEvent, NotificationEvent, TRUE);
         FileContext->InFlightRequestCount = 0;
+        KeInitializeEvent(&FileContext->PendingSlotZeroEvent, NotificationEvent, TRUE);
+        FileContext->PendingSlotCount = 0;
+        FileContext->State = CtrlSessionStateInvalid;
     }
 
     if (FileContext->WatchdogTimer == NULL) {
@@ -74,13 +78,18 @@ ControlSessionEnterLocked(
     _Out_opt_ UINT64* SessionId
 )
 {
-    if (FileContext->State == CtrlSessionStateLocked) {
+    switch ((CTRL_SESSION_STATE)FileContext->State) {
+    case CtrlSessionStateLocked:
         return CTRL_SESSION_LOCKED_STATUS;
+    case CtrlSessionStateClosing:
+        return CTRL_SESSION_CLOSING_STATUS;
+    case CtrlSessionStateActive:
+        break;
+    default:
+        return STATUS_DEVICE_NOT_READY;
     }
 
-    if (FileContext->State != CtrlSessionStateActive ||
-        FileContext->MiniportHandle == NULL ||
-        FileContext->SessionId == 0) {
+    if (FileContext->MiniportHandle == NULL || FileContext->SessionId == 0) {
         return STATUS_DEVICE_NOT_READY;
     }
 
@@ -104,13 +113,43 @@ ControlSessionReferenceIoLocked(
 
 static
 VOID
+ControlSessionReferencePendingSlotLocked(
+    _Inout_ PCTRL_FILE_CONTEXT FileContext
+)
+{
+    if (InterlockedIncrement(&FileContext->PendingSlotCount) == 1) {
+        KeClearEvent(&FileContext->PendingSlotZeroEvent);
+    }
+}
+
+static
+VOID
+ControlSessionDrainCounter(
+    _Inout_ volatile LONG* Counter,
+    _Inout_ PKEVENT ZeroEvent
+)
+{
+    while (InterlockedCompareExchange((volatile LONG*)Counter, 0, 0) != 0) {
+        KeWaitForSingleObject(ZeroEvent, Executive, KernelMode, FALSE, NULL);
+    }
+}
+
+static
+VOID
 ControlSessionDrainInFlightIo(
     _Inout_ PCTRL_FILE_CONTEXT FileContext
 )
 {
-    while (InterlockedCompareExchange(&FileContext->InFlightRequestCount, 0, 0) != 0) {
-        KeWaitForSingleObject(&FileContext->InFlightZeroEvent, Executive, KernelMode, FALSE, NULL);
-    }
+    ControlSessionDrainCounter(&FileContext->InFlightRequestCount, &FileContext->InFlightZeroEvent);
+}
+
+static
+VOID
+ControlSessionDrainPendingSlots(
+    _Inout_ PCTRL_FILE_CONTEXT FileContext
+)
+{
+    ControlSessionDrainCounter(&FileContext->PendingSlotCount, &FileContext->PendingSlotZeroEvent);
 }
 
 static
@@ -164,6 +203,7 @@ ControlEvtSessionWatchdogTimer(
 
     ControlSendSessionCleanup(fileContext);
     ControlSessionDrainInFlightIo(fileContext);
+    ControlSessionDrainPendingSlots(fileContext);
     ControlCloseMiniportHandle(fileContext);
 
     WdfTimerStop(Timer, FALSE);
@@ -265,16 +305,20 @@ ControlSessionCleanup(
 
     if (fileContext->SessionLock != NULL) {
         WdfWaitLockAcquire(fileContext->SessionLock, NULL);
-        fileContext->State = CtrlSessionStateClosed;
+        if (fileContext->State != CtrlSessionStateClosed) {
+            fileContext->State = CtrlSessionStateClosing;
+        }
         WdfWaitLockRelease(fileContext->SessionLock);
 
         ControlSendSessionCleanup(fileContext);
         ControlSessionDrainInFlightIo(fileContext);
+        ControlSessionDrainPendingSlots(fileContext);
 
         WdfWaitLockAcquire(fileContext->SessionLock, NULL);
         ControlCloseMiniportHandle(fileContext);
         fileContext->SessionId = 0;
         fileContext->LastHeartbeatTick = 0;
+        fileContext->State = CtrlSessionStateClosed;
         WdfWaitLockRelease(fileContext->SessionLock);
     }
 
@@ -359,5 +403,39 @@ ControlSessionRelease(
 
     if (InterlockedDecrement(&SessionContext->InFlightRequestCount) == 0) {
         KeSetEvent(&SessionContext->InFlightZeroEvent, IO_NO_INCREMENT, FALSE);
+    }
+}
+
+NTSTATUS
+ControlSessionRegisterPendingSlot(
+    _In_ PCTRL_FILE_CONTEXT SessionContext
+)
+{
+    NTSTATUS status;
+
+    if (SessionContext == NULL || SessionContext->SessionLock == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    WdfWaitLockAcquire(SessionContext->SessionLock, NULL);
+    status = ControlSessionEnterLocked(SessionContext, NULL);
+    if (NT_SUCCESS(status)) {
+        ControlSessionReferencePendingSlotLocked(SessionContext);
+    }
+    WdfWaitLockRelease(SessionContext->SessionLock);
+    return status;
+}
+
+VOID
+ControlSessionUnregisterPendingSlot(
+    _In_ PCTRL_FILE_CONTEXT SessionContext
+)
+{
+    if (SessionContext == NULL) {
+        return;
+    }
+
+    if (InterlockedDecrement(&SessionContext->PendingSlotCount) == 0) {
+        KeSetEvent(&SessionContext->PendingSlotZeroEvent, IO_NO_INCREMENT, FALSE);
     }
 }

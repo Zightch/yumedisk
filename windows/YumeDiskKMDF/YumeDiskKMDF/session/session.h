@@ -37,3 +37,13 @@ VOID
 ControlSessionRelease(
     _In_ PCTRL_FILE_CONTEXT SessionContext
 );
+
+NTSTATUS
+ControlSessionRegisterPendingSlot(
+    _In_ PCTRL_FILE_CONTEXT SessionContext
+);
+
+VOID
+ControlSessionUnregisterPendingSlot(
+    _In_ PCTRL_FILE_CONTEXT SessionContext
+);
