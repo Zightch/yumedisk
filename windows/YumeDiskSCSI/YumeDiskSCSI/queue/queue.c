@@ -246,6 +246,13 @@ DiskCompleteSlotSrb(
 
     srbIoControl = DiskGetIoctlControl(Slot->Srb);
     message = DiskGetIoctlMessage(Slot->Srb);
+    DbgPrint(
+        "YumeDiskSCSI DiskCompleteSlotSrb: slot=%I64u target=%lu type=%lu status=%08X srb=%p\n",
+        Slot->SlotId,
+        Slot->TargetId,
+        Slot->SlotType,
+        Status,
+        Slot->Srb);
     DiskInitMessageStatus(message, YumeDiskCommandSubmitSlot, Status, 0);
     DiskCompleteIoctlSrb(Slot->Srb, srbIoControl, Status, message->Header.Size);
     StorPortNotification(RequestComplete, DeviceExtension, Slot->Srb);
@@ -486,6 +493,12 @@ DiskDrainReadSlots(
         if (NT_SUCCESS(DiskWriteReadSlotEvent(request, slot))) {
             InterlockedIncrement64(&extension->DebugReadSlotsIssued);
             DiskTickProgress(extension);
+            DbgPrint(
+                "YumeDiskSCSI DiskDrainReadSlots: complete posted slot target=%u event=%I64u slot=%I64u srb=%p\n",
+                TargetId,
+                request->EventId,
+                slot->SlotId,
+                slot->Srb);
             DiskCompleteSlotSrb(DeviceExtension, slot, STATUS_SUCCESS);
         } else {
             DiskCompleteSlotSrb(DeviceExtension, slot, STATUS_BUFFER_TOO_SMALL);

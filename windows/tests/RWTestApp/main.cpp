@@ -121,6 +121,8 @@ struct ManagedDisk {
     std::mutex ackLock;
     std::deque<YUMEDISK_WRITE_ACK_RANGE> pendingWriteAcks;
     std::atomic<uint32_t> pendingWriteAckCount{0};
+    std::atomic<uint32_t> postingReadSlots{0};
+    std::atomic<uint32_t> postingWriteSlots{0};
     std::atomic<uint32_t> activeReadSlots{0};
     std::atomic<uint32_t> activeWriteSlots{0};
 };
@@ -1086,7 +1088,8 @@ bool PostReadSlotAsync(
     requestMessage->Header.TxId = slotContext->slotId;
 
     context->stats.readSlotPosts.fetch_add(1, std::memory_order_relaxed);
-    if (!BeginAsyncIoControl(
+    disk->postingReadSlots.fetch_add(1, std::memory_order_relaxed);
+    const bool started = BeginAsyncIoControl(
             context->control.file,
             slotContext->requestBuffer.data(),
             static_cast<DWORD>(slotContext->requestBuffer.size()),
@@ -1094,7 +1097,9 @@ bool PostReadSlotAsync(
             sizeof(slotContext->event),
             &slotContext->overlapped,
             &error,
-            nullptr)) {
+            nullptr);
+    disk->postingReadSlots.fetch_sub(1, std::memory_order_relaxed);
+    if (!started) {
         if (IsExpectedWorkerStop(context, disk)) {
             return true;
         }
@@ -1135,7 +1140,8 @@ bool PostWriteSlotAsync(
     requestMessage->Header.TxId = slotContext->slotId;
 
     context->stats.writeSlotPosts.fetch_add(1, std::memory_order_relaxed);
-    if (!BeginAsyncIoControl(
+    disk->postingWriteSlots.fetch_add(1, std::memory_order_relaxed);
+    const bool started = BeginAsyncIoControl(
             context->control.file,
             slotContext->requestBuffer.data(),
             static_cast<DWORD>(slotContext->requestBuffer.size()),
@@ -1143,7 +1149,9 @@ bool PostWriteSlotAsync(
             static_cast<DWORD>(slotContext->slotBuffer.size()),
             &slotContext->overlapped,
             &error,
-            nullptr)) {
+            nullptr);
+    disk->postingWriteSlots.fetch_sub(1, std::memory_order_relaxed);
+    if (!started) {
         if (IsExpectedWorkerStop(context, disk)) {
             return true;
         }
@@ -1639,6 +1647,8 @@ void PrintDebugSnapshot(BackendContext* context, const wchar_t* reason) {
     for (const auto& disk : disks) {
         std::wcout << L"debug_disk target=" << disk->targetId
                    << L", pending_write_acks=" << disk->pendingWriteAckCount.load(std::memory_order_relaxed)
+                   << L", posting_read_slots=" << disk->postingReadSlots.load(std::memory_order_relaxed)
+                   << L", posting_write_slots=" << disk->postingWriteSlots.load(std::memory_order_relaxed)
                    << L", active_read_slots=" << disk->activeReadSlots.load(std::memory_order_relaxed)
                    << L", active_write_slots=" << disk->activeWriteSlots.load(std::memory_order_relaxed)
                    << std::endl;
