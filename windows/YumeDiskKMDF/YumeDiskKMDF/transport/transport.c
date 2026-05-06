@@ -126,11 +126,6 @@ ControlCompleteAsyncSlotRequest(
 
     status = IoStatus;
     completionInformation = 0;
-    DbgPrint(
-        "YumeDiskKMDF ControlCompleteAsyncSlotRequest: request=%p ioStatus=%08X info=%Iu\n",
-        AsyncRequest->Request,
-        IoStatus,
-        Information);
     if (NT_SUCCESS(status)) {
         if (Information < sizeof(SRB_IO_CONTROL) + YUMEDISK_MESSAGE_BASE_SIZE) {
             status = STATUS_DEVICE_PROTOCOL_ERROR;
@@ -178,14 +173,6 @@ ControlCompleteAsyncSlotRequest(
         }
     }
 
-    DbgPrint(
-        "YumeDiskKMDF ControlCompleteAsyncSlotRequest: request=%p slot=%I64u target=%lu type=%lu finalStatus=%08X completeInfo=%Iu\n",
-        AsyncRequest->Request,
-        AsyncRequest->SlotId,
-        AsyncRequest->TargetId,
-        AsyncRequest->SlotType,
-        status,
-        completionInformation);
     WdfRequestCompleteWithInformation(AsyncRequest->Request, status, completionInformation);
     ControlSessionUnregisterPendingSlot(AsyncRequest->SessionContext);
     ControlSessionRelease(AsyncRequest->SessionContext);
@@ -211,12 +198,6 @@ ControlSubmitSlotCompletionRoutine(
 
         asyncRequest->CompletionStatus = Irp->IoStatus.Status;
         asyncRequest->CompletionInformation = Irp->IoStatus.Information;
-        DbgPrint(
-            "YumeDiskKMDF ControlSubmitSlotCompletionRoutine: irp=%p status=%08X info=%Iu request=%p\n",
-            Irp,
-            Irp->IoStatus.Status,
-            Irp->IoStatus.Information,
-            asyncRequest->Request);
         ownerState = InterlockedCompareExchange(&asyncRequest->CompletionState, 2, 0);
         if (ownerState == 1) {
             (VOID)ControlCompleteAsyncSlotRequest(
@@ -249,15 +230,6 @@ ControlSubmitSlotWorkItem(
     }
 
     status = IoCallDriver(asyncRequest->SessionContext->MiniportDeviceObject, asyncRequest->Irp);
-    DbgPrint(
-        "YumeDiskKMDF ControlProxySubmitSlotAsync: slot=%I64u target=%lu type=%lu ioCallStatus=%08X irp=%p request=%p\n",
-        asyncRequest->SlotId,
-        asyncRequest->TargetId,
-        asyncRequest->SlotType,
-        status,
-        asyncRequest->Irp,
-        asyncRequest->Request);
-
     ownerState = InterlockedCompareExchange(&asyncRequest->CompletionState, 1, 0);
     if (ownerState == 2) {
         (VOID)ControlCompleteAsyncSlotRequest(
@@ -278,10 +250,6 @@ ControlSubmitSlotWorkItem(
             completionStatus = status;
         }
 
-        DbgPrint(
-            "YumeDiskKMDF ControlProxySubmitSlotAsync: inline failure slot=%I64u status=%08X\n",
-            asyncRequest->SlotId,
-            completionStatus);
         (VOID)ControlCompleteAsyncSlotRequest(
             asyncRequest,
             completionStatus,
