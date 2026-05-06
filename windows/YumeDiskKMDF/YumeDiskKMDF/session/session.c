@@ -188,10 +188,14 @@ ControlSessionTryOpen(
     NTSTATUS status;
     PCTRL_FILE_CONTEXT fileContext;
     HANDLE handle;
+    PFILE_OBJECT fileObject;
+    PDEVICE_OBJECT deviceObject;
     UINT64 sessionId;
 
     fileContext = ControlGetFileContext(FileObject);
     handle = NULL;
+    fileObject = NULL;
+    deviceObject = NULL;
     sessionId = 0;
 
     WdfSpinLockAcquire(Context->OpenLock);
@@ -216,7 +220,7 @@ ControlSessionTryOpen(
         return status;
     }
 
-    status = ControlOpenMiniportHandle(&handle);
+    status = ControlOpenMiniportHandle(&handle, &fileObject, &deviceObject);
     if (!NT_SUCCESS(status)) {
         ControlSessionReleaseDeviceOpen(Context, FileObject);
         if (SessionId != NULL) {
@@ -229,6 +233,8 @@ ControlSessionTryOpen(
 
     WdfWaitLockAcquire(fileContext->SessionLock, NULL);
     fileContext->MiniportHandle = handle;
+    fileContext->MiniportFileObject = fileObject;
+    fileContext->MiniportDeviceObject = deviceObject;
     fileContext->SessionId = sessionId;
     fileContext->LastHeartbeatTick = ControlSessionQueryTick();
     fileContext->State = CtrlSessionStateActive;

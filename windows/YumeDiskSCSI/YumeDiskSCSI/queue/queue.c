@@ -114,6 +114,15 @@ DiskDebugAdd(
 
 static
 BOOLEAN
+DiskShouldTraceProbeRead(
+    _In_ UINT64 Lba
+)
+{
+    return (Lba == 0);
+}
+
+static
+BOOLEAN
 DiskGetIoctlResponseBuffers(
     _In_ PSTORAGE_REQUEST_BLOCK Srb,
     _Out_ PSRB_IO_CONTROL* SrbIoControl,
@@ -499,6 +508,17 @@ DiskDrainReadSlots(
         event->Lba = request->Lba;
         event->BlockCount = request->BlockCount;
         event->DataLength = request->DataLength;
+        if (DiskShouldTraceProbeRead(request->Lba)) {
+            DbgPrint(
+                "%s DiskDrainReadSlots: dispatch target=%lu event=%I64u slot=%I64u lba=%I64u blocks=%lu bytes=%lu\n",
+                DRIVER_NAME,
+                request->TargetId,
+                request->EventId,
+                slot->SlotId,
+                request->Lba,
+                request->BlockCount,
+                request->DataLength);
+        }
         DiskDebugIncrement(extension, &extension->DebugReadSlotsIssued);
 
         if (CurrentControlSrb != NULL &&
@@ -1018,21 +1038,58 @@ DiskQueueReadAck(
     request = DiskLookupReadRequestLocked(disk, readAck->EventId);
     if (request == NULL) {
         KeReleaseSpinLock(&disk->Queue.ReadQueueLock, oldIrql);
+        DbgPrint(
+            "%s DiskQueueReadAck: request missing target=%lu event=%I64u status=%08X data=%lu\n",
+            DRIVER_NAME,
+            Message->Header.TargetId,
+            readAck->EventId,
+            readAck->IoStatus,
+            readAck->DataLength);
         return STATUS_NOT_FOUND;
     }
 
     if (!request->SlotIssued) {
         KeReleaseSpinLock(&disk->Queue.ReadQueueLock, oldIrql);
+        DbgPrint(
+            "%s DiskQueueReadAck: request not issued target=%lu event=%I64u lba=%I64u\n",
+            DRIVER_NAME,
+            request->TargetId,
+            request->EventId,
+            request->Lba);
         return STATUS_INVALID_PARAMETER;
     }
 
     if (NT_SUCCESS(readAck->IoStatus) && readAck->DataLength != request->DataLength) {
+        if (DiskShouldTraceProbeRead(request->Lba)) {
+            DbgPrint(
+                "%s DiskQueueReadAck: length mismatch target=%lu event=%I64u slot=%I64u lba=%I64u expect=%lu actual=%lu\n",
+                DRIVER_NAME,
+                request->TargetId,
+                request->EventId,
+                request->IssuedSlotId,
+                request->Lba,
+                request->DataLength,
+                readAck->DataLength);
+        }
         RemoveEntryList(&request->Link);
         KeReleaseSpinLock(&disk->Queue.ReadQueueLock, oldIrql);
         DiskDebugIncrement(extension, &extension->DebugReadRequestsFailed);
         DiskCompleteScsiSrb(DeviceExtension, request->Srb, STATUS_IO_DEVICE_ERROR, 0);
         DiskFree(request);
         return STATUS_INVALID_PARAMETER;
+    }
+
+    if (DiskShouldTraceProbeRead(request->Lba)) {
+        DbgPrint(
+            "%s DiskQueueReadAck: ack target=%lu event=%I64u slot=%I64u lba=%I64u ackStatus=%08X data=%lu kernelVa=%p\n",
+            DRIVER_NAME,
+            request->TargetId,
+            request->EventId,
+            request->IssuedSlotId,
+            request->Lba,
+            readAck->IoStatus,
+            readAck->DataLength,
+            (PVOID)(ULONG_PTR)readAck->KernelVa);
     }
 
     RemoveEntryList(&request->Link);
@@ -1059,6 +1116,17 @@ DiskQueueReadAck(
     }
 
     if (shouldComplete) {
+        if (DiskShouldTraceProbeRead(request->Lba)) {
+            DbgPrint(
+                "%s DiskQueueReadAck: complete target=%lu event=%I64u lba=%I64u finalStatus=%08X transfer=%lu srb=%p\n",
+                DRIVER_NAME,
+                request->TargetId,
+                request->EventId,
+                request->Lba,
+                completeStatus,
+                transferLength,
+                request->Srb);
+        }
         DiskCompleteScsiSrb(
             DeviceExtension,
             request->Srb,
@@ -1290,6 +1358,17 @@ DiskQueueReadSrb(
     request->BlockCount = BlockCount;
     request->DataLength = DataLength;
     request->SlotIssued = FALSE;
+    if (DiskShouldTraceProbeRead(Lba)) {
+        DbgPrint(
+            "%s DiskQueueReadSrb: queue target=%u event=%I64u lba=%I64u blocks=%lu bytes=%lu srb=%p\n",
+            DRIVER_NAME,
+            TargetId,
+            request->EventId,
+            Lba,
+            BlockCount,
+            DataLength,
+            Srb);
+    }
 
     KeAcquireSpinLock(&disk->Queue.ReadQueueLock, &oldIrql);
     InsertTailList(&disk->Queue.PendingReads, &request->Link);

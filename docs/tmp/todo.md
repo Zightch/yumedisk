@@ -8,23 +8,22 @@ Source:
 
 ## Current Goal
 
-Validate the rebuilt multi-disk concurrent path, confirm that per-disk App slot engines plus per-target SCSI queues improve dual-disk throughput/fairness without reintroducing hangs, and record the remaining benchmark gaps.
+Validate the rebuilt async KMDF slot transport on the VM, confirm that the first probe read now completes end-to-end, and verify that disk enumeration plus high-queue read pressure no longer regress into the previous pending-slot stall.
 
 ## Current Boundary
 
 - No old-version compatibility.
 - No parallel old/new protocol branch.
-- No extra abstraction layer unless a real bottleneck forces it.
-- The App path is already cut over to one slot engine thread per disk with per-disk `queueDepth` for read and write slots.
-- The SCSI path is already cut over to per-target queue locks and per-target posted/pending lists; multi-disk traffic no longer shares one adapter-global read/write queue.
-- `WRITE_ACK_BATCH` is already the only write ACK path, and ACK now completes before the corresponding system write SRB is completed.
-- The remaining gap is manual multi-disk validation: proving throughput/fairness gains and checking that dual-disk pressure does not regress cancellation or cleanup stability.
+- No extra abstraction layer unless runtime evidence forces it.
+- KMDF `POST_READ_SLOT` / `POST_WRITE_SLOT` has been cut over to one async long-pending path; the old synchronous proxy behavior is no longer the target design.
+- SCSI per-target queue structure and App per-disk slot engine structure remain the only active data path.
+- This round is runtime validation only: do not start a new protocol or fairness optimization before confirming the async transport closes the current enumeration / pending-slot hole.
 - Do not advance to the next substep until the current one is complete, archived, and committed.
 
 ## Pending Substeps
 
-1. Run the manual dual-disk benchmark matrix and record throughput, kernel CPU, fairness, cancel behavior, and cleanup stability.
+1. Redeploy the rebuilt drivers and App, then manually verify `ct -> 盘枚举 -> 首个 probe read completion -> Q1/Q8 read pressure` on the VM.
 
 ## Current Unique Next Step
 
-Run the manual dual-disk benchmark matrix and record throughput, kernel CPU, fairness, cancel behavior, and cleanup stability.
+Redeploy the rebuilt drivers and App, then manually verify `ct -> 盘枚举 -> 首个 probe read completion -> Q1/Q8 read pressure` on the VM.

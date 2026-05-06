@@ -1486,6 +1486,10 @@ bool ValidateReadSlotEvent(
     return true;
 }
 
+bool ShouldTraceProbeRead(const YUMEDISK_READ_SLOT_EVENT& event) {
+    return event.Lba == 0;
+}
+
 LONG CopyReadData(
     ManagedDisk* disk,
     const YUMEDISK_READ_SLOT_EVENT& event,
@@ -1497,6 +1501,15 @@ LONG CopyReadData(
     if (offset64 > disk->medium.size() ||
         static_cast<uint64_t>(event.DataLength) > disk->medium.size() - offset64) {
         *dataLength = 0;
+        if (ShouldTraceProbeRead(event)) {
+            std::wcerr << L"probe_read copy invalid"
+                       << L", target=" << disk->targetId
+                       << L", event=" << event.EventId
+                       << L", lba=" << event.Lba
+                       << L", bytes=" << event.DataLength
+                       << L", disk_bytes=" << disk->medium.size()
+                       << std::endl;
+        }
         return kStatusInvalidParameter;
     }
 
@@ -1505,6 +1518,15 @@ LONG CopyReadData(
         const size_t offset = static_cast<size_t>(offset64);
         auto locks = AcquireReadStripeLocks(disk, offset, event.DataLength);
         std::memcpy(readBuffer->data(), disk->medium.data() + offset, event.DataLength);
+    }
+
+    if (ShouldTraceProbeRead(event)) {
+        std::wcerr << L"probe_read copy ok"
+                   << L", target=" << disk->targetId
+                   << L", event=" << event.EventId
+                   << L", lba=" << event.Lba
+                   << L", bytes=" << event.DataLength
+                   << std::endl;
     }
 
     return kStatusSuccess;
@@ -1541,6 +1563,17 @@ bool HandleReadSlotCompletion(
         return false;
     }
 
+    if (ShouldTraceProbeRead(slotContext->event)) {
+        std::wcerr << L"probe_read slot complete"
+                   << L", target=" << disk->targetId
+                   << L", slot=" << slotContext->slotId
+                   << L", event=" << slotContext->event.EventId
+                   << L", lba=" << slotContext->event.Lba
+                   << L", blocks=" << slotContext->event.BlockCount
+                   << L", bytes=" << slotContext->event.DataLength
+                   << std::endl;
+    }
+
     if (!ValidateReadSlotEvent(context, disk, slotContext->event)) {
         SetReadWorkerState(disk, slotIndex, ReadWorkerState::Idle);
         return true;
@@ -1560,6 +1593,16 @@ bool HandleReadSlotCompletion(
     readAck->IoStatus = ioStatus;
     readAck->DataLength = dataLength;
     readAck->KernelVa = 0;
+
+    if (ShouldTraceProbeRead(slotContext->event)) {
+        std::wcerr << L"probe_read ack send"
+                   << L", target=" << disk->targetId
+                   << L", event=" << slotContext->event.EventId
+                   << L", lba=" << slotContext->event.Lba
+                   << L", io_status=0x" << std::hex << static_cast<unsigned long>(ioStatus) << std::dec
+                   << L", data_bytes=" << dataLength
+                   << std::endl;
+    }
 
     SetReadWorkerState(disk, slotIndex, ReadWorkerState::SendAck);
     if (!SendIoControl(

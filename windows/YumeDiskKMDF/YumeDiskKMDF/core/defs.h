@@ -25,6 +25,8 @@ typedef struct _CTRL_FILE_CONTEXT {
     WDFWAITLOCK SessionLock;
     WDFTIMER WatchdogTimer;
     HANDLE MiniportHandle;
+    PFILE_OBJECT MiniportFileObject;
+    PDEVICE_OBJECT MiniportDeviceObject;
     UINT64 SessionId;
     LONGLONG LastHeartbeatTick;
     KEVENT InFlightZeroEvent;

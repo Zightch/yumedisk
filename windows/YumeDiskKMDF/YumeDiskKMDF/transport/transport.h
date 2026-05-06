@@ -4,7 +4,9 @@
 
 NTSTATUS
 ControlOpenMiniportHandle(
-    _Out_ HANDLE* Handle
+    _Out_ HANDLE* Handle,
+    _Out_opt_ PFILE_OBJECT* FileObject,
+    _Out_opt_ PDEVICE_OBJECT* DeviceObject
 );
 
 NTSTATUS
@@ -14,6 +16,18 @@ ControlProxyCommand(
     _In_ ULONG InputLength,
     _In_ ULONG BufferCapacity,
     _Out_ ULONG* BytesReturned
+);
+
+NTSTATUS
+ControlProxySubmitSlotAsync(
+    _In_ PCTRL_FILE_CONTEXT Context,
+    _In_ WDFREQUEST Request,
+    _In_ UINT64 SessionId,
+    _In_ UINT64 SlotId,
+    _In_ UINT32 TargetId,
+    _In_ UINT32 SlotType,
+    _In_ PUCHAR DirectBuffer,
+    _In_ size_t DirectBufferSize
 );
 
 VOID
