@@ -59,6 +59,38 @@ DiskQueueWriteSrb(
 );
 
 NTSTATUS
+DiskHandleSubmitSlotIoctl(
+    _In_ PVOID DeviceExtension,
+    _In_ PSTORAGE_REQUEST_BLOCK Srb,
+    _Inout_ PYUMEDISK_MESSAGE Message
+);
+
+NTSTATUS
+DiskHandleReadAckIoctl(
+    _In_ PVOID DeviceExtension,
+    _Inout_ PYUMEDISK_MESSAGE Message
+);
+
+NTSTATUS
+DiskHandleWriteAckBatchIoctl(
+    _In_ PVOID DeviceExtension,
+    _Inout_ PYUMEDISK_MESSAGE Message,
+    _Inout_ PLIST_ENTRY DeferredWriteCompletions
+);
+
+NTSTATUS
+DiskHandleCancelSlotIoctl(
+    _In_ PVOID DeviceExtension,
+    _Inout_ PYUMEDISK_MESSAGE Message
+);
+
+VOID
+DiskCompleteDeferredWriteCompletions(
+    _In_ PVOID DeviceExtension,
+    _Inout_ PLIST_ENTRY DeferredWriteCompletions
+);
+
+NTSTATUS
 DiskQueryDebugState(
     _In_ PVOID DeviceExtension,
     _Out_ PYUMEDISK_DEBUG_STATE DebugState

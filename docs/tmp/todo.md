@@ -20,16 +20,16 @@ Source:
 - KMDF 继续只承担 `session + direct-IO slot transport`，不引入新的协议层或兼容桥。
 - SCSI 不允许回到 adapter 级共享数据面锁和共享队列；每个 target 必须自带独立读写队列和推进状态。
 - App 不允许回到全局共享 worker pool 或全局共享数据面队列深度；并发粒度必须按盘独立。
-- 当前代码现实边界：`KMDF` 会话状态管理已经重建完成，但活跃数据面仍暂时是 `STATUS_NOT_SUPPORTED` 骨架；下一步必须从 `SCSI per-target queue` 开始重新接回，而不是恢复旧实现。
+- 当前代码现实边界：`KMDF` 会话状态管理和 `SCSI` per-target 队列都已经重建完成；miniport 侧已经具备 `SubmitSlot / ReadAck / WriteAckBatch / CancelSlot` 与 per-target `pending read/write` 的真实实现，但 `KMDF` 前门的 `POST_READ_SLOT / POST_WRITE_SLOT / READ_ACK / WRITE_ACK_BATCH / CANCEL_SLOT` 仍然是骨架，`RWTestApp` 也仍然只是控制台骨架。
+- 当前 SCSI 写分片已经收敛到“同一 target 的活跃 write slots 使用单一 payload 大小”这一唯一边界；下一步 App 必须按盘固定 slot bytes，不再尝试多种 write slot 形状混跑。
 - 每完成一个子步骤，必须先归档、更新当前 `todo`、提交，然后停止，等待下一轮推进。
 
 ## Pending Substeps
 
-1. 重建 `SCSI` per-target 单盘队列：每个 target 独立 `posted read/write slots`、`pending read/write requests`、`eventId` 推进和 `drain while available`。
-2. 重建 `App` per-disk 全并发执行：每盘独立 slot depth、独立 read/write/ack 推进，不共享全局数据面 worker 池，不共享全局队列深度。
-3. 重新接通最终链路：`建盘 -> 枚举 -> probe read -> steady-state read/write -> ctrl+c / rm all / App 退出`，并把取消、读写单请求失败、session close 都收进唯一边界。
-4. 按最终目标验证多盘并发：先双盘 `Q1T1`，再 `Q2/Q8/Q32`，要求不再出现 100% 无读写假死、盘被误判死亡、会话残留或全局串扰。
+1. 重建 `KMDF + App` per-disk 全并发执行：把 `POST_READ_SLOT / POST_WRITE_SLOT / READ_ACK / WRITE_ACK_BATCH / CANCEL_SLOT` 从控制骨架重新接回到 `session-owned slot transport`，并让每盘独立持有 slot depth、read/write/ack 推进和固定 slot bytes。
+2. 重新接通最终链路：`建盘 -> 枚举 -> probe read -> steady-state read/write -> ctrl+c / rm all / App 退出`，并把取消、读写单请求失败、session close 都收进唯一边界。
+3. 按最终目标验证多盘并发：先双盘 `Q1T1`，再 `Q2/Q8/Q32`，要求不再出现 100% 无读写假死、盘被误判死亡、会话残留或全局串扰。
 
 ## Current Unique Next Step
 
-重建 `SCSI` per-target 单盘队列：在当前控制面骨架上重新接回每个 target 自己的 `posted read/write slots`、`pending read/write requests`、`eventId` 推进和 `drain while available`，不恢复任何 adapter 级共享数据面锁或共享队列。
+重建 `KMDF + App` per-disk 全并发执行：在现有 `KMDF session state + SCSI per-target queue` 边界上，把 `POST_READ_SLOT / POST_WRITE_SLOT / READ_ACK / WRITE_ACK_BATCH / CANCEL_SLOT` 真正接回 `RWTestApp` 的 per-disk slot engine，并固定每盘自己的 slot depth 与 write slot bytes，不恢复任何全局共享 worker 或全局共享队列深度。

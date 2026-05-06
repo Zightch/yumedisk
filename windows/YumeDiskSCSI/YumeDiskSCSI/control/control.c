@@ -196,8 +196,10 @@ DiskHandleIoControlSrb(
     PYUMEDISK_MESSAGE message;
     NTSTATUS status;
     KIRQL oldIrql;
+    LIST_ENTRY deferredWriteCompletions;
 
     extension = (PDEVICE_CONTEXT)DeviceExtension;
+    InitializeListHead(&deferredWriteCompletions);
 
     if (Srb->DataBuffer == NULL ||
         Srb->DataTransferLength < (ULONG)(sizeof(SRB_IO_CONTROL) + YUMEDISK_MESSAGE_BASE_SIZE)) {
@@ -263,11 +265,30 @@ DiskHandleIoControlSrb(
         status = DiskHandleRemoveAllDisks(DeviceExtension, extension, message);
         break;
     case YumeDiskCommandSubmitSlot:
-    case YumeDiskCommandReadAck:
-    case YumeDiskCommandWriteAckBatch:
-    case YumeDiskCommandCancelSlot:
-        status = STATUS_NOT_SUPPORTED;
+        Srb->SrbStatus = SRB_STATUS_PENDING;
+        status = DiskHandleSubmitSlotIoctl(DeviceExtension, Srb, message);
+        if (status == STATUS_PENDING) {
+            return TRUE;
+        }
         DiskInitMessageStatus(message, message->Header.Command, status, 0);
+        break;
+    case YumeDiskCommandReadAck:
+        status = DiskHandleReadAckIoctl(DeviceExtension, message);
+        if (!NT_SUCCESS(status)) {
+            DiskInitMessageStatus(message, message->Header.Command, status, 0);
+        }
+        break;
+    case YumeDiskCommandWriteAckBatch:
+        status = DiskHandleWriteAckBatchIoctl(DeviceExtension, message, &deferredWriteCompletions);
+        if (!NT_SUCCESS(status)) {
+            DiskInitMessageStatus(message, message->Header.Command, status, 0);
+        }
+        break;
+    case YumeDiskCommandCancelSlot:
+        status = DiskHandleCancelSlotIoctl(DeviceExtension, message);
+        if (!NT_SUCCESS(status)) {
+            DiskInitMessageStatus(message, message->Header.Command, status, 0);
+        }
         break;
     default:
         status = STATUS_INVALID_DEVICE_REQUEST;
@@ -277,5 +298,6 @@ DiskHandleIoControlSrb(
 
     DiskCompleteIoctlSrb(Srb, srbIoControl, status, message->Header.Size);
     StorPortNotification(RequestComplete, DeviceExtension, Srb);
+    DiskCompleteDeferredWriteCompletions(DeviceExtension, &deferredWriteCompletions);
     return TRUE;
 }

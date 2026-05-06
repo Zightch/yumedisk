@@ -22,6 +22,12 @@ typedef struct _YUME_DISK_QUEUE_STATE {
     LIST_ENTRY PendingReads;
     LIST_ENTRY PostedWriteSlots;
     LIST_ENTRY PendingWrites;
+    ULONG PostedReadSlotCount;
+    ULONG PendingReadCount;
+    ULONG PendingReadIssuedCount;
+    ULONG PostedWriteSlotCount;
+    ULONG PendingWriteCount;
+    ULONG WriteSlotPayloadBytes;
 } YUME_DISK_QUEUE_STATE, *PYUME_DISK_QUEUE_STATE;
 
 typedef struct _YUME_DISK {
