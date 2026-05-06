@@ -2,7 +2,6 @@
 
 #include "..\transport\transport.h"
 
-#define CTRL_SESSION_WATCHDOG_PERIOD_MS 1000u
 #define CTRL_SESSION_WATCHDOG_TIMEOUT_MS 10000u
 #define CTRL_SESSION_LOCKED_STATUS STATUS_FILE_LOCK_CONFLICT
 
@@ -45,20 +44,46 @@ ControlSessionCreateResources(
         attributes.ParentObject = FileObject;
         status = WdfWaitLockCreate(&attributes, &FileContext->SessionLock);
         if (!NT_SUCCESS(status)) {
+            DbgPrint(
+                "%s ControlSessionCreateResources: WdfWaitLockCreate failed file=%p status=%08X\n",
+                DRIVER_NAME,
+                FileObject,
+                status);
             return status;
         }
+
+        DbgPrint(
+            "%s ControlSessionCreateResources: WdfWaitLockCreate ok file=%p lock=%p\n",
+            DRIVER_NAME,
+            FileObject,
+            FileContext->SessionLock);
+
+        KeInitializeEvent(&FileContext->InFlightZeroEvent, NotificationEvent, TRUE);
+        FileContext->InFlightRequestCount = 0;
     }
 
     if (FileContext->WatchdogTimer == NULL) {
-        WDF_TIMER_CONFIG_INIT_PERIODIC(&timerConfig, ControlEvtSessionWatchdogTimer, CTRL_SESSION_WATCHDOG_PERIOD_MS);
+        WDF_TIMER_CONFIG_INIT(&timerConfig, ControlEvtSessionWatchdogTimer);
+        timerConfig.AutomaticSerialization = FALSE;
 
         WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
         attributes.ParentObject = FileObject;
         attributes.ExecutionLevel = WdfExecutionLevelPassive;
         status = WdfTimerCreate(&timerConfig, &attributes, &FileContext->WatchdogTimer);
         if (!NT_SUCCESS(status)) {
+            DbgPrint(
+                "%s ControlSessionCreateResources: WdfTimerCreate failed file=%p status=%08X\n",
+                DRIVER_NAME,
+                FileObject,
+                status);
             return status;
         }
+
+        DbgPrint(
+            "%s ControlSessionCreateResources: WdfTimerCreate ok file=%p timer=%p\n",
+            DRIVER_NAME,
+            FileObject,
+            FileContext->WatchdogTimer);
     }
 
     return STATUS_SUCCESS;
@@ -86,6 +111,28 @@ ControlSessionEnterLocked(
     }
 
     return STATUS_SUCCESS;
+}
+
+static
+VOID
+ControlSessionReferenceIoLocked(
+    _Inout_ PCTRL_FILE_CONTEXT FileContext
+)
+{
+    if (InterlockedIncrement(&FileContext->InFlightRequestCount) == 1) {
+        KeClearEvent(&FileContext->InFlightZeroEvent);
+    }
+}
+
+static
+VOID
+ControlSessionDrainInFlightIo(
+    _Inout_ PCTRL_FILE_CONTEXT FileContext
+)
+{
+    while (InterlockedCompareExchange(&FileContext->InFlightRequestCount, 0, 0) != 0) {
+        KeWaitForSingleObject(&FileContext->InFlightZeroEvent, Executive, KernelMode, FALSE, NULL);
+    }
 }
 
 static
@@ -135,9 +182,11 @@ ControlEvtSessionWatchdogTimer(
     }
 
     fileContext->State = CtrlSessionStateLocked;
-    ControlSendSessionCleanup(fileContext);
-    ControlCloseMiniportHandle(fileContext);
     WdfWaitLockRelease(fileContext->SessionLock);
+
+    ControlSendSessionCleanup(fileContext);
+    ControlSessionDrainInFlightIo(fileContext);
+    ControlCloseMiniportHandle(fileContext);
 
     WdfTimerStop(Timer, FALSE);
 }
@@ -167,12 +216,21 @@ ControlSessionTryOpen(
     handle = NULL;
     sessionId = 0;
 
+    DbgPrint(
+        "%s ControlSessionTryOpen: enter file=%p\n",
+        DRIVER_NAME,
+        FileObject);
+
     WdfSpinLockAcquire(Context->OpenLock);
     if (Context->OpenCount != 0) {
         WdfSpinLockRelease(Context->OpenLock);
         if (SessionId != NULL) {
             *SessionId = 0;
         }
+        DbgPrint(
+            "%s ControlSessionTryOpen: reject sharing violation file=%p\n",
+            DRIVER_NAME,
+            FileObject);
         return STATUS_SHARING_VIOLATION;
     }
 
@@ -186,6 +244,11 @@ ControlSessionTryOpen(
         if (SessionId != NULL) {
             *SessionId = 0;
         }
+        DbgPrint(
+            "%s ControlSessionTryOpen: create resources failed file=%p status=%08X\n",
+            DRIVER_NAME,
+            FileObject,
+            status);
         return status;
     }
 
@@ -195,6 +258,11 @@ ControlSessionTryOpen(
         if (SessionId != NULL) {
             *SessionId = 0;
         }
+        DbgPrint(
+            "%s ControlSessionTryOpen: open miniport failed file=%p status=%08X\n",
+            DRIVER_NAME,
+            FileObject,
+            status);
         return status;
     }
 
@@ -207,11 +275,18 @@ ControlSessionTryOpen(
     fileContext->State = CtrlSessionStateActive;
     WdfWaitLockRelease(fileContext->SessionLock);
 
-    WdfTimerStart(fileContext->WatchdogTimer, WDF_REL_TIMEOUT_IN_MS(CTRL_SESSION_WATCHDOG_PERIOD_MS));
+    WdfTimerStart(fileContext->WatchdogTimer, WDF_REL_TIMEOUT_IN_MS(CTRL_SESSION_WATCHDOG_TIMEOUT_MS));
 
     if (SessionId != NULL) {
         *SessionId = sessionId;
     }
+
+    DbgPrint(
+        "%s ControlSessionTryOpen: success file=%p session=%I64u miniport=%p\n",
+        DRIVER_NAME,
+        FileObject,
+        sessionId,
+        handle);
 
     return STATUS_SUCCESS;
 }
@@ -226,6 +301,14 @@ ControlSessionCleanup(
 
     fileContext = ControlGetFileContext(FileObject);
 
+    DbgPrint(
+        "%s ControlSessionCleanup: enter file=%p state=%lu miniport=%p session=%I64u\n",
+        DRIVER_NAME,
+        FileObject,
+        fileContext->State,
+        fileContext->MiniportHandle,
+        fileContext->SessionId);
+
     if (fileContext->WatchdogTimer != NULL) {
         WdfTimerStop(fileContext->WatchdogTimer, TRUE);
     }
@@ -233,9 +316,18 @@ ControlSessionCleanup(
     if (fileContext->SessionLock != NULL) {
         WdfWaitLockAcquire(fileContext->SessionLock, NULL);
         if (fileContext->State == CtrlSessionStateActive && fileContext->MiniportHandle != NULL) {
-            ControlSendSessionCleanup(fileContext);
+            DbgPrint(
+                "%s ControlSessionCleanup: scheduling session cleanup file=%p\n",
+                DRIVER_NAME,
+                FileObject);
         }
         fileContext->State = CtrlSessionStateClosed;
+        WdfWaitLockRelease(fileContext->SessionLock);
+
+        ControlSendSessionCleanup(fileContext);
+        ControlSessionDrainInFlightIo(fileContext);
+
+        WdfWaitLockAcquire(fileContext->SessionLock, NULL);
         ControlCloseMiniportHandle(fileContext);
         fileContext->SessionId = 0;
         fileContext->LastHeartbeatTick = 0;
@@ -243,6 +335,10 @@ ControlSessionCleanup(
     }
 
     ControlSessionReleaseDeviceOpen(Context, FileObject);
+    DbgPrint(
+        "%s ControlSessionCleanup: done file=%p\n",
+        DRIVER_NAME,
+        FileObject);
 }
 
 NTSTATUS
@@ -266,6 +362,10 @@ ControlSessionHeartbeat(
     status = ControlSessionEnterLocked(fileContext, SessionId);
     if (NT_SUCCESS(status)) {
         fileContext->LastHeartbeatTick = ControlSessionQueryTick();
+        if (fileContext->WatchdogTimer != NULL) {
+            WdfTimerStop(fileContext->WatchdogTimer, FALSE);
+            WdfTimerStart(fileContext->WatchdogTimer, WDF_REL_TIMEOUT_IN_MS(CTRL_SESSION_WATCHDOG_TIMEOUT_MS));
+        }
     }
     WdfWaitLockRelease(fileContext->SessionLock);
     return status;
@@ -302,7 +402,9 @@ ControlSessionAcquire(
         return status;
     }
 
+    ControlSessionReferenceIoLocked(fileContext);
     *SessionContext = fileContext;
+    WdfWaitLockRelease(fileContext->SessionLock);
     return STATUS_SUCCESS;
 }
 
@@ -311,7 +413,11 @@ ControlSessionRelease(
     _In_ PCTRL_FILE_CONTEXT SessionContext
 )
 {
-    if (SessionContext != NULL && SessionContext->SessionLock != NULL) {
-        WdfWaitLockRelease(SessionContext->SessionLock);
+    if (SessionContext == NULL) {
+        return;
+    }
+
+    if (InterlockedDecrement(&SessionContext->InFlightRequestCount) == 0) {
+        KeSetEvent(&SessionContext->InFlightZeroEvent, IO_NO_INCREMENT, FALSE);
     }
 }

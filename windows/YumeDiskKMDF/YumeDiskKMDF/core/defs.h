@@ -27,6 +27,8 @@ typedef struct _CTRL_FILE_CONTEXT {
     HANDLE MiniportHandle;
     UINT64 SessionId;
     LONGLONG LastHeartbeatTick;
+    KEVENT InFlightZeroEvent;
+    volatile LONG InFlightRequestCount;
     ULONG State;
 } CTRL_FILE_CONTEXT, *PCTRL_FILE_CONTEXT;
 

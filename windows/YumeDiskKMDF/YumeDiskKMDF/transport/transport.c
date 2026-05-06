@@ -165,10 +165,20 @@ ControlProbeMiniportHandle(
         sizeof(buffer),
         &bytesReturned);
     if (!NT_SUCCESS(status)) {
+        DbgPrint(
+            "%s ControlProbeMiniportHandle: query failed handle=%p status=%08X\n",
+            DRIVER_NAME,
+            Handle,
+            status);
         return status;
     }
 
     if (bytesReturned < YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_QUERY_INFO)) {
+        DbgPrint(
+            "%s ControlProbeMiniportHandle: short reply handle=%p bytes=%lu\n",
+            DRIVER_NAME,
+            Handle,
+            bytesReturned);
         return STATUS_DEVICE_PROTOCOL_ERROR;
     }
 
@@ -177,8 +187,19 @@ ControlProbeMiniportHandle(
             info->AdapterSignature,
             YUMEDISK_MINIPORT_SIGNATURE,
             sizeof(info->AdapterSignature)) != sizeof(info->AdapterSignature)) {
+        DbgPrint(
+            "%s ControlProbeMiniportHandle: signature mismatch handle=%p\n",
+            DRIVER_NAME,
+            Handle);
         return STATUS_NOT_FOUND;
     }
+
+    DbgPrint(
+        "%s ControlProbeMiniportHandle: success handle=%p features=%08X service=%ws\n",
+        DRIVER_NAME,
+        Handle,
+        info->Features,
+        info->ServiceName);
 
     return STATUS_SUCCESS;
 }
@@ -197,11 +218,18 @@ ControlOpenMiniportHandle(
 
     status = IoGetDeviceInterfaces((LPGUID)&ControlStoragePortGuid, NULL, 0, &interfaces);
     if (!NT_SUCCESS(status)) {
+        DbgPrint(
+            "%s ControlOpenMiniportHandle: IoGetDeviceInterfaces failed status=%08X\n",
+            DRIVER_NAME,
+            status);
         return status;
     }
 
     status = STATUS_NO_SUCH_DEVICE;
     current = interfaces;
+    DbgPrint(
+        "%s ControlOpenMiniportHandle: begin interface scan\n",
+        DRIVER_NAME);
     while (*current != UNICODE_NULL) {
         UNICODE_STRING deviceName;
         OBJECT_ATTRIBUTES attributes;
@@ -230,14 +258,30 @@ ControlOpenMiniportHandle(
             NULL,
             0);
 
+        DbgPrint(
+            "%s ControlOpenMiniportHandle: candidate=%wZ openStatus=%08X\n",
+            DRIVER_NAME,
+            &deviceName,
+            openStatus);
+
         if (NT_SUCCESS(openStatus)) {
             openStatus = ControlProbeMiniportHandle(handle);
             if (NT_SUCCESS(openStatus)) {
                 *Handle = handle;
                 status = STATUS_SUCCESS;
+                DbgPrint(
+                    "%s ControlOpenMiniportHandle: selected=%wZ handle=%p\n",
+                    DRIVER_NAME,
+                    &deviceName,
+                    handle);
                 break;
             }
 
+            DbgPrint(
+                "%s ControlOpenMiniportHandle: probe failed candidate=%wZ status=%08X\n",
+                DRIVER_NAME,
+                &deviceName,
+                openStatus);
             ZwClose(handle);
         }
 
@@ -245,6 +289,11 @@ ControlOpenMiniportHandle(
     }
 
     ExFreePool(interfaces);
+    DbgPrint(
+        "%s ControlOpenMiniportHandle: finish status=%08X handle=%p\n",
+        DRIVER_NAME,
+        status,
+        *Handle);
     return status;
 }
 
