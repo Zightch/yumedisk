@@ -191,14 +191,229 @@ ControlHandleHeartbeat(
 }
 
 static
-VOID
-ControlCompleteUnsupportedDataCommand(
-    _In_ PCTRL_FILE_CONTEXT SessionContext,
-    _In_ WDFREQUEST Request
+NTSTATUS
+ControlValidateWriteAckBatchPayload(
+    _In_reads_bytes_(PayloadLength) const UCHAR* Payload,
+    _In_ ULONG PayloadLength
 )
 {
-    ControlSessionRelease(SessionContext);
-    WdfRequestComplete(Request, STATUS_NOT_SUPPORTED);
+    PYUMEDISK_WRITE_ACK_BATCH batch;
+    ULONG expectedLength;
+
+    if (PayloadLength < (ULONG)YUMEDISK_WRITE_ACK_BATCH_BASE_SIZE) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    batch = (PYUMEDISK_WRITE_ACK_BATCH)Payload;
+    if (batch->RangeCount == 0 ||
+        batch->RangeCount >
+            ((MAXULONG - (ULONG)YUMEDISK_WRITE_ACK_BATCH_BASE_SIZE) / (ULONG)sizeof(YUMEDISK_WRITE_ACK_RANGE))) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    expectedLength = (ULONG)YUMEDISK_WRITE_ACK_BATCH_SIZE(batch->RangeCount);
+    if (PayloadLength != expectedLength) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+ControlValidateCancelSlotPayload(
+    _In_reads_bytes_(PayloadLength) const UCHAR* Payload,
+    _In_ ULONG PayloadLength
+)
+{
+    PYUMEDISK_CANCEL_SLOT cancelSlot;
+
+    if (PayloadLength != sizeof(YUMEDISK_CANCEL_SLOT)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    cancelSlot = (PYUMEDISK_CANCEL_SLOT)Payload;
+    if (cancelSlot->SlotId == 0 ||
+        cancelSlot->TargetId > YUMEDISK_MAX_USABLE_TARGET_ID ||
+        (cancelSlot->SlotType != YumeDiskSlotTypeRead &&
+            cancelSlot->SlotType != YumeDiskSlotTypeWrite)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+ControlProxyReadAck(
+    _In_ PCTRL_FILE_CONTEXT Context,
+    _In_ UINT64 SessionId,
+    _In_ const YUMEDISK_HEADER* Header,
+    _Inout_ PYUMEDISK_READ_ACK ReadAck,
+    _In_opt_ PUCHAR DirectBuffer
+)
+{
+    UCHAR buffer[YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_READ_ACK)];
+    PYUMEDISK_MESSAGE message;
+    PYUMEDISK_READ_ACK proxyAck;
+    ULONG bytesReturned;
+
+    RtlZeroMemory(buffer, sizeof(buffer));
+    message = (PYUMEDISK_MESSAGE)buffer;
+    message->Header.Size = sizeof(buffer);
+    message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
+    message->Header.Command = YumeDiskCommandReadAck;
+    message->Header.SessionId = SessionId;
+    message->Header.TargetId = Header->TargetId;
+    message->Header.Flags = Header->Flags;
+    message->Header.PayloadLength = sizeof(YUMEDISK_READ_ACK);
+
+    proxyAck = (PYUMEDISK_READ_ACK)message->Payload;
+    *proxyAck = *ReadAck;
+    proxyAck->KernelVa = (UINT64)(ULONG_PTR)DirectBuffer;
+
+    return ControlProxyCommand(Context, buffer, sizeof(buffer), sizeof(buffer), &bytesReturned);
+}
+
+static
+NTSTATUS
+ControlHandlePostReadSlot(
+    _In_ PCTRL_FILE_CONTEXT Context,
+    _In_ WDFREQUEST Request,
+    _In_ const CTRL_INPUT_MESSAGE* InputMessage,
+    _In_ size_t OutputBufferLength,
+    _In_ UINT64 SessionId
+)
+{
+    NTSTATUS status;
+    PUCHAR outputBuffer;
+    size_t outputSize;
+
+    if (InputMessage->Message->Header.PayloadLength != 0 ||
+        InputMessage->Message->Header.TargetId > YUMEDISK_MAX_USABLE_TARGET_ID) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    outputBuffer = NULL;
+    outputSize = 0;
+    status = ControlGetOutputBuffer(
+        Request,
+        OutputBufferLength,
+        sizeof(YUMEDISK_READ_SLOT_EVENT),
+        &outputBuffer,
+        &outputSize);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    return ControlProxySubmitSlotAsync(
+        Context,
+        Request,
+        SessionId,
+        InputMessage->Message->Header.TxId,
+        InputMessage->Message->Header.TargetId,
+        YumeDiskSlotTypeRead,
+        outputBuffer,
+        outputSize);
+}
+
+static
+NTSTATUS
+ControlHandlePostWriteSlot(
+    _In_ PCTRL_FILE_CONTEXT Context,
+    _In_ WDFREQUEST Request,
+    _In_ const CTRL_INPUT_MESSAGE* InputMessage,
+    _In_ size_t OutputBufferLength,
+    _In_ UINT64 SessionId
+)
+{
+    NTSTATUS status;
+    PUCHAR outputBuffer;
+    size_t outputSize;
+
+    if (InputMessage->Message->Header.PayloadLength != 0 ||
+        InputMessage->Message->Header.TargetId > YUMEDISK_MAX_USABLE_TARGET_ID) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    outputBuffer = NULL;
+    outputSize = 0;
+    status = ControlGetOutputBuffer(
+        Request,
+        OutputBufferLength,
+        YUMEDISK_WRITE_SLOT_HEADER_BASE_SIZE,
+        &outputBuffer,
+        &outputSize);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    return ControlProxySubmitSlotAsync(
+        Context,
+        Request,
+        SessionId,
+        InputMessage->Message->Header.TxId,
+        InputMessage->Message->Header.TargetId,
+        YumeDiskSlotTypeWrite,
+        outputBuffer,
+        outputSize);
+}
+
+static
+VOID
+ControlHandleReadAck(
+    _In_ PCTRL_FILE_CONTEXT Context,
+    _In_ WDFREQUEST Request,
+    _In_ const CTRL_INPUT_MESSAGE* InputMessage,
+    _In_ size_t OutputBufferLength,
+    _In_ UINT64 SessionId
+)
+{
+    NTSTATUS status;
+    PUCHAR outputBuffer;
+    size_t outputSize;
+    PYUMEDISK_READ_ACK readAck;
+
+    if (InputMessage->Message->Header.PayloadLength != sizeof(YUMEDISK_READ_ACK)) {
+        WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    readAck = (PYUMEDISK_READ_ACK)InputMessage->Message->Payload;
+    if (readAck->EventId == 0 ||
+        readAck->KernelVa != 0 ||
+        InputMessage->Message->Header.TargetId > YUMEDISK_MAX_USABLE_TARGET_ID) {
+        WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    outputBuffer = NULL;
+    outputSize = 0;
+    if (readAck->DataLength != 0) {
+        status = ControlGetOutputBuffer(
+            Request,
+            OutputBufferLength,
+            readAck->DataLength,
+            &outputBuffer,
+            &outputSize);
+        if (!NT_SUCCESS(status)) {
+            WdfRequestComplete(Request, status);
+            return;
+        }
+
+        if (readAck->DataLength > outputSize) {
+            WdfRequestComplete(Request, STATUS_BUFFER_TOO_SMALL);
+            return;
+        }
+    }
+
+    status = ControlProxyReadAck(
+        Context,
+        SessionId,
+        &InputMessage->Message->Header,
+        readAck,
+        outputBuffer);
+    WdfRequestCompleteWithInformation(Request, status, 0);
 }
 
 VOID
@@ -265,12 +480,55 @@ ControlEvtIoDeviceControl(
         }
         ControlSessionRelease(sessionContext);
         return;
-    case YumeDiskCommandPostReadSlot:
-    case YumeDiskCommandPostWriteSlot:
-    case YumeDiskCommandReadAck:
     case YumeDiskCommandWriteAckBatch:
+        status = ControlValidateWriteAckBatchPayload(
+            inputMessage.Message->Payload,
+            inputMessage.Message->Header.PayloadLength);
+        if (!NT_SUCCESS(status)) {
+            ControlSessionRelease(sessionContext);
+            WdfRequestComplete(Request, status);
+            return;
+        }
+
+        status = ControlProxyMessage(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
+        if (!NT_SUCCESS(status)) {
+            WdfRequestComplete(Request, status);
+        }
+        ControlSessionRelease(sessionContext);
+        return;
     case YumeDiskCommandCancelSlot:
-        ControlCompleteUnsupportedDataCommand(sessionContext, Request);
+        status = ControlValidateCancelSlotPayload(
+            inputMessage.Message->Payload,
+            inputMessage.Message->Header.PayloadLength);
+        if (!NT_SUCCESS(status)) {
+            ControlSessionRelease(sessionContext);
+            WdfRequestComplete(Request, status);
+            return;
+        }
+
+        status = ControlProxyMessage(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
+        if (!NT_SUCCESS(status)) {
+            WdfRequestComplete(Request, status);
+        }
+        ControlSessionRelease(sessionContext);
+        return;
+    case YumeDiskCommandPostReadSlot:
+        status = ControlHandlePostReadSlot(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
+        if (!NT_SUCCESS(status) && status != STATUS_PENDING) {
+            ControlSessionRelease(sessionContext);
+            WdfRequestComplete(Request, status);
+        }
+        return;
+    case YumeDiskCommandPostWriteSlot:
+        status = ControlHandlePostWriteSlot(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
+        if (!NT_SUCCESS(status) && status != STATUS_PENDING) {
+            ControlSessionRelease(sessionContext);
+            WdfRequestComplete(Request, status);
+        }
+        return;
+    case YumeDiskCommandReadAck:
+        ControlHandleReadAck(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
+        ControlSessionRelease(sessionContext);
         return;
     default:
         ControlSessionRelease(sessionContext);
