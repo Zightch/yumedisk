@@ -294,9 +294,6 @@ DiskDriverEntry(
         RegistryPath,
         (PHW_INITIALIZATION_DATA)&hwInitData,
         NULL);
-    if (!NT_SUCCESS(status)) {
-        DbgPrint("%s StorPortInitialize failed: %08x\n", DRIVER_NAME, status);
-    }
 
     return status;
 }

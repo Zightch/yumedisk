@@ -14,11 +14,6 @@ ControlEvtFileCreate(
 
     context = ControlGetContext(Device);
     status = ControlSessionTryOpen(context, FileObject, NULL);
-    DbgPrint(
-        "%s ControlEvtFileCreate: file=%p status=%08X\n",
-        DRIVER_NAME,
-        FileObject,
-        status);
     WdfRequestComplete(Request, status);
 }
 
@@ -32,10 +27,6 @@ ControlEvtFileCleanup(
 
     device = WdfFileObjectGetDevice(FileObject);
     context = ControlGetContext(device);
-    DbgPrint(
-        "%s ControlEvtFileCleanup: file=%p\n",
-        DRIVER_NAME,
-        FileObject);
     ControlSessionCleanup(context, FileObject);
 }
 

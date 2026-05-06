@@ -44,19 +44,8 @@ ControlSessionCreateResources(
         attributes.ParentObject = FileObject;
         status = WdfWaitLockCreate(&attributes, &FileContext->SessionLock);
         if (!NT_SUCCESS(status)) {
-            DbgPrint(
-                "%s ControlSessionCreateResources: WdfWaitLockCreate failed file=%p status=%08X\n",
-                DRIVER_NAME,
-                FileObject,
-                status);
             return status;
         }
-
-        DbgPrint(
-            "%s ControlSessionCreateResources: WdfWaitLockCreate ok file=%p lock=%p\n",
-            DRIVER_NAME,
-            FileObject,
-            FileContext->SessionLock);
 
         KeInitializeEvent(&FileContext->InFlightZeroEvent, NotificationEvent, TRUE);
         FileContext->InFlightRequestCount = 0;
@@ -71,19 +60,8 @@ ControlSessionCreateResources(
         attributes.ExecutionLevel = WdfExecutionLevelPassive;
         status = WdfTimerCreate(&timerConfig, &attributes, &FileContext->WatchdogTimer);
         if (!NT_SUCCESS(status)) {
-            DbgPrint(
-                "%s ControlSessionCreateResources: WdfTimerCreate failed file=%p status=%08X\n",
-                DRIVER_NAME,
-                FileObject,
-                status);
             return status;
         }
-
-        DbgPrint(
-            "%s ControlSessionCreateResources: WdfTimerCreate ok file=%p timer=%p\n",
-            DRIVER_NAME,
-            FileObject,
-            FileContext->WatchdogTimer);
     }
 
     return STATUS_SUCCESS;
@@ -216,21 +194,12 @@ ControlSessionTryOpen(
     handle = NULL;
     sessionId = 0;
 
-    DbgPrint(
-        "%s ControlSessionTryOpen: enter file=%p\n",
-        DRIVER_NAME,
-        FileObject);
-
     WdfSpinLockAcquire(Context->OpenLock);
     if (Context->OpenCount != 0) {
         WdfSpinLockRelease(Context->OpenLock);
         if (SessionId != NULL) {
             *SessionId = 0;
         }
-        DbgPrint(
-            "%s ControlSessionTryOpen: reject sharing violation file=%p\n",
-            DRIVER_NAME,
-            FileObject);
         return STATUS_SHARING_VIOLATION;
     }
 
@@ -244,11 +213,6 @@ ControlSessionTryOpen(
         if (SessionId != NULL) {
             *SessionId = 0;
         }
-        DbgPrint(
-            "%s ControlSessionTryOpen: create resources failed file=%p status=%08X\n",
-            DRIVER_NAME,
-            FileObject,
-            status);
         return status;
     }
 
@@ -258,11 +222,6 @@ ControlSessionTryOpen(
         if (SessionId != NULL) {
             *SessionId = 0;
         }
-        DbgPrint(
-            "%s ControlSessionTryOpen: open miniport failed file=%p status=%08X\n",
-            DRIVER_NAME,
-            FileObject,
-            status);
         return status;
     }
 
@@ -281,13 +240,6 @@ ControlSessionTryOpen(
         *SessionId = sessionId;
     }
 
-    DbgPrint(
-        "%s ControlSessionTryOpen: success file=%p session=%I64u miniport=%p\n",
-        DRIVER_NAME,
-        FileObject,
-        sessionId,
-        handle);
-
     return STATUS_SUCCESS;
 }
 
@@ -301,26 +253,12 @@ ControlSessionCleanup(
 
     fileContext = ControlGetFileContext(FileObject);
 
-    DbgPrint(
-        "%s ControlSessionCleanup: enter file=%p state=%lu miniport=%p session=%I64u\n",
-        DRIVER_NAME,
-        FileObject,
-        fileContext->State,
-        fileContext->MiniportHandle,
-        fileContext->SessionId);
-
     if (fileContext->WatchdogTimer != NULL) {
         WdfTimerStop(fileContext->WatchdogTimer, TRUE);
     }
 
     if (fileContext->SessionLock != NULL) {
         WdfWaitLockAcquire(fileContext->SessionLock, NULL);
-        if (fileContext->State == CtrlSessionStateActive && fileContext->MiniportHandle != NULL) {
-            DbgPrint(
-                "%s ControlSessionCleanup: scheduling session cleanup file=%p\n",
-                DRIVER_NAME,
-                FileObject);
-        }
         fileContext->State = CtrlSessionStateClosed;
         WdfWaitLockRelease(fileContext->SessionLock);
 
@@ -335,10 +273,6 @@ ControlSessionCleanup(
     }
 
     ControlSessionReleaseDeviceOpen(Context, FileObject);
-    DbgPrint(
-        "%s ControlSessionCleanup: done file=%p\n",
-        DRIVER_NAME,
-        FileObject);
 }
 
 NTSTATUS
