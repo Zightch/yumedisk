@@ -18,18 +18,6 @@ ControlProxyCommand(
     _Out_ ULONG* BytesReturned
 );
 
-NTSTATUS
-ControlProxySubmitSlotAsync(
-    _In_ PCTRL_FILE_CONTEXT Context,
-    _In_ WDFREQUEST Request,
-    _In_ UINT64 SessionId,
-    _In_ UINT64 SlotId,
-    _In_ UINT32 TargetId,
-    _In_ UINT32 SlotType,
-    _In_ PUCHAR DirectBuffer,
-    _In_ size_t DirectBufferSize
-);
-
 VOID
 ControlCloseMiniportHandle(
     _Inout_ PCTRL_FILE_CONTEXT Context

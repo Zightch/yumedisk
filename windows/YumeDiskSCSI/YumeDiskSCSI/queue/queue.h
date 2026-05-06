@@ -39,34 +39,6 @@ DiskCompleteAllPendingIo(
 );
 
 NTSTATUS
-DiskQueueSubmitSlot(
-    _In_ PVOID DeviceExtension,
-    _In_ PSTORAGE_REQUEST_BLOCK Srb,
-    _Inout_ PYUMEDISK_MESSAGE Message,
-    _Out_ BOOLEAN* RequestCompleted
-);
-
-NTSTATUS
-DiskQueueReadAck(
-    _In_ PVOID DeviceExtension,
-    _Inout_ PYUMEDISK_MESSAGE Message
-);
-
-NTSTATUS
-DiskQueueWriteAckBatch(
-    _In_ PVOID DeviceExtension,
-    _In_ PSTORAGE_REQUEST_BLOCK Srb,
-    _Inout_ PYUMEDISK_MESSAGE Message,
-    _Out_ BOOLEAN* RequestCompleted
-);
-
-NTSTATUS
-DiskQueueCancelSlot(
-    _In_ PVOID DeviceExtension,
-    _Inout_ PYUMEDISK_MESSAGE Message
-);
-
-NTSTATUS
 DiskQueueReadSrb(
     _In_ PVOID DeviceExtension,
     _In_ PSTORAGE_REQUEST_BLOCK Srb,
