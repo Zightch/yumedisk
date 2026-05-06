@@ -143,9 +143,9 @@ DiskStartStorageRequest(
     case SRB_FUNCTION_RESET_BUS:
 #endif
         if (DiskExtractTargetId(Srb, &targetId)) {
-            DiskCompleteTargetPendingIo(DeviceExtension, targetId, STATUS_CANCELLED);
+            DiskCompleteTargetPending(DeviceExtension, targetId, STATUS_CANCELLED);
         } else {
-            DiskCompleteAllPendingIo(DeviceExtension, STATUS_CANCELLED);
+            DiskCompleteAllPending(DeviceExtension, STATUS_CANCELLED);
         }
         Srb->SrbStatus = SRB_STATUS_SUCCESS;
         StorPortNotification(RequestComplete, DeviceExtension, Srb);
@@ -248,7 +248,7 @@ DiskResetBus(
     _In_ ULONG PathId
 )
 {
-    DiskCompleteAllPendingIo(DeviceExtension, STATUS_CANCELLED);
+    DiskCompleteAllPending(DeviceExtension, STATUS_CANCELLED);
     UNREFERENCED_PARAMETER(PathId);
     return TRUE;
 }

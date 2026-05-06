@@ -138,6 +138,14 @@ ControlSendMiniportBuffer(
         }
     }
 
+    if (status == STATUS_IO_DEVICE_ERROR &&
+        BufferCapacity >= (ULONG)YUMEDISK_MESSAGE_BASE_SIZE) {
+        message = (PYUMEDISK_MESSAGE)Buffer;
+        if (message->Header.Command == YumeDiskCommandSubmitSlot) {
+            status = STATUS_CANCELLED;
+        }
+    }
+
     ControlFree(ioctlBuffer);
     return status;
 }
