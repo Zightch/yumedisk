@@ -1,6 +1,8 @@
-# YumeDisk 数据通路与队列概览
+# YumeDisk 旧 WaitEvent 数据通路与队列概览
 
-本文只描述当前实现，不讨论理想架构。
+> 历史基线文档：本文记录旧 `WAIT_EVENT -> inline data -> READ_REPLY/WRITE_ACK` 数据通路，用于理解性能瓶颈和故障背景。最终收口口径见 [App-owned media queue 协议设计](./app-owned-media-queue-protocol-design.md)，正式文档不再把本文描述的旧链路作为目标方案。
+
+本文只描述旧 WaitEvent 基线，不作为最终多盘目标方案。
 
 核心约束只有一条:
 
@@ -216,7 +218,7 @@ flowchart TD
 - `writeAckBuffer`
   用来承载 write ack。
 - `diskLock`
-  当前实现下，app 对 `medium` 的访问是串行保护的。
+  旧基线下，app 对 `medium` 的访问是串行保护的。
 
 ## 6. 数据传输相关的关键事实
 
@@ -232,12 +234,12 @@ flowchart TD
 - app 侧通过 `TxId` 进行匹配并回包。
 - miniport 收到 `READ_REPLY` 或 `WRITE_ACK` 后，才完成原始 SRB。
 
-### 6.3 当前实现依赖 inline data
+### 6.3 旧基线依赖 inline data
 
 - 写事件通过 `WAIT_EVENT` 的返回消息直接携带写入数据。
 - 读事件的数据不走 `WAIT_EVENT` 返回，而是由 app 在后续 `READ_REPLY` 中回传。
 
-### 6.4 当前实现没有真正使用内核介质缓冲
+### 6.4 旧基线没有真正使用内核介质缓冲
 
 - `YUME_DISK` 结构里有 `Buffer` 字段。
 - 但当前读写路径并不直接对这个字段进行数据面访问。

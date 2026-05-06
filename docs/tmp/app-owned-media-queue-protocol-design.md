@@ -789,10 +789,10 @@ YumeDiskCommandCancelSlot       = 25
 
 其中:
 
-- `PostReadSlot` / `PostWriteSlot` 是 App -> KMDF 的 direct IOCTL 语义；`PostWriteSlot` 可顺带携带上一批已完成 fragment 的 ACK trailer。
+- `PostReadSlot` / `PostWriteSlot` 是 App -> KMDF 的 direct IOCTL 语义；`PostWriteSlot` 只提交 write slot，输入 payload 固定为空。
 - `SubmitSlot` 是 KMDF -> SCSI 的小描述符语义。
 - `ReadAck` 包含 `eventId + data`。
-- `WriteAckBatch` 包含一个或多个 `YUMEDISK_WRITE_ACK_RANGE`，主要作为 flush / drain / error recovery 的兜底路径，也可复用为 `PostWriteSlot` 的输入尾部。
+- `WriteAckBatch` 包含一个或多个 `YUMEDISK_WRITE_ACK_RANGE`，是唯一写确认入口，不再复用为 `PostWriteSlot` 的输入尾部。
 - `CancelSlot` 用于 App cancel/cleanup 时撤销尚未被 SCSI 消费的 slot。
 
 ## 11. 推荐落地顺序
