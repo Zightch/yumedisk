@@ -283,6 +283,7 @@ bool BeginAsyncIoControl(
     HANDLE eventHandle;
     OVERLAPPED resetOverlapped{};
     DWORD transferred = 0;
+    DWORD error = ERROR_SUCCESS;
     BOOL ok;
 
     if (!EnsureOverlappedEvent(overlapped)) {
@@ -317,11 +318,12 @@ bool BeginAsyncIoControl(
         return true;
     }
 
+    error = GetLastError();
     if (lastError != nullptr) {
-        *lastError = GetLastError();
+        *lastError = error;
     }
 
-    return GetLastError() == ERROR_IO_PENDING;
+    return error == ERROR_IO_PENDING;
 }
 
 bool FinishAsyncIoControl(
@@ -1093,10 +1095,10 @@ bool PostReadSlotAsync(
             &slotContext->overlapped,
             &error,
             nullptr)) {
-        context->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
         if (IsExpectedWorkerStop(context, disk)) {
             return true;
         }
+        context->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
         if (IsRecoverableSlotError(error)) {
             ScheduleRecoverableRetry(&slotContext->retryAfter);
             LogLine(context, L"POST_READ_SLOT transient failure, error=" + std::to_wstring(error));
@@ -1142,10 +1144,10 @@ bool PostWriteSlotAsync(
             &slotContext->overlapped,
             &error,
             nullptr)) {
-        context->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
         if (IsExpectedWorkerStop(context, disk)) {
             return true;
         }
+        context->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
         if (IsRecoverableSlotError(error)) {
             ScheduleRecoverableRetry(&slotContext->retryAfter);
             LogLine(context, L"POST_WRITE_SLOT transient failure, error=" + std::to_wstring(error));
