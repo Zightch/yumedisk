@@ -4,7 +4,7 @@
 
 - `YumeDiskKMDF`：KMDF 控制驱动，负责 App 会话、watchdog、direct I/O slot transport 和 miniport 代理。
 - `YumeDiskSCSI`：Storport miniport，负责向 Windows 暴露 SCSI target、处理系统 READ/WRITE SRB、维护 per-target 数据面队列。
-- `RWTestApp`：用户态 App/测试程序，负责实际介质、建盘删盘、per-disk slot engine 和压测验证。
+- `RWTestApp`：用户态 App/测试程序，负责实际介质、建盘删盘、per-disk workers 和压测验证。
 
 早期文档中的 `MyCtl`、`MyDisk`、`MyApp` 只作为历史逻辑名保留；正式文档不再用它们描述新的多盘数据面目标。
 
@@ -28,5 +28,5 @@
 - 旧 `WAIT_EVENT` inline payload 路径不再作为目标实现保留。
 - `POST_WRITE_SLOT` 只提交 write slot；写确认统一通过独立 `WRITE_ACK_BATCH`。
 - `YumeDiskKMDF` 不维护自己的数据面状态机，只做 session/watchdog/direct-I/O transport。
-- `RWTestApp` 按磁盘独立维护 slot engine、queue depth、介质和 ACK flush，不回到全局共享 worker pool。
+- `RWTestApp` 按磁盘独立维护 worker 组、queue depth、介质和 ACK flush，不回到跨盘共享 worker pool。
 - 该虚拟盘只用于普通数据盘，不支持系统盘、启动盘、分页盘。

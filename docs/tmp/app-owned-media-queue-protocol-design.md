@@ -520,7 +520,7 @@ complete original WRITE SRB
 ```mermaid
 flowchart TB
     subgraph AppSide[App side]
-        SE[Per-disk slot engine]
+        SE[Per-disk workers]
         RM[App medium]
         RQ[Per-disk pre-posted read slots]
         WQ[Per-disk pre-posted write slots]

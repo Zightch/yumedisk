@@ -1,34 +1,31 @@
-# App-Owned Media Queue TODO
+# Kernel CPU TODO
 
 Source:
 - [development-principles.md](../development-principles.md)
 - [workflow.md](../workflow.md)
 - [app-owned-media-queue-protocol-design.md](./app-owned-media-queue-protocol-design.md)
+- [kmdf-kernel-cpu-reduction-draft.md](./kmdf-kernel-cpu-reduction-draft.md)
 - [progress README](../progress/README.md)
 
 ## Current Goal
 
-按 `app-owned-media-queue-protocol-design.md` 的最终模型，直接重建面向多盘的唯一数据面结构：`KMDF` 负责单一会话状态管理与 slot transport，`SCSI` 负责 per-target 单盘队列，`App` 负责 per-disk slot engine 与全并发执行；不再先做一套“临时单盘结构”再二次改造成多盘，也不再继续在 `cdcb7e25` 之后形成的复合状态机上补丁推进。
+在保持当前 `ct -> 压测 -> rm` 闭环稳定、单盘顺序吞吐约 `600 MB/s`、多盘并发稳定的前提下，压低单盘压测时明显偏高的内核 CPU 占用。
 
 ## Current Boundary
 
-- 不保留旧 `WAIT_EVENT` inline data 路径，也不保留任何旧 payload 兼容。
-- 不继续在当前多盘并发数据面上修修补补；当前不稳定数据面已经被删回控制面骨架，不再作为继续演进的基础。
-- 结构从第一步就按多盘目标落，但只能保留一条实现路径：`KMDF session state -> SCSI per-target queue -> App per-disk engine`。
-- 保留并复用已经相对稳定的控制面边界：`session lifecycle`、`QueryInfo`、`CreateDisk`、`RemoveDisk`、`RemoveAllDisks`、`QueryDebugState`。
-- 数据面只允许一条协议链路：`POST_READ_SLOT`、`POST_WRITE_SLOT`、`READ_ACK`、`WRITE_ACK_BATCH`。
-- KMDF 继续只承担 `session + direct-IO slot transport`，不引入新的协议层或兼容桥。
-- SCSI 不允许回到 adapter 级共享数据面锁和共享队列；每个 target 必须自带独立读写队列和推进状态。
-- App 不允许回到全局共享 worker pool 或全局共享数据面队列深度；并发粒度必须按盘独立。
-- 当前代码现实边界：`KMDF` 会话状态管理和 `SCSI` per-target 队列都已经重建完成；miniport 侧已经具备 `SubmitSlot / ReadAck / WriteAckBatch / CancelSlot` 与 per-target `pending read/write` 的真实实现，但 `KMDF` 前门的 `POST_READ_SLOT / POST_WRITE_SLOT / READ_ACK / WRITE_ACK_BATCH / CANCEL_SLOT` 仍然是骨架，`RWTestApp` 也仍然只是控制台骨架。
-- 当前 SCSI 写分片已经收敛到“同一 target 的活跃 write slots 使用单一 payload 大小”这一唯一边界；下一步 App 必须按盘固定 slot bytes，不再尝试多种 write slot 形状混跑。
-- 每完成一个子步骤，必须先归档、更新当前 `todo`、提交，然后停止，等待下一轮推进。
+- 不回退当前 `App per-disk bounded workers` 数据面模型。
+- 不回退 `SCSI per-target queue` 和当前取消语义。
+- 系统侧取消逻辑只追到 `SCSI`，不新增“系统取消一路追到 App”的全链路复杂取消协议。
+- 下一阶段优先怀疑 `KMDF async slot transport` 的每-slot 固定开销，不先重写协议，不先改 `SCSI` 基本队列模型。
+- 当前协议边界保持不变：`POST_READ_SLOT`、`POST_WRITE_SLOT`、`READ_ACK`、`WRITE_ACK_BATCH`、`CANCEL_SLOT`。
+- 只有在 `KMDF` 热路径对象复用之后 CPU 仍明显偏高，才考虑第二阶段协议级降命令数优化。
 
 ## Pending Substeps
 
-1. 先验证并打通单盘最终链路：`ct -> 枚举 -> probe read -> steady-state read/write -> ctrl+c / rm all / App 退出`，要求不再出现“有设备无盘”、probe read 卡死、会话残留或收尾卡住。
-2. 按最终目标验证多盘并发：在单盘最终链路稳定后，先双盘 `Q1T1`，再 `Q2/Q8/Q32`，要求不再出现 100% 无读写假死、盘被误判死亡、会话残留或全局串扰。
+1. 收敛 `KMDF` 热路径对象生命周期，去掉每-slot `alloc/free IRP/work item/buffer`。
+2. 保持当前取消模型不变，确认对象池不会破坏 cleanup、session close 和 late ACK 处理。
+3. 在不改协议的前提下重新测单盘吞吐与 kernel CPU。
 
 ## Current Unique Next Step
 
-先验证并打通单盘最终链路：在现有 `KMDF session state + async slot transport + SCSI per-target queue + App per-disk slot engine` 的唯一结构上，先确认 `ct -> 枚举 -> probe read -> steady-state read/write -> ctrl+c / rm all / App 退出` 已经全部真实跑通，再进入双盘和高队列深度验证。
+先按 [kmdf-kernel-cpu-reduction-draft.md](./kmdf-kernel-cpu-reduction-draft.md) 收敛 `KMDF async slot transport` 的对象池和提交模型，优先去掉每-slot `IoAllocateIrp + IoAllocateWorkItem + ControlAlloc` 热路径固定开销。

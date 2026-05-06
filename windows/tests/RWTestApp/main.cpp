@@ -42,6 +42,10 @@ constexpr size_t kDefaultWriteSlotBytes = 1024 * 1024;
 constexpr uint64_t kDefaultDiskSizeBytes = 64ull * 1024ull * 1024ull;
 constexpr size_t kMediumStripeBytes = 256 * 1024;
 constexpr size_t kMaxAckBatchRanges = 128;
+constexpr size_t kMaxReadWorkersPerDisk = 4;
+constexpr size_t kMaxWriteWorkersPerDisk = 2;
+constexpr size_t kReadSlotsPerWorkerTarget = 8;
+constexpr size_t kWriteSlotsPerWorkerTarget = 16;
 constexpr DWORD kWriteAckFlushDelayMs = 10;
 constexpr DWORD kRecoverableErrorRetryDelayMs = 10;
 constexpr DWORD kSlotEnginePollMs = 10;
@@ -142,9 +146,12 @@ struct ManagedDisk {
     std::vector<unsigned char> medium;
     std::vector<std::unique_ptr<std::shared_mutex>> stripeLocks;
     std::atomic<bool> stop{false};
-    std::thread readPlaneThread;
-    std::thread writePlaneThread;
+    std::vector<std::thread> readWorkers;
+    std::vector<std::thread> writeWorkers;
+    std::thread writeAckFlushThread;
     size_t slotDepth = 0;
+    size_t readWorkerCount = 0;
+    size_t writeWorkerCount = 0;
     std::mutex ackLock;
     std::deque<YUMEDISK_WRITE_ACK_RANGE> pendingWriteAcks;
     std::atomic<uint32_t> pendingWriteAckCount{0};
@@ -945,6 +952,24 @@ size_t ComputeStripeCount(uint64_t diskSizeBytes) {
     }
 
     return static_cast<size_t>(stripeCount64);
+}
+
+size_t ComputeWorkerCount(size_t slotDepth, size_t targetSlotsPerWorker, size_t maxWorkers) {
+    if (slotDepth == 0) {
+        return 1;
+    }
+
+    size_t workerCount = (slotDepth + targetSlotsPerWorker - 1) / targetSlotsPerWorker;
+    workerCount = std::max<size_t>(1, workerCount);
+    workerCount = std::min(workerCount, maxWorkers);
+    workerCount = std::min(workerCount, slotDepth);
+    return workerCount;
+}
+
+size_t ComputeWorkerSlotCount(size_t slotDepth, size_t workerCount, size_t workerIndex) {
+    const size_t base = slotDepth / workerCount;
+    const size_t remainder = slotDepth % workerCount;
+    return base + (workerIndex < remainder ? 1 : 0);
 }
 
 std::vector<size_t> ComputeStripeIndices(size_t offset, size_t length) {
@@ -1783,14 +1808,20 @@ bool DrainCompletedWritePlane(
     }
 }
 
-void RunManagedDiskReadPlane(BackendContext* context, const std::shared_ptr<ManagedDisk>& disk) {
-    std::vector<ReadSlotContext> readContexts(disk->slotDepth);
-    std::vector<ReadAckContext> readAckContexts(disk->slotDepth);
+void JoinManagedDiskWorkers(ManagedDisk* disk);
+
+void RunManagedDiskReadWorker(
+    BackendContext* context,
+    const std::shared_ptr<ManagedDisk>& disk,
+    size_t slotCount
+) {
+    std::vector<ReadSlotContext> readContexts(slotCount);
+    std::vector<ReadAckContext> readAckContexts(slotCount);
     bool shuttingDown = false;
     bool cancelIssued = false;
 
     try {
-        for (size_t index = 0; index < disk->slotDepth; ++index) {
+        for (size_t index = 0; index < slotCount; ++index) {
             readContexts[index].requestBuffer = MakeMessageBuffer(YumeDiskCommandPostReadSlot, 0);
             if (!EnsureOverlappedEvent(&readContexts[index].overlapped)) {
                 throw std::runtime_error("read slot overlapped event");
@@ -1896,7 +1927,7 @@ void RunManagedDiskReadPlane(BackendContext* context, const std::shared_ptr<Mana
         if (waitStatus == WAIT_FAILED) {
             if (!stopRequested) {
                 context->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
-                LogLine(context, L"read plane wait failed, error=" + std::to_wstring(GetLastError()));
+                LogLine(context, L"read worker wait failed, error=" + std::to_wstring(GetLastError()));
                 shuttingDown = true;
                 disk->stop.store(true, std::memory_order_relaxed);
             }
@@ -1913,31 +1944,27 @@ void RunManagedDiskReadPlane(BackendContext* context, const std::shared_ptr<Mana
     CloseReadAckContexts(&readAckContexts);
 }
 
-void RunManagedDiskWritePlane(BackendContext* context, const std::shared_ptr<ManagedDisk>& disk) {
+void RunManagedDiskWriteWorker(
+    BackendContext* context,
+    const std::shared_ptr<ManagedDisk>& disk,
+    size_t slotCount
+) {
     const size_t slotCapacity = YUMEDISK_WRITE_SLOT_HEADER_BASE_SIZE + context->config.writeSlotBytes;
-    std::vector<WriteSlotContext> writeContexts(disk->slotDepth);
-    WriteAckFlushContext writeAckContext;
+    std::vector<WriteSlotContext> writeContexts(slotCount);
     bool shuttingDown = false;
     bool cancelIssued = false;
-    SteadyClock::time_point nextAckFlushAt = SteadyClock::now() + std::chrono::milliseconds(kWriteAckFlushDelayMs);
 
     try {
-        for (size_t index = 0; index < disk->slotDepth; ++index) {
+        for (size_t index = 0; index < slotCount; ++index) {
             writeContexts[index].requestBuffer = MakeMessageBuffer(YumeDiskCommandPostWriteSlot, 0);
             writeContexts[index].slotBuffer.resize(slotCapacity, 0);
             if (!EnsureOverlappedEvent(&writeContexts[index].overlapped)) {
                 throw std::runtime_error("write slot overlapped event");
             }
         }
-
-        writeAckContext.requestBuffer = MakeMessageBuffer(YumeDiskCommandWriteAckBatch, 0);
-        if (!EnsureOverlappedEvent(&writeAckContext.overlapped)) {
-            throw std::runtime_error("write ack overlapped event");
-        }
     } catch (const std::exception&) {
         context->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
         CloseWriteSlotContexts(&writeContexts);
-        CloseOverlappedEvent(&writeAckContext.overlapped);
         return;
     }
 
@@ -1958,47 +1985,15 @@ void RunManagedDiskWritePlane(BackendContext* context, const std::shared_ptr<Man
                     break;
                 }
             }
-
-            if (!shuttingDown &&
-                !writeAckContext.active &&
-                !writeAckContext.hasPayload &&
-                disk->pendingWriteAckCount.load(std::memory_order_relaxed) != 0 &&
-                now >= nextAckFlushAt) {
-                writeAckContext.ranges = StealWriteAckRanges(disk.get(), kMaxAckBatchRanges);
-                writeAckContext.hasPayload = !writeAckContext.ranges.empty();
-                writeAckContext.retryAfter = SteadyClock::time_point::min();
-            }
-
-            if (!shuttingDown &&
-                writeAckContext.hasPayload &&
-                !writeAckContext.active &&
-                IsRetryReady(writeAckContext.retryAfter, now)) {
-                if (!BeginWriteAckFlushAsync(context, disk.get(), &writeAckContext)) {
-                    shuttingDown = true;
-                    disk->stop.store(true, std::memory_order_relaxed);
-                } else if (writeAckContext.active) {
-                    nextAckFlushAt = SteadyClock::now() + std::chrono::milliseconds(kWriteAckFlushDelayMs);
-                }
-            }
-        } else {
-            ClearPendingWriteAcks(disk.get());
-            if (!writeAckContext.active) {
-                ResetWriteAckFlushPayload(&writeAckContext);
-            }
-            if (!cancelIssued) {
-                CancelActiveWriteSlots(context, disk.get(), writeContexts);
-                CancelActiveWriteAckFlush(context, &writeAckContext);
-                cancelIssued = true;
-            }
+        } else if (!cancelIssued) {
+            CancelActiveWriteSlots(context, disk.get(), writeContexts);
+            cancelIssued = true;
         }
 
         for (const auto& slotContext : writeContexts) {
             if (slotContext.active) {
                 waitHandles.push_back(slotContext.overlapped.hEvent);
             }
-        }
-        if (writeAckContext.active) {
-            waitHandles.push_back(writeAckContext.overlapped.hEvent);
         }
 
         if ((stopRequested || shuttingDown) && waitHandles.empty()) {
@@ -2022,33 +2017,131 @@ void RunManagedDiskWritePlane(BackendContext* context, const std::shared_ptr<Man
         if (waitStatus == WAIT_FAILED) {
             if (!stopRequested) {
                 context->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
-                LogLine(context, L"write plane wait failed, error=" + std::to_wstring(GetLastError()));
+                LogLine(context, L"write worker wait failed, error=" + std::to_wstring(GetLastError()));
                 shuttingDown = true;
                 disk->stop.store(true, std::memory_order_relaxed);
             }
             continue;
         }
 
-        if (!DrainCompletedWritePlane(context, disk.get(), &writeContexts, &writeAckContext, slotCapacity)) {
+        WriteAckFlushContext unusedAckContext{};
+        if (!DrainCompletedWritePlane(context, disk.get(), &writeContexts, &unusedAckContext, slotCapacity)) {
+            shuttingDown = true;
+            disk->stop.store(true, std::memory_order_relaxed);
+        }
+    }
+
+    CloseWriteSlotContexts(&writeContexts);
+}
+
+void RunManagedDiskWriteAckFlushWorker(BackendContext* context, const std::shared_ptr<ManagedDisk>& disk) {
+    WriteAckFlushContext writeAckContext;
+    bool shuttingDown = false;
+    bool cancelIssued = false;
+    SteadyClock::time_point nextAckFlushAt = SteadyClock::now() + std::chrono::milliseconds(kWriteAckFlushDelayMs);
+
+    try {
+        writeAckContext.requestBuffer = MakeMessageBuffer(YumeDiskCommandWriteAckBatch, 0);
+        if (!EnsureOverlappedEvent(&writeAckContext.overlapped)) {
+            throw std::runtime_error("write ack overlapped event");
+        }
+    } catch (const std::exception&) {
+        context->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
+        CloseOverlappedEvent(&writeAckContext.overlapped);
+        return;
+    }
+
+    for (;;) {
+        const bool stopRequested = shuttingDown || IsExpectedWorkerStop(context, disk.get());
+        const SteadyClock::time_point now = SteadyClock::now();
+
+        if (!stopRequested) {
+            if (!writeAckContext.active &&
+                !writeAckContext.hasPayload &&
+                disk->pendingWriteAckCount.load(std::memory_order_relaxed) != 0 &&
+                now >= nextAckFlushAt) {
+                writeAckContext.ranges = StealWriteAckRanges(disk.get(), kMaxAckBatchRanges);
+                writeAckContext.hasPayload = !writeAckContext.ranges.empty();
+                writeAckContext.retryAfter = SteadyClock::time_point::min();
+            }
+
+            if (writeAckContext.hasPayload &&
+                !writeAckContext.active &&
+                IsRetryReady(writeAckContext.retryAfter, now)) {
+                if (!BeginWriteAckFlushAsync(context, disk.get(), &writeAckContext)) {
+                    shuttingDown = true;
+                    disk->stop.store(true, std::memory_order_relaxed);
+                } else if (writeAckContext.active) {
+                    nextAckFlushAt = SteadyClock::now() + std::chrono::milliseconds(kWriteAckFlushDelayMs);
+                }
+            }
+        } else {
+            ClearPendingWriteAcks(disk.get());
+            if (!writeAckContext.active) {
+                ResetWriteAckFlushPayload(&writeAckContext);
+            }
+            if (!cancelIssued) {
+                CancelActiveWriteAckFlush(context, &writeAckContext);
+                cancelIssued = true;
+            }
+        }
+
+        if ((stopRequested || shuttingDown) && !writeAckContext.active) {
+            break;
+        }
+
+        if (!writeAckContext.active) {
+            Sleep(kSlotEnginePollMs);
+            continue;
+        }
+
+        const DWORD waitStatus = WaitForSingleObject(writeAckContext.overlapped.hEvent, kSlotEnginePollMs);
+        if (waitStatus == WAIT_TIMEOUT) {
+            continue;
+        }
+
+        if (waitStatus == WAIT_FAILED) {
+            if (!stopRequested) {
+                context->stats.commandFailures.fetch_add(1, std::memory_order_relaxed);
+                LogLine(context, L"write ack flush wait failed, error=" + std::to_wstring(GetLastError()));
+                shuttingDown = true;
+                disk->stop.store(true, std::memory_order_relaxed);
+            }
+            continue;
+        }
+
+        if (!HandleWriteAckFlushCompletion(context, disk.get(), &writeAckContext)) {
             shuttingDown = true;
             disk->stop.store(true, std::memory_order_relaxed);
         }
     }
 
     ClearPendingWriteAcks(disk.get());
-    CloseWriteSlotContexts(&writeContexts);
     CloseOverlappedEvent(&writeAckContext.overlapped);
 }
 
 bool StartManagedDiskWorkers(BackendContext* context, const std::shared_ptr<ManagedDisk>& disk) {
     try {
-        disk->readPlaneThread = std::thread(RunManagedDiskReadPlane, context, disk);
-        disk->writePlaneThread = std::thread(RunManagedDiskWritePlane, context, disk);
-    } catch (const std::exception&) {
-        if (disk->readPlaneThread.joinable()) {
-            disk->stop.store(true, std::memory_order_relaxed);
-            disk->readPlaneThread.join();
+        disk->readWorkers.reserve(disk->readWorkerCount);
+        for (size_t workerIndex = 0; workerIndex < disk->readWorkerCount; ++workerIndex) {
+            const size_t slotCount = ComputeWorkerSlotCount(disk->slotDepth, disk->readWorkerCount, workerIndex);
+            if (slotCount != 0) {
+                disk->readWorkers.emplace_back(RunManagedDiskReadWorker, context, disk, slotCount);
+            }
         }
+
+        disk->writeWorkers.reserve(disk->writeWorkerCount);
+        for (size_t workerIndex = 0; workerIndex < disk->writeWorkerCount; ++workerIndex) {
+            const size_t slotCount = ComputeWorkerSlotCount(disk->slotDepth, disk->writeWorkerCount, workerIndex);
+            if (slotCount != 0) {
+                disk->writeWorkers.emplace_back(RunManagedDiskWriteWorker, context, disk, slotCount);
+            }
+        }
+
+        disk->writeAckFlushThread = std::thread(RunManagedDiskWriteAckFlushWorker, context, disk);
+    } catch (const std::exception&) {
+        disk->stop.store(true, std::memory_order_relaxed);
+        JoinManagedDiskWorkers(disk.get());
         return false;
     }
 
@@ -2068,12 +2161,25 @@ void JoinManagedDiskWorkers(ManagedDisk* disk) {
         return;
     }
 
-    if (disk->readPlaneThread.joinable()) {
-        disk->readPlaneThread.join();
+    for (auto& worker : disk->readWorkers) {
+        if (worker.joinable()) {
+            worker.join();
+        }
     }
-    if (disk->writePlaneThread.joinable()) {
-        disk->writePlaneThread.join();
+    disk->readWorkers.clear();
+
+    for (auto& worker : disk->writeWorkers) {
+        if (worker.joinable()) {
+            worker.join();
+        }
     }
+    disk->writeWorkers.clear();
+
+    if (disk->writeAckFlushThread.joinable()) {
+        disk->writeAckFlushThread.join();
+    }
+
+    ClearPendingWriteAcks(disk);
 }
 
 void PrintBackendStats(const BackendContext* context) {
@@ -2127,6 +2233,8 @@ void PrintDebugSnapshot(BackendContext* context, const wchar_t* reason) {
     const auto disks = SnapshotManagedDisks(context);
     for (const auto& disk : disks) {
         std::wcout << L"debug_disk target=" << disk->targetId
+                   << L", read_workers=" << disk->readWorkerCount
+                   << L", write_workers=" << disk->writeWorkerCount
                    << L", pending_write_acks=" << disk->pendingWriteAckCount.load(std::memory_order_relaxed)
                    << L", posting_read_slots=" << disk->postingReadSlots.load(std::memory_order_relaxed)
                    << L", posting_write_slots=" << disk->postingWriteSlots.load(std::memory_order_relaxed)
@@ -2145,9 +2253,9 @@ void PrintRuntimeHelp() {
         << "commands:\n"
         << "  help           show commands\n"
         << "  query          query control protocol info\n"
-        << "  ct [target]    create one disk target and start its read/write planes\n"
-        << "  rm <target>    remove one disk target and stop its read/write planes\n"
-        << "  rm all         remove all disk targets and stop all planes\n"
+        << "  ct [target]    create one disk target and start its workers\n"
+        << "  rm <target>    remove one disk target and stop its workers\n"
+        << "  rm all         remove all disk targets and stop all workers\n"
         << "  ls             list managed targets and visible YumeDisk disks\n"
         << "  stats          print app backend counters\n"
         << "  debug          print app plus SCSI queue snapshot\n"
@@ -2155,7 +2263,7 @@ void PrintRuntimeHelp() {
         << "\n"
         << "runtime:\n"
         << "  heartbeat stays in the background while the app is running\n"
-        << "  each created disk gets one read plane thread, one write plane thread, and per-disk slot depth\n"
+        << "  each created disk gets a few read workers, a few write workers, one write-ack flush worker, and per-disk slot depth\n"
         << "  write slot bytes are fixed per disk for the whole session\n";
 }
 
@@ -2270,8 +2378,9 @@ void ListManagedDisks(BackendContext* context) {
         std::wcout << L"target=" << disk->targetId
                    << L", disk_bytes=" << disk->diskSizeBytes
                    << L", sector_size=" << disk->sectorSize
-                   << L", read_plane=" << (disk->readPlaneThread.joinable() ? L"running" : L"stopped")
-                   << L", write_plane=" << (disk->writePlaneThread.joinable() ? L"running" : L"stopped")
+                   << L", read_workers=" << disk->readWorkers.size()
+                   << L", write_workers=" << disk->writeWorkers.size()
+                   << L", write_ack_flush=" << (disk->writeAckFlushThread.joinable() ? L"running" : L"stopped")
                    << L", read_slot_depth=" << disk->slotDepth
                    << L", write_slot_depth=" << disk->slotDepth
                    << L", visible_path=" << (disk->identity.path.empty() ? L"<pending-enumeration>" : disk->identity.path)
@@ -2312,6 +2421,8 @@ bool CreateManagedDisk(BackendContext* context, ULONG targetId) {
         disk->sectorSize = context->config.sectorSize;
         disk->diskSizeBytes = context->config.diskSizeBytes;
         disk->slotDepth = context->config.queueDepth;
+        disk->readWorkerCount = ComputeWorkerCount(disk->slotDepth, kReadSlotsPerWorkerTarget, kMaxReadWorkersPerDisk);
+        disk->writeWorkerCount = ComputeWorkerCount(disk->slotDepth, kWriteSlotsPerWorkerTarget, kMaxWriteWorkersPerDisk);
         disk->medium.resize(static_cast<size_t>(context->config.diskSizeBytes), 0);
         const size_t stripeCount = ComputeStripeCount(context->config.diskSizeBytes);
         disk->stripeLocks.reserve(stripeCount);

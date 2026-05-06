@@ -370,8 +370,9 @@ RemoveAllDisks | SessionClose
 
 注意事项：
 
-- “系统 cancel I/O 时，App 回 ACK 后 SCSI 应以错误完成”这个原则必须贯穿读写两条链路。
-- 不建议单独再堆一套“全链路复杂取消协议”；先把取消语义收在 SCSI request completion 边界即可。
+- 系统侧取消逻辑只追到 `SCSI`，不额外做一套“系统 -> KMDF -> App -> ACK -> 再取消”的全链路复杂取消协议。
+- `App` 可以继续把已经拿到的 slot 正常回 ACK；ACK 到达时再由 `SCSI` 判断原始系统请求是否已经取消或不存在。
+- 这个原则必须贯穿读写两条链路。
 
 ### 3.7 多盘并发的常见误区
 
@@ -389,12 +390,37 @@ RemoveAllDisks | SessionClose
 
 - `KMDF` 共享 session 状态即可，不应该共享数据面调度。
 - `SCSI` 必须是 per-target 读写队列、per-target pending 状态。
-- `App` 必须是 per-disk slot engine、per-disk queue depth、per-disk ACK 状态。
+- `App` 必须是 per-disk worker 组、per-disk queue depth、per-disk ACK 状态。
 
 注意事项：
 
 - 多盘性能问题很多时候不是“算法不够快”，而是状态归属错了。
 - 只要还有 adapter 级全局数据面锁或 App 级全局队列深度，多盘就不可能真正并发。
+
+### 3.8 单盘吞吐从 `250/320 MB/s` 恢复到约 `600 MB/s`
+
+现象：
+
+- 多盘并发闭环打通后，单盘顺序吞吐一度从约 `500 MB/s` 掉到约 `250 MB/s`。
+- 把每盘数据面先改成“1 个读线程 + 1 个写线程”后，单盘只回升到约 `320 MB/s`。
+- 再继续改成“每盘少量 read workers + 少量 write workers + 1 个独立 write ACK flush worker”后，单盘恢复到约 `600 MB/s`。
+
+根因：
+
+- 真正限制单盘吞吐的不是全局锁，而是 App 每盘数据面的执行模型。
+- “每盘单线程 slot engine”会把 `slot completion -> memcpy -> ACK -> 补投下一槽` 串成一条单执行体热路径。
+- “每盘 1 读 1 写”虽然比单线程 slot engine 好，但单盘完成消费速度仍不够高。
+
+修复：
+
+- 保持 per-disk 边界不变，不回退到旧版 `Q` 个读 worker、`Q` 个写 worker 的海量线程模型。
+- 改成“每盘少量有上限的小常数 worker”，并把 `queue depth` 继续留给 in-flight slot，而不是交给线程数量。
+- 读侧和写侧都保留独立 ACK 路径，不再回到单线程串行 completion 消费。
+
+注意事项：
+
+- 如果单盘掉速、多盘总吞吐却还能继续涨，优先怀疑 per-disk 数据面模型，不要先怀疑 KMDF 全局锁。
+- 吞吐恢复后，如果内核 CPU 仍明显偏高，再把重点切到 `KMDF async slot transport` 的每-slot 固定开销。
 
 ## 4. 调试和压测注意事项
 
