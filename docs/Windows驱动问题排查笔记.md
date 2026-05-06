@@ -111,7 +111,8 @@ SessionClose / WatchdogLock
 
 - `45fb1cf 修复open问题`
 - `2a785ba Fix KMDF async slot transport`
-- 当前工作树里还针对“同步完成被误当成 pending”做过一次补修
+- `26e25da Fix probe read slot completion path`
+- `8d969bf 修复有设备无盘问题`
 
 现象：
 
@@ -127,11 +128,13 @@ DiskQueueReadSrb: queue target=0 event=1 lba=0 blocks=1 bytes=4096
 DiskDrainReadSlots: dispatch target=0 event=1 slot=1 lba=0 blocks=1 bytes=4096
 backend_read_slot_completions=0
 backend_read_ack_commands=0
+posting_read_slots=1
+active_read_slots=1
 ```
 
 根因：
 
-这个问题至少出现过两类根因。
+这个问题至少出现过三类根因。
 
 第一类是接口选错：
 
@@ -152,6 +155,14 @@ backend_read_ack_commands=0
 - 如果 `KMDF` 无条件把这次调用当成“真正的异步 pending”，上层 `WDFREQUEST` 就可能永远不被正确完成。
 - 从外部看起来就是：`SCSI` 已 dispatch，`KMDF` 似乎也收到了 completion，但 `App` 侧 completion 计数仍然为零。
 
+第三类是本次最终确认的 `POST_READ_SLOT` 提交线程阻塞：
+
+- 新的 App per-disk slot engine 是单线程模型；同一个线程负责预投 read/write slot、等待 overlapped completion、执行 `READ_ACK` / `WRITE_ACK_BATCH`。
+- 如果 `KMDF` 在处理 `POST_READ_SLOT` 的 WDF 请求线程里直接向 storage stack 调 `IoCallDriver`，这次调用在当前 miniport control 场景下可能无法及时返回到用户态。
+- 结果是用户态 `DeviceIoControl(POST_READ_SLOT)` 没有变成“已投递，等待 overlapped event”的状态，slot engine 卡在 `BeginAsyncIoControl` 内，根本进不了 `WaitForMultipleObjects`。
+- 这时 `SCSI` 日志可以看到 slot 已被完成，`KMDF` 也能打印 `finalStatus=00000000 completeInfo=32`，但 App 侧仍然是 `backend_read_slot_completions=0 / backend_read_ack_commands=0`，因为用户态线程还没机会消费 completion。
+- `completeInfo=32` 证明这不是输出长度为 0 的问题；`posting_read_slots` 长时间非 0 才是判断“卡在提交阶段”的关键证据。
+
 修复：
 
 - `KMDF` 打开 miniport 时，不只保存 `HANDLE`，还保存同生命周期的 `FILE_OBJECT + DEVICE_OBJECT`。
@@ -160,6 +171,12 @@ backend_read_ack_commands=0
 - 对 `IoCallDriver` 必须区分两种情况：
   - 真正返回 `STATUS_PENDING`
   - 同步 inline completion
+- `ControlProxySubmitSlotAsync` 必须先让原始 `WDFREQUEST` 进入长 pending，再把实际 `IoCallDriver` 放到 `IO_WORKITEM` 中执行，避免阻塞用户态 `DeviceIoControl` 提交流程。
+- 手工分配的 slot IRP 由 completion routine 和 work item 用单一 `CompletionState` 竞争收尾；completion routine 返回 `STATUS_MORE_PROCESSING_REQUIRED`，由 KMDF transport 自己完成原始 App request、释放 IRP/work item、注销 pending slot 引用。
+- `WdfRequestCompleteWithInformation` 必须返回真实输出长度：
+  - read slot 返回 `sizeof(YUMEDISK_READ_SLOT_EVENT)`
+  - write slot 返回 `YUMEDISK_WRITE_SLOT_HEADER_BASE_SIZE + DataLength`
+- App 侧保留 `posting_read_slots / posting_write_slots` 调试计数，用来区分“已经投递但没完成”和“还卡在投递调用内部”。
 - storageport 接口选择必须以 `QUERY_INFO` 签名为最终裁决，而不是“第一个能打开的接口”。
 
 注意事项：
@@ -167,6 +184,7 @@ backend_read_ack_commands=0
 - `visible_path=<pending-enumeration>` 只是结果，不是根因。
 - 设备管理器有设备，不代表系统已经把盘枚举成功。
 - 如果 `SCSI` 已经看到 `event=1/lba=0`，优先看 read slot completion 是否真的回到 `App`。
+- 如果 `posting_read_slots` 长时间非 0，先查 `KMDF POST_*_SLOT` 是否在 WDF 请求线程内同步等待了下层 storage stack，不要先改 SCSI 队列。
 
 ### 3.3 高队列挂死：`Q2/Q8/Q32` 跑一半变成 100% 无读写
 
