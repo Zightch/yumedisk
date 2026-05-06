@@ -55,7 +55,9 @@ DiskQueueReadAck(
 NTSTATUS
 DiskQueueWriteAckBatch(
     _In_ PVOID DeviceExtension,
-    _Inout_ PYUMEDISK_MESSAGE Message
+    _In_ PSTORAGE_REQUEST_BLOCK Srb,
+    _Inout_ PYUMEDISK_MESSAGE Message,
+    _Out_ BOOLEAN* RequestCompleted
 );
 
 NTSTATUS

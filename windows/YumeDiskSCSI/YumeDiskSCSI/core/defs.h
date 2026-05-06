@@ -15,10 +15,20 @@ typedef struct _REPORT_LUNS_DATA {
     UINT64 Entry[1];
 } REPORT_LUNS_DATA, *PREPORT_LUNS_DATA;
 
+typedef struct _YUME_DISK_QUEUE_STATE {
+    KSPIN_LOCK ReadQueueLock;
+    KSPIN_LOCK WriteQueueLock;
+    LIST_ENTRY PostedReadSlots;
+    LIST_ENTRY PendingReads;
+    LIST_ENTRY PostedWriteSlots;
+    LIST_ENTRY PendingWrites;
+} YUME_DISK_QUEUE_STATE, *PYUME_DISK_QUEUE_STATE;
+
 typedef struct _YUME_DISK {
     PUCHAR Buffer;
     UINT64 Size;
     KSPIN_LOCK BufferLock;
+    YUME_DISK_QUEUE_STATE Queue;
     UINT64 SectorCount;
     UINT32 SectorSize;
     ULONG Generation;
@@ -30,15 +40,9 @@ typedef struct _YUME_DISK {
 
 typedef struct _DEVICE_CONTEXT {
     KSPIN_LOCK SessionLock;
-    KSPIN_LOCK ReadQueueLock;
-    KSPIN_LOCK WriteQueueLock;
     ULONG MaxTargets;
     UINT64 CurrentSessionId;
     volatile LONG64 NextEventId;
-    LIST_ENTRY PostedReadSlots;
-    LIST_ENTRY PendingReads;
-    LIST_ENTRY PostedWriteSlots;
-    LIST_ENTRY PendingWrites;
     volatile LONG64 DebugProgressCounter;
     volatile LONG64 DebugReadRequestsQueued;
     volatile LONG64 DebugReadSlotsIssued;

@@ -520,12 +520,11 @@ complete original WRITE SRB
 ```mermaid
 flowchart TB
     subgraph AppSide[App side]
-        AR[Read worker pool]
-        AW[Write worker pool]
+        SE[Per-disk slot engine]
         RM[App medium]
-        RQ[Pre-posted read slots]
-        WQ[Pre-posted write slots]
-        ACK[ACK batch submitter]
+        RQ[Per-disk pre-posted read slots]
+        WQ[Per-disk pre-posted write slots]
+        ACK[Per-disk WRITE_ACK_BATCH flush]
     end
 
     subgraph KMDFSide[KMDF side]
@@ -536,20 +535,21 @@ flowchart TB
     end
 
     subgraph SCSISide[SCSI side]
-        PRS[PostedReadSlots]
-        PWS[PostedWriteSlots]
-        PRI[PendingReadsByEventId]
-        PWI[PendingWritesByEventId]
-        WSRB[PendingWriteSrbs waiting for slots]
+        PRQ[Per-target read queue]
+        PWQ[Per-target write queue]
+        PRI[Per-target PendingReadsByEventId]
+        PWI[Per-target PendingWritesByEventId]
     end
 
-    RQ --> KR --> PRS
-    WQ --> KW --> PWS
-    AR --> RM
-    AW --> RM
+    SE --> RM
+    SE --> RQ
+    SE --> WQ
     ACK --> KA
-    KA --> PRI
-    KA --> PWI
+    RQ --> KR --> PRQ
+    WQ --> KW --> PWQ
+    KA --> PWQ
+    PRQ --> PRI
+    PWQ --> PWI
 ```
 
 ### 8.1 SCSI 锁粒度
@@ -557,10 +557,11 @@ flowchart TB
 建议至少拆分锁:
 
 - `SessionLock`: session id、session closing 状态。
-- `ReadQueueLock`: posted read slots、pending reads。
-- `WriteQueueLock`: posted write slots、pending writes、pending write SRBs。
+- `ReadQueueLock`: 每个 target 自己一把，只管该 target 的 posted read slots、pending reads。
+- `WriteQueueLock`: 每个 target 自己一把，只管该 target 的 posted write slots、pending writes、ACK 落账。
 - `IdLock` 或 interlocked counter: `NextEventId`。
 
+不要让多盘共享一把 adapter 级全局读锁/写锁；否则多 target 并发时会天然互相抢锁。
 不要用一个全局 spin lock 包住大块复制。
 
 原则:
@@ -569,6 +570,7 @@ flowchart TB
 - 大数据 copy 在锁外。
 - SRB completion 在锁外。
 - App request completion 在锁外。
+- `WRITE_ACK_BATCH` 完成顺序固定为: 先完成 ACK 控制请求回 App，再完成因此已经满足条件的系统 WRITE SRB。
 - 请求处理采用 `drain while available` 模式，类似 `dev/MyDriver3` 的处理方式：一次进入处理函数后，不是只推进一个请求就返回，而是持续循环消费当前已经可处理的读写 slot / ACK / pending 请求，直到队列暂时没有可推进项或当前请求已经无法继续前进。
 - 不要把“当前只处理一个，下一个等下次异步唤醒”作为默认行为；那会放大往返次数，也更容易在高队列深度下制造回压和假死。
 

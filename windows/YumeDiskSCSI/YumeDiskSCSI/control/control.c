@@ -274,7 +274,9 @@ static
 NTSTATUS
 DiskHandleWriteAckBatch(
     _In_ PVOID DeviceExtension,
-    _Inout_ PYUMEDISK_MESSAGE Message
+    _In_ PSTORAGE_REQUEST_BLOCK Srb,
+    _Inout_ PYUMEDISK_MESSAGE Message,
+    _Out_ BOOLEAN* RequestCompleted
 )
 {
     NTSTATUS status;
@@ -284,7 +286,7 @@ DiskHandleWriteAckBatch(
         return status;
     }
 
-    return DiskQueueWriteAckBatch(DeviceExtension, Message);
+    return DiskQueueWriteAckBatch(DeviceExtension, Srb, Message, RequestCompleted);
 }
 
 static
@@ -400,7 +402,10 @@ DiskHandleIoControlSrb(
         status = DiskHandleReadAck(DeviceExtension, message);
         break;
     case YumeDiskCommandWriteAckBatch:
-        status = DiskHandleWriteAckBatch(DeviceExtension, message);
+        status = DiskHandleWriteAckBatch(DeviceExtension, Srb, message, &requestCompleted);
+        if (requestCompleted) {
+            return TRUE;
+        }
         break;
     case YumeDiskCommandCancelSlot:
         status = DiskHandleCancelSlot(DeviceExtension, message);

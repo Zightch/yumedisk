@@ -212,13 +212,13 @@ DiskInitializeAdapter(
     RtlZeroMemory(extension, sizeof(*extension));
 
     KeInitializeSpinLock(&extension->SessionLock);
-    KeInitializeSpinLock(&extension->ReadQueueLock);
-    KeInitializeSpinLock(&extension->WriteQueueLock);
     extension->MaxTargets = YUMEDISK_MAX_TARGETS;
     DiskInitializeQueueState(extension);
 
     for (index = 0; index < extension->MaxTargets; ++index) {
         KeInitializeSpinLock(&extension->Disk[index].BufferLock);
+        KeInitializeSpinLock(&extension->Disk[index].Queue.ReadQueueLock);
+        KeInitializeSpinLock(&extension->Disk[index].Queue.WriteQueueLock);
         extension->Disk[index].SectorSize = YUMEDISK_DEFAULT_SECTOR_SIZE;
     }
 

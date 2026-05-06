@@ -8,23 +8,23 @@ Source:
 
 ## Current Goal
 
-Rebuild the smallest closed loop for disk benchmark traffic with the new app-owned media queue protocol, eliminate the old `WAIT_EVENT` inline model, remove the `Q32/Q8` hang and stall class, and improve throughput plus stability over the old baseline.
+Validate the rebuilt multi-disk concurrent path, confirm that per-disk App slot engines plus per-target SCSI queues improve dual-disk throughput/fairness without reintroducing hangs, and record the remaining benchmark gaps.
 
 ## Current Boundary
 
 - No old-version compatibility.
 - No parallel old/new protocol branch.
 - No extra abstraction layer unless a real bottleneck forces it.
-- The new protocol command space, KMDF file-bound session/watchdog, SCSI while-drain queue path, and App-side parallel slot workers are already in place.
-- App-side write ACK has been simplified to dedicated `WRITE_ACK_BATCH`; `POST_WRITE_SLOT` no longer carries piggyback ACK state.
-- The benchmark loop is reconnected on the tooling side: `RWTestApp` now resolves the visible `PhysicalDrive` and prints the suggested `diskspd` commands.
-- The remaining gap is manual validation: proving the new path no longer hangs under `Q1T1 / Q8 / Q32`, and collecting throughput plus kernel CPU data.
+- The App path is already cut over to one slot engine thread per disk with per-disk `queueDepth` for read and write slots.
+- The SCSI path is already cut over to per-target queue locks and per-target posted/pending lists; multi-disk traffic no longer shares one adapter-global read/write queue.
+- `WRITE_ACK_BATCH` is already the only write ACK path, and ACK now completes before the corresponding system write SRB is completed.
+- The remaining gap is manual multi-disk validation: proving throughput/fairness gains and checking that dual-disk pressure does not regress cancellation or cleanup stability.
 - Do not advance to the next substep until the current one is complete, archived, and committed.
 
 ## Pending Substeps
 
-1. Run the manual `Q1T1 / Q8 / Q32` benchmark matrix and record throughput, kernel CPU, and cleanup stability.
+1. Run the manual dual-disk benchmark matrix and record throughput, kernel CPU, fairness, cancel behavior, and cleanup stability.
 
 ## Current Unique Next Step
 
-Run the manual `Q1T1 / Q8 / Q32` benchmark matrix and record throughput, kernel CPU, and cleanup stability.
+Run the manual dual-disk benchmark matrix and record throughput, kernel CPU, fairness, cancel behavior, and cleanup stability.
