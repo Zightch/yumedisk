@@ -26,8 +26,9 @@ Source:
 
 ## Pending Substeps
 
-1. 按最终目标验证多盘并发：先双盘 `Q1T1`，再 `Q2/Q8/Q32`，要求不再出现 100% 无读写假死、盘被误判死亡、会话残留或全局串扰。
+1. 先验证并打通单盘最终链路：`ct -> 枚举 -> probe read -> steady-state read/write -> ctrl+c / rm all / App 退出`，要求不再出现“有设备无盘”、probe read 卡死、会话残留或收尾卡住。
+2. 按最终目标验证多盘并发：在单盘最终链路稳定后，先双盘 `Q1T1`，再 `Q2/Q8/Q32`，要求不再出现 100% 无读写假死、盘被误判死亡、会话残留或全局串扰。
 
 ## Current Unique Next Step
 
-按最终目标验证多盘并发：在现有 `KMDF session state + async slot transport + SCSI per-target queue + App per-disk slot engine` 的唯一结构上，从双盘 `Q1T1` 开始，再推进到 `Q2/Q8/Q32`，重点确认不再出现 `100% 无读写假死`、盘被误判死亡、会话残留、`ctrl+c / rm all / app exit` 收尾异常或跨盘串扰。
+先验证并打通单盘最终链路：在现有 `KMDF session state + async slot transport + SCSI per-target queue + App per-disk slot engine` 的唯一结构上，先确认 `ct -> 枚举 -> probe read -> steady-state read/write -> ctrl+c / rm all / App 退出` 已经全部真实跑通，再进入双盘和高队列深度验证。
