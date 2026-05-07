@@ -335,6 +335,31 @@
 - 宿主只根据最终事件决定 `commit` 或 `discard`。
 - 不恢复 piggyback ACK，不增加第二套写完成通知模型。
 
+当前状态：
+
+- 已完成。
+- `AppKernel` 的 per-disk write worker 已从占位线程重建为真实 `POST_WRITE_SLOT` 运行时。
+- per-disk ack flusher 已从占位线程重建为真实 `WRITE_ACK_BATCH` flush worker。
+- 当前真实推进链路已经打通：
+  1. `POST_WRITE_SLOT`
+  2. 写事件校验
+  3. 调用宿主 `stage_write`
+  4. 入队单 fragment `WRITE_ACK_RANGE`
+  5. `WRITE_ACK_BATCH`
+  6. `EventId` 级最终事件
+- `EventId` 聚合规则已在 `AppKernel` 内收口：
+  - 全部 fragment 被 `SCSI` 接受后入队 `AkEventWriteFinalCommitted`
+  - 任一 fragment 被最终拒绝后入队 `AkEventWriteFinalRejected`
+- 取消/late ACK 边界保持不变：
+  - `AppKernel` 不上浮新的全链路取消协议
+  - stale / cancelled / not found 仍由 `SCSI` 在 `WRITE_ACK_BATCH` 返回时最终裁决
+- 为避免晚到 fragment 污染宿主 staging，`AppKernel` 现已缓存最近 finalize 的 `EventId`：
+  - 已 committed/rejected 的旧 `EventId` 再次晚到时，不再重新调用 `stage_write`
+  - 这保证宿主不会把已经提交或已经丢弃的 staged write 又建回来
+- 写错误边界保持不变：
+  - 单个 fragment 失败会让整笔系统写最终 rejected
+  - 不把单次写失败放大成整盘失败
+
 ### Step 8. 宿主接入与旧路径删除
 
 目标：

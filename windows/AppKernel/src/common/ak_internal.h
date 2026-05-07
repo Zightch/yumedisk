@@ -24,6 +24,9 @@ typedef struct AK_DISK_WORKER_CONTEXT {
     UINT32 SlotCount;
 } AK_DISK_WORKER_CONTEXT;
 
+typedef struct AK_WRITE_ACK_NODE AK_WRITE_ACK_NODE;
+typedef struct AK_WRITE_EVENT_RECORD AK_WRITE_EVENT_RECORD;
+
 struct AK_SESSION {
     AK_OPEN_PARAMS OpenParams;
     AK_SESSION_STATE State;
@@ -54,6 +57,16 @@ struct AK_DISK {
     AK_DISK_WORKER_CONTEXT* WriteWorkerContexts;
     HANDLE AckFlusherThread;
     AK_DISK_WORKER_CONTEXT AckFlusherContext;
+    HANDLE WriteAckWakeEvent;
+    SRWLOCK WriteAckLock;
+    AK_WRITE_ACK_NODE* WriteAckHead;
+    AK_WRITE_ACK_NODE* WriteAckTail;
+    UINT32 PendingWriteAckCount;
+    SRWLOCK WriteTrackLock;
+    AK_WRITE_EVENT_RECORD* ActiveWriteEvents;
+    AK_WRITE_EVENT_RECORD* FinalizedWriteEventsHead;
+    AK_WRITE_EVENT_RECORD* FinalizedWriteEventsTail;
+    UINT32 FinalizedWriteEventCount;
     UINT32 PrimedReadSlotDepth;
     BOOLEAN RegisteredInSession;
     struct AK_DISK* SessionNext;
