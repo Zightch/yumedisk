@@ -62,6 +62,9 @@
     <ClCompile Include="transport\transport.c">
       <Filter>Source Files\Transport</Filter>
     </ClCompile>
+    <ClCompile Include="transport\runtime.c">
+      <Filter>Source Files\Transport</Filter>
+    </ClCompile>
     <ClCompile Include="control\file.c">
       <Filter>Source Files\Control</Filter>
     </ClCompile>
@@ -86,6 +89,9 @@
       <Filter>Header Files\Session</Filter>
     </ClInclude>
     <ClInclude Include="transport\transport.h">
+      <Filter>Header Files\Transport</Filter>
+    </ClInclude>
+    <ClInclude Include="transport\runtime.h">
       <Filter>Header Files\Transport</Filter>
     </ClInclude>
     <ClInclude Include="control\file.h">

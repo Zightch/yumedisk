@@ -125,6 +125,7 @@
     <ClCompile Include="device\device.c" />
     <ClCompile Include="driver\main.c" />
     <ClCompile Include="session\session.c" />
+    <ClCompile Include="transport\runtime.c" />
     <ClCompile Include="transport\transport.c" />
   </ItemGroup>
   <ItemGroup>
@@ -134,6 +135,7 @@
     <ClInclude Include="core\memory.h" />
     <ClInclude Include="device\device.h" />
     <ClInclude Include="session\session.h" />
+    <ClInclude Include="transport\runtime.h" />
     <ClInclude Include="transport\transport.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

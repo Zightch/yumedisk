@@ -16,6 +16,8 @@ typedef enum _CTRL_SESSION_STATE {
     CtrlSessionStateClosed = 4
 } CTRL_SESSION_STATE;
 
+typedef struct _CTRL_TRANSPORT_RUNTIME CTRL_TRANSPORT_RUNTIME, *PCTRL_TRANSPORT_RUNTIME;
+
 typedef struct _CTRL_DEVICE_CONTEXT {
     WDFSPINLOCK OpenLock;
     LONG OpenCount;
@@ -35,6 +37,7 @@ typedef struct _CTRL_FILE_CONTEXT {
     KEVENT PendingSlotZeroEvent;
     volatile LONG PendingSlotCount;
     ULONG State;
+    PCTRL_TRANSPORT_RUNTIME TransportRuntime;
 } CTRL_FILE_CONTEXT, *PCTRL_FILE_CONTEXT;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(CTRL_DEVICE_CONTEXT, ControlGetContext);

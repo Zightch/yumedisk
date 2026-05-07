@@ -1,5 +1,6 @@
 #include "session.h"
 
+#include "..\transport\runtime.h"
 #include "..\transport\transport.h"
 
 #define CTRL_SESSION_WATCHDOG_TIMEOUT_MS 10000u
@@ -53,6 +54,7 @@ ControlSessionCreateResources(
         KeInitializeEvent(&FileContext->PendingSlotZeroEvent, NotificationEvent, TRUE);
         FileContext->PendingSlotCount = 0;
         FileContext->State = CtrlSessionStateInvalid;
+        FileContext->TransportRuntime = NULL;
     }
 
     if (FileContext->WatchdogTimer == NULL) {
@@ -201,9 +203,11 @@ ControlEvtSessionWatchdogTimer(
     fileContext->State = CtrlSessionStateLocked;
     WdfWaitLockRelease(fileContext->SessionLock);
 
+    ControlTransportRuntimeBeginClose(fileContext);
     ControlSendSessionCleanup(fileContext);
     ControlSessionDrainInFlightIo(fileContext);
     ControlSessionDrainPendingSlots(fileContext);
+    ControlTransportRuntimeStop(fileContext);
     ControlCloseMiniportHandle(fileContext);
 
     WdfTimerStop(Timer, FALSE);
@@ -277,6 +281,25 @@ ControlSessionTryOpen(
     fileContext->MiniportDeviceObject = deviceObject;
     fileContext->SessionId = sessionId;
     fileContext->LastHeartbeatTick = ControlSessionQueryTick();
+    fileContext->State = CtrlSessionStateInvalid;
+    WdfWaitLockRelease(fileContext->SessionLock);
+
+    status = ControlTransportRuntimeStart(fileContext, FileObject);
+    if (!NT_SUCCESS(status)) {
+        WdfWaitLockAcquire(fileContext->SessionLock, NULL);
+        ControlCloseMiniportHandle(fileContext);
+        fileContext->SessionId = 0;
+        fileContext->LastHeartbeatTick = 0;
+        fileContext->State = CtrlSessionStateInvalid;
+        WdfWaitLockRelease(fileContext->SessionLock);
+        ControlSessionReleaseDeviceOpen(Context, FileObject);
+        if (SessionId != NULL) {
+            *SessionId = 0;
+        }
+        return status;
+    }
+
+    WdfWaitLockAcquire(fileContext->SessionLock, NULL);
     fileContext->State = CtrlSessionStateActive;
     WdfWaitLockRelease(fileContext->SessionLock);
 
@@ -310,9 +333,11 @@ ControlSessionCleanup(
         }
         WdfWaitLockRelease(fileContext->SessionLock);
 
+        ControlTransportRuntimeBeginClose(fileContext);
         ControlSendSessionCleanup(fileContext);
         ControlSessionDrainInFlightIo(fileContext);
         ControlSessionDrainPendingSlots(fileContext);
+        ControlTransportRuntimeStop(fileContext);
 
         WdfWaitLockAcquire(fileContext->SessionLock, NULL);
         ControlCloseMiniportHandle(fileContext);

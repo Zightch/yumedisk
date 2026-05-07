@@ -23,16 +23,19 @@ Source:
 - `SCSI` per-target queue 继续使用 `KSPIN_LOCK`，不改成 wait lock；锁内只做队列和状态操作。
 - 按 [development-principles.md](../development-principles.md) 的“激进更新原则”执行：KMDF 热路径优化不是给旧 per-slot transport 打补丁，而是重建 session-owned transport runtime，并在落地后删除旧 per-slot IRP/work item/SessionLock 热路径。
 
+## Progress
+
+- Step 1 done: `KMDF` session now owns a transport runtime skeleton. Runtime is initialized after miniport handle/session fields are published, begins closing before cleanup/watchdog drains, and is stopped/freed before miniport handle close. Current data path behavior is intentionally unchanged.
+
 ## Pending Substeps
 
-1. 为 `KMDF` session 增加 transport runtime 骨架，open 初始化、cleanup/watchdog 停止。
-2. 引入 async slot object pool，让对象长期持有 `IRP + IOCTL buffer + completion context`。
-3. 用 `IoReuseIrp` 复用池内 IRP，去掉每-slot `IoAllocateIrp/IoFreeIrp`。
-4. 改成 session-owned 长期 submit worker，去掉每-slot `IoAllocateWorkItem/IoFreeWorkItem`。
-5. 将 `POST_READ_SLOT/POST_WRITE_SLOT` 高频准入从 `WDFWAITLOCK` 改成原子 state + pending ref。
-6. 保持当前取消模型不变，确认对象池不会破坏 cleanup、session close 和 late ACK 处理。
-7. 在不改协议的前提下重新测单盘吞吐与 kernel CPU。
+1. 引入 async slot object pool，让对象长期持有 `IRP + IOCTL buffer + completion context`。
+2. 用 `IoReuseIrp` 复用池内 IRP，去掉每-slot `IoAllocateIrp/IoFreeIrp`。
+3. 改成 session-owned 长期 submit worker，去掉每-slot `IoAllocateWorkItem/IoFreeWorkItem`。
+4. 将 `POST_READ_SLOT/POST_WRITE_SLOT` 高频准入从 `WDFWAITLOCK` 改成原子 state + pending ref。
+5. 保持当前取消模型不变，确认对象池不会破坏 cleanup、session close 和 late ACK 处理。
+6. 在不改协议的前提下重新测单盘吞吐与 kernel CPU。
 
 ## Current Unique Next Step
 
-先按 [kmdf-kernel-cpu-reduction-draft.md](./kmdf-kernel-cpu-reduction-draft.md) 实施 Step 1：增加 `KMDF` session-owned transport runtime 骨架，完成 open 初始化、cleanup/watchdog 停止、编译通过，但暂不改变数据面行为。
+继续按 [kmdf-kernel-cpu-reduction-draft.md](./kmdf-kernel-cpu-reduction-draft.md) 实施 Step 2：引入 async slot object pool，让池对象长期持有 `IRP + IOCTL buffer + completion context`。本步仍优先保持旧 work item 投递方式，先验证对象生命周期，再进入 `IoReuseIrp` 和长期 worker。
