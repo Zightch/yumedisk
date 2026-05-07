@@ -1,0 +1,479 @@
+# AppKernel 设计文档
+
+本文档定义 `AppKernel` 的正式目标方案。
+
+当前代码里，用户态逻辑仍主要承载在 `RWTestApp` 中；`AppKernel` 还没有完全独立落地。本文件描述的是下一步实现时必须收敛到的唯一边界，而不是历史草案。
+
+## 1. 目标
+
+`AppKernel` 的职责只有一件事：把用户态数据面从业务宿主里剥出来，形成一个只负责 `KMDF` 会话、per-disk slot runtime、ACK 和线程调度的纯 `C` 内核。
+
+重构后，用户态分层固定为：
+
+1. 业务宿主层
+2. `AppKernel`
+3. `YumeDiskKMDF`
+4. `YumeDiskSCSI`
+
+其中：
+
+- 业务宿主层先继续由 `RWTestApp` 承载。
+- `AppKernel` 是唯一用户态数据面内核。
+- 不保留“旧 `RWTestApp` 直连实现”和“新 `AppKernel` 实现”双轨长期并存。
+
+## 2. 分层与职责
+
+## 2.1 业务宿主层
+
+业务宿主层负责：
+
+- 单实例。
+- 驱动包安装、自修复、devnode 收敛。
+- 介质对象创建与销毁。
+- 正式介质和暂存层管理。
+- 对外可见读视图实现。
+- 写暂存提交与丢弃。
+- LBA overlap 一致性策略。
+- CLI、服务控制、压测辅助。
+- 可见盘路径枚举和 `PhysicalDrive` 发现。
+
+业务宿主层不负责：
+
+- `POST_READ_SLOT` / `POST_WRITE_SLOT` 预投。
+- `READ_ACK` / `WRITE_ACK_BATCH` 协议推进。
+- per-disk 数据面线程管理。
+- `KMDF` 控制会话细节。
+
+## 2.2 AppKernel
+
+`AppKernel` 负责：
+
+- 打开、维护、关闭 `YumeDiskKMDF` 会话。
+- heartbeat。
+- 短控制命令转发。
+- 为每个盘创建独立 runtime。
+- 为每个盘维护 read workers、write workers、write ACK flush worker。
+- 预投 `POST_READ_SLOT` 和 `POST_WRITE_SLOT`。
+- 收到 read slot 后调用业务宿主 `read` 介质操作，再发 `READ_ACK`。
+- 收到 write slot 后调用业务宿主 `stage_write` 写入暂存层，再发 `WRITE_ACK_BATCH`。
+- 根据 `WRITE_ACK_BATCH` 结果聚合每笔系统写的最终状态。
+- 维护 session 级 finalize/event 队列，向业务宿主报告写最终裁决和运行结果。
+- 暴露 session/disk 的状态快照和统计快照。
+
+`AppKernel` 不负责：
+
+- 持有介质字节。
+- 持有介质锁。
+- 解释系统取消语义给业务层。
+- 枚举 `visible_path` / `PhysicalDriveX`。
+- 驱动安装与设备实例修复。
+- CLI 与 benchmark 控制。
+
+## 2.3 YumeDiskKMDF / YumeDiskSCSI
+
+驱动侧职责保持不变：
+
+- `YumeDiskKMDF` 只负责 session、watchdog、direct-I/O transport、miniport 代理。
+- `YumeDiskSCSI` 只负责 per-target queue、系统 SRB、ACK 判定和取消收口。
+
+`AppKernel` 不能把驱动侧职责重新抬回用户态。
+
+## 3. 单一真实来源
+
+状态归属固定如下：
+
+- `KMDF session` 生命周期：只在 `AppKernel session` 内。
+- per-disk worker、slot、ACK flush 运行态：只在 `AppKernel disk runtime` 内。
+- 正式介质、暂存层、叠加读视图和介质锁：只在业务宿主 disk object 内。
+- 设备收敛和可见盘枚举：只在业务宿主控制层内。
+- 系统请求取消最终判定：只在 `YumeDiskSCSI` 内。
+
+禁止出现：
+
+- `AppKernel` 再持有一份 `medium`。
+- 业务宿主再镜像一份 slot runtime。
+- 业务宿主和 `AppKernel` 同时维护 pending ACK 状态。
+- 业务宿主自己再包一层外部数据面线程池。
+
+## 4. 对外模型
+
+## 4.1 句柄模型
+
+`AppKernel` 只暴露两个 opaque handle：
+
+```c
+typedef struct AK_SESSION AK_SESSION;
+typedef struct AK_DISK AK_DISK;
+```
+
+业务宿主只能通过这两个句柄和 `AppKernel` 交互，不允许直接穿透到底层 `DeviceIoControl`。
+
+## 4.2 介质操作
+
+业务宿主需要提供“可见读视图”和“写暂存”两类最小能力。
+
+```c
+typedef struct AK_READ_OP {
+    UINT32 TargetId;
+    UINT64 DiskRuntimeId;
+    UINT64 EventId;
+    UINT64 Lba;
+    UINT64 OffsetBytes;
+    UINT32 BlockCount;
+    UINT32 DataLength;
+    UINT32 Flags;
+} AK_READ_OP;
+
+typedef struct AK_WRITE_OP {
+    UINT32 TargetId;
+    UINT64 DiskRuntimeId;
+    UINT64 EventId;
+    UINT32 Seq;
+    UINT32 TotalSeq;
+    UINT64 Lba;
+    UINT64 OffsetBytes;
+    UINT32 ByteOffsetInWrite;
+    UINT32 DataLength;
+    UINT32 Flags;
+} AK_WRITE_OP;
+
+typedef struct AK_MEDIA_OPS {
+    LONG (*read_bytes)(
+        void* media_ctx,
+        const AK_READ_OP* op,
+        void* out_buffer,
+        UINT32* out_data_length);
+
+    LONG (*stage_write)(
+        void* media_ctx,
+        const AK_WRITE_OP* op,
+        const void* data_buffer,
+        UINT32 data_length);
+} AK_MEDIA_OPS;
+```
+
+约束：
+
+- `read_bytes` / `stage_write` 可以被同盘并发调用。
+- `read_bytes` 必须返回业务宿主当前“对系统可见”的读视图，而不是只读正式介质。
+- 如果对应区间存在尚未最终裁决的 staged write，`read_bytes` 必须先命中暂存层，再回落到正式介质。
+- `stage_write` 只写暂存层，不直接改正式介质。
+- 介质锁、staging journal 和一致性策略由业务宿主自己保证。
+- `AppKernel` 不参与 LBA overlap 排序。
+
+## 4.3 事件模型
+
+`AppKernel` 不再为写路径堆一串专用回调。所有最终写裁决和运行通知统一走 session 级事件队列，由业务宿主 `poll/wait` 获取。
+
+```c
+typedef enum AK_EVENT_TYPE {
+    AkEventDiskOnline,
+    AkEventDiskRemoved,
+    AkEventWriteFinalCommitted,
+    AkEventWriteFinalRejected,
+    AkEventSessionBroken
+} AK_EVENT_TYPE;
+
+typedef struct AK_EVENT {
+    AK_EVENT_TYPE Type;
+    UINT32 TargetId;
+    UINT64 DiskRuntimeId;
+    UINT64 EventId;
+    UINT32 TotalSeq;
+    UINT32 Flags;
+    LONG Status;
+} AK_EVENT;
+```
+
+语义：
+
+- `AkEventDiskOnline` 表示该盘 runtime 已经启动，read slot 已经进入可用状态，且 `CREATE_DISK` 已完成；它不等同于业务宿主已经拿到了 `visible_path` 或 `PhysicalDriveX`。
+- `AkEventDiskRemoved` 表示该盘的 `AppKernel` 运行态已经完成删除收口。
+- `AkEventWriteFinalCommitted` 表示该 `EventId` 的全部 `seq` 都已被 `SCSI` 接受，业务宿主应把该笔 staged write 合并到正式介质。
+- `AkEventWriteFinalRejected` 表示该 `EventId` 已被最终判定失败、取消、stale 或 not found，业务宿主应丢弃该笔 staged write。
+- 写最终事件的粒度是整笔系统写，不是单个 ACK range。
+
+事件队列规则固定为：
+
+- 写最终事件属于正确性链路，不允许静默丢弃。
+- `AkEventDiskOnline`、`AkEventDiskRemoved`、`AkEventSessionBroken` 也不允许静默丢弃。
+- 事件队列默认实现为 session-owned growable FIFO；`InitialEventQueueCapacity` 只是初始容量，不是硬上限。
+- 如果因为资源耗尽无法继续保留事件，`AppKernel` 必须把 session 置为 `Broken`，拒绝继续接收新工作。
+
+## 5. 对外接口
+
+## 5.1 打开参数
+
+```c
+typedef VOID (*AK_LOG_FN)(
+    void* log_ctx,
+    INT level,
+    const char* text);
+
+typedef struct AK_OPEN_PARAMS {
+    UINT32 HeartbeatIntervalMs;
+    UINT32 InitialEventQueueCapacity;
+    AK_LOG_FN LogFn;
+    void* LogCtx;
+} AK_OPEN_PARAMS;
+```
+
+约束：
+
+- `HeartbeatIntervalMs` 是 session 内唯一 heartbeat 周期来源。
+- `InitialEventQueueCapacity` 必须能覆盖稳态下的 in-flight 写最终事件缓存。
+
+## 5.2 磁盘参数
+
+```c
+typedef struct AK_DISK_PARAMS {
+    UINT32 TargetId;
+    UINT32 SectorSize;
+    UINT64 DiskSizeBytes;
+    UINT32 QueueDepth;
+    UINT32 WriteSlotBytes;
+    UINT16 ReadWorkerCount;
+    UINT16 WriteWorkerCount;
+    UINT32 AckBatchMaxRanges;
+} AK_DISK_PARAMS;
+```
+
+约束：
+
+- `QueueDepth` 按盘解释，不与其他盘共享。
+- `ReadWorkerCount` / `WriteWorkerCount` 是小常数配置，不是拿来硬堆 QD 的扩展点。
+- `WriteSlotBytes` 和 `AckBatchMaxRanges` 由 `AppKernel` 统一执行，不允许业务宿主绕过。
+
+## 5.3 会话接口
+
+```c
+LONG AkOpen(
+    const AK_OPEN_PARAMS* params,
+    AK_SESSION** out_session);
+
+VOID AkClose(
+    AK_SESSION* session);
+
+LONG AkRemoveAllDisks(
+    AK_SESSION* session);
+
+LONG AkQuerySessionState(
+    AK_SESSION* session,
+    AK_SESSION_STATE* out_state);
+
+LONG AkQuerySessionStats(
+    AK_SESSION* session,
+    AK_SESSION_STATS* out_stats);
+
+LONG AkWaitEvent(
+    AK_SESSION* session,
+    DWORD timeout_ms,
+    AK_EVENT* out_event);
+
+LONG AkPollEvent(
+    AK_SESSION* session,
+    AK_EVENT* out_event);
+```
+
+语义：
+
+- `AkClose` 是同步 drain；返回后，不再有任何介质回调和后台 worker 存活。
+- `AkQuerySessionState` / `AkQuerySessionStats` 只读快照，不驱动状态流转。
+- `AkWaitEvent` 取到一个事件就返回；超时返回 `STATUS_TIMEOUT`。
+- `AkPollEvent` 不阻塞；无事件返回 `STATUS_NO_MORE_ENTRIES`。
+
+## 5.4 磁盘接口
+
+```c
+LONG AkCreateDisk(
+    AK_SESSION* session,
+    const AK_DISK_PARAMS* params,
+    const AK_MEDIA_OPS* media_ops,
+    void* media_ctx,
+    AK_DISK** out_disk);
+
+LONG AkRemoveDisk(
+    AK_DISK* disk);
+
+LONG AkQueryDiskState(
+    AK_DISK* disk,
+    AK_DISK_STATE* out_state);
+
+LONG AkQueryDiskStats(
+    AK_DISK* disk,
+    AK_DISK_STATS* out_stats);
+```
+
+`AkCreateDisk` 的固定顺序必须是：
+
+1. 创建 disk runtime。
+2. 启动 read/write/ack workers。
+3. 先把该盘 read slot 预投到可用状态。
+4. 再向 `SCSI` 发送 `CREATE_DISK`。
+
+这样可以避免再次回到“有设备无盘”的老问题。
+
+`AkRemoveDisk` 的固定语义必须是：
+
+1. 停止该盘继续预投新 slot。
+2. drain 或取消该盘用户态 in-flight 请求。
+3. 发送 `REMOVE_DISK`。
+4. 停止该盘 worker 并回收 runtime。
+
+返回后，业务宿主可以安全销毁自己的 `media_ctx`。
+
+## 5.5 状态与统计接口
+
+`AppKernel` 必须把“当前状态”和“累计统计”分开，不允许混成一个大杂烩结构。
+
+状态只回答“现在是什么样”：
+
+```c
+typedef enum AK_LIFECYCLE_STATE {
+    AkStateInit,
+    AkStateStarting,
+    AkStateRunning,
+    AkStateRemoving,
+    AkStateClosing,
+    AkStateClosed,
+    AkStateBroken
+} AK_LIFECYCLE_STATE;
+
+typedef struct AK_SESSION_STATE {
+    AK_LIFECYCLE_STATE Lifecycle;
+    UINT64 SessionId;
+    BOOLEAN HeartbeatRunning;
+    BOOLEAN TransportReady;
+    UINT32 DiskCount;
+    LONG LastError;
+} AK_SESSION_STATE;
+
+typedef struct AK_DISK_STATE {
+    AK_LIFECYCLE_STATE Lifecycle;
+    UINT32 TargetId;
+    UINT64 DiskRuntimeId;
+    BOOLEAN ReadWorkersRunning;
+    BOOLEAN WriteWorkersRunning;
+    BOOLEAN AckFlusherRunning;
+    LONG LastError;
+} AK_DISK_STATE;
+```
+
+统计只回答“累计发生了多少事”：
+
+```c
+typedef struct AK_SESSION_STATS {
+    UINT64 HeartbeatSent;
+    UINT64 CommandFailures;
+    UINT64 ProtocolFailures;
+    UINT64 EventsQueued;
+    UINT64 EventsDropped;
+} AK_SESSION_STATS;
+
+typedef struct AK_DISK_STATS {
+    UINT64 ReadSlotPosts;
+    UINT64 ReadSlotCompletions;
+    UINT64 ReadAckCommands;
+    UINT64 WriteSlotPosts;
+    UINT64 WriteSlotCompletions;
+    UINT64 WriteAckFlushes;
+    UINT64 WriteAckRanges;
+    UINT64 WriteAckRangeFailures;
+    UINT64 FinalWriteCommitted;
+    UINT64 FinalWriteRejected;
+} AK_DISK_STATS;
+```
+
+固定规则：
+
+- `state` 里不放累计 counter。
+- `stats` 里不放 `Running/Closing/Broken` 之类生命周期字段。
+- 业务宿主拿 `state` 做决策，拿 `stats` 做观测和调试。
+
+## 6. 写路径语义
+
+写路径固定分成三件事：
+
+1. `stage_write`
+2. `WRITE_ACK_BATCH`
+3. 最终提交或丢弃事件
+
+严格顺序必须是：
+
+1. `AppKernel` 从 `POST_WRITE_SLOT` 收到 fragment。
+2. `AppKernel` 先调用业务宿主 `stage_write`，把 fragment 写入暂存层。
+3. `AppKernel` 再发送 `WRITE_ACK_BATCH`。
+4. `AppKernel` 根据 batch 结果更新该 `EventId` 的内部 finalize 状态：
+   - 全部 `seq` 都被 `SCSI` 接受后，入队一次 `AkEventWriteFinalCommitted`。
+   - 任一 `seq` 被最终拒绝后，入队一次 `AkEventWriteFinalRejected`，并终止该 `EventId` 的后续 committed 可能。
+5. 业务宿主收到最终事件后：
+   - `AkEventWriteFinalCommitted`：把该 `EventId` 的 staged write 合并到正式介质。
+   - `AkEventWriteFinalRejected`：把该 `EventId` 的 staged write 直接丢弃。
+
+这里的最终事件不是“附加通知”，而是 staging 模型的一部分。
+
+固定语义：
+
+- `stage_write` 成功不代表这笔系统写已经最终成立。
+- 只有 `AkEventWriteFinalCommitted` 才允许业务宿主把 staged write 转成正式介质。
+- `AkEventWriteFinalRejected` 到达前，业务宿主必须保留该 `EventId` 的 staged write 记录。
+
+## 7. 取消模型
+
+`AppKernel` 不改变现有取消边界：
+
+- 系统侧取消只追到 `SCSI`。
+- `AppKernel` 不向业务宿主上浮“某个系统请求已取消”的额外协议。
+- 业务宿主继续只实现可见读视图、暂存写入、暂存提交和暂存丢弃。
+- `READ_ACK` / `WRITE_ACK_BATCH` 可以晚到。
+- stale / cancelled / not found 仍由 `SCSI` 在 ACK 到达时最终判定。
+
+因此：
+
+- `AkEventWriteFinalRejected` 可能对应真正失败，也可能对应取消后的晚到 ACK。
+- 业务宿主只能把它当作“这笔 staged write 不能再提交”，不能反推系统仍然保留原始请求。
+
+## 8. 线程与并发规则
+
+`AppKernel` 是用户态唯一数据面线程所有者。
+
+固定线程模型：
+
+- per-disk read workers。
+- per-disk write workers。
+- per-disk write ACK flush worker。
+- session 级 heartbeat 线程。
+- session 级 write finalize / lifecycle 事件队列。
+
+固定规则：
+
+- 业务宿主不允许再包一层外部 read/write worker pool。
+- `AppKernel` 内部线程只负责协议推进和调度，不持有介质锁。
+- `media_ctx` 必须在 `AkRemoveDisk` 或 `AkClose` 返回前一直有效。
+- `AkClose` / `AkRemoveDisk` 返回后，不再有任何后台线程访问对应 `media_ctx`。
+- 业务宿主必须保证有专门的消费路径持续调用 `AkWaitEvent` 或 `AkPollEvent`，及时处理 staged write 的最终事件。
+
+## 9. 当前不做的事情
+
+本方案明确不做：
+
+- DLL 化。
+- plugin 化。
+- 多宿主 ABI 稳定承诺。
+- “AppKernel C + AppKernel C++ 双实现”。
+- 业务宿主直通底层 `IOCTL` 的旁路接口。
+- 旁路绕过 staging/finalize 语义直接改正式介质。
+
+## 10. 落地要求
+
+实现阶段按以下顺序推进：
+
+1. 先把当前 `RWTestApp` 中的 `KMDF` 会话、slot worker、ACK flush 和统计抽进 `AppKernel`。
+2. 再把正式介质、暂存层、overlay 读视图和介质锁完全上移到业务宿主。
+3. 最后把 `RWTestApp` 收缩成“驱动收敛 + 介质对象 + CLI + AppKernel 宿主”。
+
+收口后的最终形态必须是：
+
+- 业务宿主只拥有控制和介质。
+- `AppKernel` 只拥有协议和运行时。
+- 驱动只拥有 session、target queue 和系统 I/O。
