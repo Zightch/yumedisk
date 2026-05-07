@@ -21,6 +21,7 @@ Source:
 - 只有在 `KMDF` 热路径对象复用之后 CPU 仍明显偏高，才考虑第二阶段协议级降命令数优化。
 - `KMDF` 的 `WDFWAITLOCK` 只保留在 open/heartbeat/cleanup/watchdog 等低频生命周期路径，不作为 slot 高频准入锁。
 - `SCSI` per-target queue 继续使用 `KSPIN_LOCK`，不改成 wait lock；锁内只做队列和状态操作。
+- 按 [development-principles.md](../development-principles.md) 的“激进更新原则”执行：KMDF 热路径优化不是给旧 per-slot transport 打补丁，而是重建 session-owned transport runtime，并在落地后删除旧 per-slot IRP/work item/SessionLock 热路径。
 
 ## Pending Substeps
 

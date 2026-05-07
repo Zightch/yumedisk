@@ -334,6 +334,14 @@ DiskFree(oldBuffer)
 
 第一阶段只重建 KMDF async slot transport 的对象生命周期和提交模型，不改协议语义。
 
+本阶段严格按 [开发原则](../development-principles.md) 的“激进更新原则”执行：
+
+- 旧 `ControlProxySubmitSlotAsync` 的 per-slot `alloc/free + IoAllocateIrp + IoAllocateWorkItem` 模型已经阻碍继续压低 kernel CPU，不能继续在旧结构上叠补丁。
+- 目标不是给旧函数局部加缓存，而是把 KMDF slot transport 重建为唯一的新结构：session-owned runtime、对象池、IRP 复用、长期 submit worker、原子 session 准入。
+- 新结构落地后，旧 per-slot work item 路径、旧 per-slot IRP 分配路径、旧每 slot 进 `SessionLock` 的准入路径都应删除，不保留双轨。
+- 不做旧实现兼容层，不保留“新旧路径可切换”配置。
+- 如果实现过程中发现旧结构继续污染边界，优先删除旧入口、旧状态和旧收尾逻辑，再收束到新入口。
+
 保持不变：
 
 - App 仍然持有唯一介质。
