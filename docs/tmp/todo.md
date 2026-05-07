@@ -31,6 +31,7 @@ Source:
 - Step 4 done: `POST_*_SLOT` now enqueues prepared slot objects to a session-owned submit queue. A long-lived runtime worker drains the queue and calls `IoCallDriver` outside locks; per-slot `IoAllocateWorkItem/IoQueueWorkItem/IoFreeWorkItem` is removed.
 - Step 5 done: `POST_READ_SLOT/POST_WRITE_SLOT` now use slot-specific atomic admission. The hot path no longer enters `SessionLock`; it takes `InFlightRequestCount + PendingSlotCount` refs, rechecks active session state and transport pointers, then releases both refs from slot completion. Cleanup/watchdog still publish closing under `SessionLock`, wake the transport runtime, drain in-flight work, stop the runtime, then drain pending slots before closing the miniport handle.
 - Step 6 done: the KMDF submit worker now batch-takes the shared submit queue into a local list under one short spin-lock hold, then dispatches slots with `IoCallDriver` outside the lock. Runtime shutdown uses the same batch-take path to fail queued-but-not-dispatched slots.
+- Step 7 done: synchronous App commands proxied through `ControlProxyCommand` now use a session-owned sync command buffer pool. Normal `READ_ACK/WRITE_ACK_BATCH/CANCEL_SLOT` forwarding reuses `SRB_IO_CONTROL` buffers and kernel event handles; low-frequency probe/open and session-close cleanup keep the temporary fallback path so cleanup can still run after the runtime is marked closing.
 
 ## Pending Substeps
 

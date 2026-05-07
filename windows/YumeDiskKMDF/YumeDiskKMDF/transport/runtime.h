@@ -24,6 +24,14 @@ typedef struct _CTRL_ASYNC_SLOT_REQUEST {
     BOOLEAN IrpHasBeenSubmitted;
 } CTRL_ASYNC_SLOT_REQUEST, *PCTRL_ASYNC_SLOT_REQUEST;
 
+typedef struct _CTRL_SYNC_COMMAND_BUFFER {
+    LIST_ENTRY PoolLink;
+    PCTRL_TRANSPORT_RUNTIME Runtime;
+    HANDLE EventHandle;
+    PUCHAR IoctlBuffer;
+    ULONG IoctlBufferSize;
+} CTRL_SYNC_COMMAND_BUFFER, *PCTRL_SYNC_COMMAND_BUFFER;
+
 NTSTATUS
 ControlTransportRuntimeStart(
     _Inout_ PCTRL_FILE_CONTEXT Context,
@@ -56,4 +64,16 @@ ControlTransportRuntimeReleaseSlotRequest(
 NTSTATUS
 ControlTransportRuntimeSubmitSlotRequest(
     _Inout_ PCTRL_ASYNC_SLOT_REQUEST SlotRequest
+);
+
+NTSTATUS
+ControlTransportRuntimeAcquireSyncCommandBuffer(
+    _Inout_ PCTRL_FILE_CONTEXT Context,
+    _In_ ULONG IoctlBufferSize,
+    _Outptr_ PCTRL_SYNC_COMMAND_BUFFER* CommandBuffer
+);
+
+VOID
+ControlTransportRuntimeReleaseSyncCommandBuffer(
+    _Inout_opt_ PCTRL_SYNC_COMMAND_BUFFER CommandBuffer
 );

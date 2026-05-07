@@ -230,20 +230,19 @@ ControlTransportFailSlotRequest(
 
 static
 NTSTATUS
-ControlSendMiniportBuffer(
+ControlSendPreparedMiniportBuffer(
     _In_ HANDLE Handle,
+    _In_ HANDLE EventHandle,
     _Inout_updates_bytes_(BufferCapacity) PUCHAR Buffer,
     _In_ ULONG InputLength,
     _In_ ULONG BufferCapacity,
+    _Inout_updates_bytes_(IoctlBufferSize) PUCHAR IoctlBuffer,
+    _In_ ULONG IoctlBufferSize,
     _Out_ ULONG* BytesReturned
 )
 {
-    ULONG ioctlBufferSize;
-    PUCHAR ioctlBuffer;
     PSRB_IO_CONTROL srbIoControl;
     IO_STATUS_BLOCK ioStatus;
-    OBJECT_ATTRIBUTES eventAttributes;
-    HANDLE eventHandle;
     NTSTATUS status;
     ULONG transferLength;
     PYUMEDISK_MESSAGE message;
@@ -251,21 +250,19 @@ ControlSendMiniportBuffer(
     *BytesReturned = 0;
 
     if (Handle == NULL ||
+        EventHandle == NULL ||
         Buffer == NULL ||
+        IoctlBuffer == NULL ||
         BufferCapacity < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
+        BufferCapacity > MAXULONG - sizeof(SRB_IO_CONTROL) ||
+        IoctlBufferSize < sizeof(SRB_IO_CONTROL) + BufferCapacity ||
         InputLength < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
         InputLength > BufferCapacity) {
         return STATUS_INVALID_PARAMETER;
     }
 
-    ioctlBufferSize = sizeof(SRB_IO_CONTROL) + BufferCapacity;
-    ioctlBuffer = (PUCHAR)ControlAlloc(ioctlBufferSize);
-    if (ioctlBuffer == NULL) {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    RtlZeroMemory(ioctlBuffer, ioctlBufferSize);
-    srbIoControl = (PSRB_IO_CONTROL)ioctlBuffer;
+    RtlZeroMemory(IoctlBuffer, IoctlBufferSize);
+    srbIoControl = (PSRB_IO_CONTROL)IoctlBuffer;
     srbIoControl->HeaderLength = sizeof(SRB_IO_CONTROL);
     srbIoControl->Timeout = YUMEDISK_MINIPORT_TIMEOUT_SEC;
     srbIoControl->ControlCode = YUMEDISK_MINIPORT_CONTROL_CODE;
@@ -273,44 +270,25 @@ ControlSendMiniportBuffer(
     RtlCopyMemory(srbIoControl->Signature, YUMEDISK_MINIPORT_SIGNATURE, sizeof(srbIoControl->Signature));
     RtlCopyMemory(srbIoControl + 1, Buffer, InputLength);
 
-    InitializeObjectAttributes(
-        &eventAttributes,
-        NULL,
-        OBJ_KERNEL_HANDLE,
-        NULL,
-        NULL);
-    status = ZwCreateEvent(
-        &eventHandle,
-        SYNCHRONIZE | EVENT_MODIFY_STATE,
-        &eventAttributes,
-        NotificationEvent,
-        FALSE);
-    if (!NT_SUCCESS(status)) {
-        ControlFree(ioctlBuffer);
-        return status;
-    }
-
     status = ZwDeviceIoControlFile(
         Handle,
-        eventHandle,
+        EventHandle,
         NULL,
         NULL,
         &ioStatus,
         IOCTL_SCSI_MINIPORT,
-        ioctlBuffer,
-        ioctlBufferSize,
-        ioctlBuffer,
-        ioctlBufferSize);
+        IoctlBuffer,
+        IoctlBufferSize,
+        IoctlBuffer,
+        IoctlBufferSize);
     if (status == STATUS_PENDING) {
-        status = ZwWaitForSingleObject(eventHandle, FALSE, NULL);
+        status = ZwWaitForSingleObject(EventHandle, FALSE, NULL);
         if (NT_SUCCESS(status)) {
             status = ioStatus.Status;
         }
     } else if (NT_SUCCESS(status)) {
         status = ioStatus.Status;
     }
-
-    ZwClose(eventHandle);
 
     if (NT_SUCCESS(status)) {
         if (ioStatus.Information < sizeof(SRB_IO_CONTROL) + YUMEDISK_MESSAGE_BASE_SIZE) {
@@ -332,6 +310,70 @@ ControlSendMiniportBuffer(
         }
     }
 
+    return status;
+}
+
+static
+NTSTATUS
+ControlSendMiniportBuffer(
+    _In_ HANDLE Handle,
+    _Inout_updates_bytes_(BufferCapacity) PUCHAR Buffer,
+    _In_ ULONG InputLength,
+    _In_ ULONG BufferCapacity,
+    _Out_ ULONG* BytesReturned
+)
+{
+    ULONG ioctlBufferSize;
+    PUCHAR ioctlBuffer;
+    OBJECT_ATTRIBUTES eventAttributes;
+    HANDLE eventHandle;
+    NTSTATUS status;
+
+    *BytesReturned = 0;
+
+    if (Handle == NULL ||
+        Buffer == NULL ||
+        BufferCapacity < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
+        BufferCapacity > MAXULONG - sizeof(SRB_IO_CONTROL) ||
+        InputLength < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
+        InputLength > BufferCapacity) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ioctlBufferSize = sizeof(SRB_IO_CONTROL) + BufferCapacity;
+    ioctlBuffer = (PUCHAR)ControlAlloc(ioctlBufferSize);
+    if (ioctlBuffer == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    InitializeObjectAttributes(
+        &eventAttributes,
+        NULL,
+        OBJ_KERNEL_HANDLE,
+        NULL,
+        NULL);
+    status = ZwCreateEvent(
+        &eventHandle,
+        SYNCHRONIZE | EVENT_MODIFY_STATE,
+        &eventAttributes,
+        NotificationEvent,
+        FALSE);
+    if (!NT_SUCCESS(status)) {
+        ControlFree(ioctlBuffer);
+        return status;
+    }
+
+    status = ControlSendPreparedMiniportBuffer(
+        Handle,
+        eventHandle,
+        Buffer,
+        InputLength,
+        BufferCapacity,
+        ioctlBuffer,
+        ioctlBufferSize,
+        BytesReturned);
+
+    ZwClose(eventHandle);
     ControlFree(ioctlBuffer);
     return status;
 }
@@ -491,11 +533,37 @@ ControlProxyCommand(
     _Out_ ULONG* BytesReturned
 )
 {
+    PCTRL_SYNC_COMMAND_BUFFER commandBuffer;
+    ULONG ioctlBufferSize;
+    NTSTATUS status;
+
     if (Context == NULL || Context->MiniportHandle == NULL) {
         return STATUS_DEVICE_NOT_READY;
     }
 
-    return ControlSendMiniportBuffer(Context->MiniportHandle, Buffer, InputLength, BufferCapacity, BytesReturned);
+    if (BufferCapacity > MAXULONG - sizeof(SRB_IO_CONTROL)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ioctlBufferSize = sizeof(SRB_IO_CONTROL) + BufferCapacity;
+    commandBuffer = NULL;
+    status = ControlTransportRuntimeAcquireSyncCommandBuffer(Context, ioctlBufferSize, &commandBuffer);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    status = ControlSendPreparedMiniportBuffer(
+        Context->MiniportHandle,
+        commandBuffer->EventHandle,
+        Buffer,
+        InputLength,
+        BufferCapacity,
+        commandBuffer->IoctlBuffer,
+        commandBuffer->IoctlBufferSize,
+        BytesReturned);
+
+    ControlTransportRuntimeReleaseSyncCommandBuffer(commandBuffer);
+    return status;
 }
 
 NTSTATUS
@@ -666,5 +734,5 @@ ControlSendSessionCleanup(
     message->Header.SessionId = Context->SessionId;
     message->Header.Flags = YUMEDISK_SESSION_CLOSE_FLAG;
 
-    (VOID)ControlProxyCommand(Context, buffer, sizeof(buffer), sizeof(buffer), &bytesReturned);
+    (VOID)ControlSendMiniportBuffer(Context->MiniportHandle, buffer, sizeof(buffer), sizeof(buffer), &bytesReturned);
 }
