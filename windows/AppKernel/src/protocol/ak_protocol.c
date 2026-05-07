@@ -414,6 +414,7 @@ static AK_STATUS AkProtocolSendMessage(
     (void)memset(&overlapped, 0, sizeof(overlapped));
     overlapped.hEvent = event_handle;
     bytes_returned = 0u;
+    error = ERROR_SUCCESS;
     ok = DeviceIoControl(
         file,
         IOCTL_YUMEDISK_APP_COMMAND,

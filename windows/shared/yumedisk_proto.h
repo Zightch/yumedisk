@@ -78,16 +78,11 @@ typedef struct _YUMEDISK_MESSAGE {
 
 typedef struct _YUMEDISK_KMDF_INFO {
     ULONG VersionBe;
-    ULONG Reserved;
-    WCHAR ServiceName[16];
 } YUMEDISK_KMDF_INFO, *PYUMEDISK_KMDF_INFO;
 
 typedef struct _YUMEDISK_SCSI_INFO {
     ULONG VersionBe;
-    ULONG MaxTargets;
-    ULONG Reserved;
     CHAR AdapterSignature[8];
-    WCHAR ServiceName[16];
 } YUMEDISK_SCSI_INFO, *PYUMEDISK_SCSI_INFO;
 
 typedef struct _YUMEDISK_CREATE_DISK {

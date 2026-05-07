@@ -147,8 +147,6 @@ ControlHandleQueryKmdfInfo(
 
     info = (PYUMEDISK_KMDF_INFO)message->Payload;
     info->VersionBe = YUMEDISK_COMPONENT_VERSION_BE;
-    info->Reserved = 0u;
-    RtlCopyMemory(info->ServiceName, L"YumeDiskKMDF", sizeof(L"YumeDiskKMDF"));
 
     WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, message->Header.Size);
     return STATUS_SUCCESS;

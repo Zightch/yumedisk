@@ -17,9 +17,7 @@ DiskHandleQueryScsiInfo(
     info = (PYUMEDISK_SCSI_INFO)Message->Payload;
     RtlZeroMemory(info, sizeof(*info));
     info->VersionBe = YUMEDISK_COMPONENT_VERSION_BE;
-    info->MaxTargets = YUMEDISK_USABLE_TARGET_COUNT;
     RtlCopyMemory(info->AdapterSignature, YUMEDISK_MINIPORT_SIGNATURE, sizeof(info->AdapterSignature));
-    RtlCopyMemory(info->ServiceName, L"YumeDiskSCSI", sizeof(L"YumeDiskSCSI"));
 
     DiskInitMessageStatus(Message, YumeDiskCommandQueryScsiInfo, STATUS_SUCCESS, sizeof(YUMEDISK_SCSI_INFO));
     KeAcquireSpinLock(&Extension->SessionLock, &oldIrql);

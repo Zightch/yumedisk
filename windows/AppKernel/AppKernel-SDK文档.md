@@ -231,7 +231,8 @@ typedef struct AK_OPEN_PARAMS {
 - `AK_STATUS_NOT_FOUND`
   - 控制设备不存在，通常表示驱动未安装或 devnode 未创建成功。
 - `AK_STATUS_NOT_SUPPORTED`
-  - `KMDF / SCSI / AppKernel` 版本不一致。
+  - 协议或能力路径当前不可用。
+  - `AkOpen` 阶段最常见含义是 `KMDF / SCSI / AppKernel` 版本不一致。
 - `AK_STATUS_INSUFFICIENT_RESOURCES`
   - 本地对象、事件队列或线程资源不足。
 - 其他错误
@@ -896,7 +897,7 @@ typedef enum AK_EVENT_TYPE {
 | `AK_STATUS_UNSUCCESSFUL` | `0xC0000001` | 泛化失败 |
 | `AK_STATUS_INVALID_PARAMETER` | `0xC000000D` | 参数不合法 |
 | `AK_STATUS_NOT_FOUND` | `0xC0000225` | 目标不存在，常见于控制设备未就绪 |
-| `AK_STATUS_NOT_SUPPORTED` | `0xC00000BB` | 版本不匹配 |
+| `AK_STATUS_NOT_SUPPORTED` | `0xC00000BB` | 当前协议/能力不支持；`AkOpen` 场景下通常表示版本不匹配 |
 | `AK_STATUS_INSUFFICIENT_RESOURCES` | `0xC000009A` | 内存、句柄或线程资源不足 |
 | `AK_STATUS_DEVICE_NOT_READY` | `0xC00000A3` | session 或 transport 未准备好 |
 | `AK_STATUS_ALREADY_EXISTS` | `0xC0000035` | target 已存在 |

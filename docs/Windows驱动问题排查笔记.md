@@ -139,7 +139,7 @@ active_read_slots=1
 第一类是接口选错：
 
 - `KMDF` 枚举 `GUID_DEVINTERFACE_STORAGEPORT` 时会扫到大量非本驱动接口。
-- 只有通过 `QueryScsiInfo` 校验签名、组件版本、service name 后，才能确认目标 miniport。
+- 只有通过 `QueryScsiInfo` 校验签名和组件版本后，才能确认目标 miniport。
 - 否则容易打开到别的 storageport 接口，`ZwDeviceIoControlFile(IOCTL_SCSI_MINIPORT)` 直接失败。
 
 第二类是首个 probe read 没真正闭环：
