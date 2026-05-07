@@ -80,6 +80,24 @@ bool TryParseMediaMode(
     return false;
 }
 
+bool TryParseReadOnlyToken(
+    const std::string& token,
+    bool* read_only)
+{
+    const std::string lowered = MakeLowerAscii(token);
+
+    if (lowered == "false") {
+        *read_only = false;
+        return true;
+    }
+    if (lowered == "true") {
+        *read_only = true;
+        return true;
+    }
+
+    return false;
+}
+
 MediaMode ResolveMediaMode(
     MediaMode requested_mode,
     uint64_t disk_size_bytes)
@@ -119,7 +137,7 @@ void PrintUsage()
         << "  dense media limit = " << (kMaxDenseMediaBytes / (1024ull * 1024ull)) << " MiB\n"
         << "\n"
         << "runtime create syntax:\n"
-        << "  ct <disk-size-mb> [auto|dense|sparse] [target]\n";
+        << "  ct <disk-size-mb> [auto|dense|sparse] [true|false] [target]\n";
 }
 
 ParseResult ParseArgs(
@@ -192,6 +210,7 @@ bool ParseCreateDiskCommand(
     uint64_t disk_size_bytes;
     size_t index;
     bool mode_seen;
+    bool read_only_seen;
     bool target_seen;
 
     if ((request == nullptr) || (error_text == nullptr)) {
@@ -199,7 +218,7 @@ bool ParseCreateDiskCommand(
     }
 
     if (tokens.empty()) {
-        *error_text = L"ct requires <disk-size-mb> [auto|dense|sparse] [target]";
+        *error_text = L"ct requires <disk-size-mb> [auto|dense|sparse] [true|false] [target]";
         return false;
     }
 
@@ -218,11 +237,14 @@ bool ParseCreateDiskCommand(
     request->DiskSizeBytes = disk_size_bytes;
     request->RequestedMode = MediaMode::Auto;
     request->TargetId = YUMEDISK_MAX_TARGETS;
+    request->ReadOnly = false;
     mode_seen = false;
+    read_only_seen = false;
     target_seen = false;
 
     for (index = 1; index < tokens.size(); ++index) {
         MediaMode parsed_mode;
+        bool parsed_read_only;
         ULONG parsed_target;
 
         if (TryParseMediaMode(tokens[index], &parsed_mode)) {
@@ -232,6 +254,16 @@ bool ParseCreateDiskCommand(
             }
             request->RequestedMode = parsed_mode;
             mode_seen = true;
+            continue;
+        }
+
+        if (TryParseReadOnlyToken(tokens[index], &parsed_read_only)) {
+            if (read_only_seen) {
+                *error_text = L"duplicate readOnly";
+                return false;
+            }
+            request->ReadOnly = parsed_read_only;
+            read_only_seen = true;
             continue;
         }
 

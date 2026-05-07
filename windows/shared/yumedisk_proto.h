@@ -88,6 +88,8 @@ typedef struct _YUMEDISK_SCSI_INFO {
 typedef struct _YUMEDISK_CREATE_DISK {
     ULONG TargetId;
     ULONG SectorSize;
+    ULONG ReadOnly;
+    ULONG Reserved0;
     ULONGLONG SectorCount;
     ULONGLONG DiskSizeBytes;
 } YUMEDISK_CREATE_DISK, *PYUMEDISK_CREATE_DISK;

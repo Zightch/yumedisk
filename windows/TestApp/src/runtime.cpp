@@ -18,6 +18,12 @@ const AK_MEDIA_OPS kMediaOps = {
     HostStageWrite
 };
 
+const wchar_t* ReadOnlyToText(
+    bool read_only)
+{
+    return read_only ? L"true" : L"false";
+}
+
 std::vector<std::shared_ptr<ManagedDisk>> SnapshotManagedDisks(
     BackendContext* context)
 {
@@ -286,7 +292,7 @@ void PrintRuntimeHelp()
         << "commands:\n"
         << "  help                         show this help\n"
         << "  query                        print AppKernel session state\n"
-        << "  ct <disk-size-mb> [auto|dense|sparse] [target]\n"
+        << "  ct <disk-size-mb> [auto|dense|sparse] [true|false] [target]\n"
         << "                               create one disk target through AppKernel\n"
         << "  rm <target>                  remove one disk target\n"
         << "  rm all                       remove all disk targets\n"
@@ -350,6 +356,7 @@ void ListManagedDisks(
         std::wcout << L"target=" << disk->TargetId
                    << L", disk_bytes=" << disk->DiskSizeBytes
                    << L", sector_size=" << disk->SectorSize
+                   << L", read_only=" << ReadOnlyToText(disk->ReadOnly)
                    << L", media=" << MediaModeToText(disk->Mode)
                    << L", backing=" << BackingDescription(*disk)
                    << L", slot_engine=" << ((have_state && (disk_state.Lifecycle == AkStateRunning)) ? L"running" : L"stopped")
@@ -394,6 +401,7 @@ bool CreateManagedDisk(
     disk->TargetId = request.TargetId;
     disk->SectorSize = context->Config.SectorSize;
     disk->DiskSizeBytes = request.DiskSizeBytes;
+    disk->ReadOnly = request.ReadOnly;
     disk->SlotDepth = context->Config.QueueDepth;
     disk->ReadWorkerCount = ComputeWorkerCount(
         disk->SlotDepth,
@@ -406,6 +414,7 @@ bool CreateManagedDisk(
 
     if (!InitializeManagedDiskMedia(disk.get(), request.RequestedMode, &media_reason)) {
         std::wcerr << L"create failed, target=" << request.TargetId
+                   << L", read_only=" << ReadOnlyToText(request.ReadOnly)
                    << L", media=" << MediaModeToText(request.RequestedMode)
                    << L", reason=" << media_reason
                    << std::endl;
@@ -422,6 +431,7 @@ bool CreateManagedDisk(
     params.ReadWorkerCount = (UINT16)disk->ReadWorkerCount;
     params.WriteWorkerCount = (UINT16)disk->WriteWorkerCount;
     params.AckBatchMaxRanges = (UINT32)context->Config.QueueDepth;
+    params.ReadOnly = request.ReadOnly ? 1u : 0u;
 
     handle = nullptr;
     status = AkCreateDisk(context->Session, &params, &kMediaOps, disk.get(), &handle);
@@ -429,6 +439,7 @@ bool CreateManagedDisk(
         RemoveManagedDiskFromMap(context, request.TargetId);
         CleanupManagedDiskMedia(disk.get());
         std::wcerr << L"create failed, target=" << request.TargetId
+                   << L", read_only=" << ReadOnlyToText(request.ReadOnly)
                    << L", status=" << FormatStatusHex(status) << std::endl;
         return false;
     }
@@ -436,6 +447,7 @@ bool CreateManagedDisk(
     disk->Handle = handle;
     std::wcout << L"created target=" << request.TargetId
                << L", disk_bytes=" << request.DiskSizeBytes
+               << L", read_only=" << ReadOnlyToText(disk->ReadOnly)
                << L", media=" << MediaModeToText(disk->Mode)
                << L", queue_depth=" << context->Config.QueueDepth
                << L", slot_bytes=" << context->Config.WriteSlotBytes
@@ -646,6 +658,7 @@ void PrintDebugSnapshot(
             (AkQueryDiskState(disk->Handle, &disk_state) == AK_STATUS_SUCCESS)) {
             std::wcout << L"debug_disk target=" << disk->TargetId
                        << L", lifecycle=" << LifecycleToText(disk_state.Lifecycle)
+                       << L", read_only=" << ReadOnlyToText(disk->ReadOnly)
                        << L", media=" << MediaModeToText(disk->Mode)
                        << L", backing=" << BackingDescription(*disk)
                        << L", read_workers_running=" << (disk_state.ReadWorkersRunning ? L"true" : L"false")
@@ -660,6 +673,7 @@ void PrintDebugSnapshot(
         } else {
             std::wcout << L"debug_disk target=" << disk->TargetId
                        << L", lifecycle=<unknown>"
+                       << L", read_only=" << ReadOnlyToText(disk->ReadOnly)
                        << L", media=" << MediaModeToText(disk->Mode)
                        << L", backing=" << BackingDescription(*disk)
                        << L", read_workers=" << disk->ReadWorkerCount

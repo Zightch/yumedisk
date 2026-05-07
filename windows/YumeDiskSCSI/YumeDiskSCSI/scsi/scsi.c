@@ -111,6 +111,38 @@ DiskMapQueueFailureToSrbStatus(
 
 static
 VOID
+DiskFillWriteProtectedSense(
+    _Inout_updates_bytes_opt_(*SenseInfoBufferLength) PUCHAR SenseInfoBuffer,
+    _Inout_ UCHAR* SenseInfoBufferLength
+)
+{
+    UCHAR senseLength;
+
+    if (SenseInfoBuffer == NULL || SenseInfoBufferLength == NULL || *SenseInfoBufferLength == 0) {
+        return;
+    }
+
+    senseLength = min(*SenseInfoBufferLength, 18u);
+    RtlZeroMemory(SenseInfoBuffer, senseLength);
+    SenseInfoBuffer[0] = 0x70;
+    if (senseLength > 2) {
+        SenseInfoBuffer[2] = SCSI_SENSE_DATA_PROTECT;
+    }
+    if (senseLength > 7) {
+        SenseInfoBuffer[7] = (UCHAR)(senseLength - 8);
+    }
+    if (senseLength > 12) {
+        SenseInfoBuffer[12] = 0x27;
+    }
+    if (senseLength > 13) {
+        SenseInfoBuffer[13] = 0x00;
+    }
+
+    *SenseInfoBufferLength = senseLength;
+}
+
+static
+VOID
 DiskHandleReportLuns(
     _Inout_updates_bytes_(TransferLength) PUCHAR DataBuffer,
     _In_ ULONG TransferLength,
@@ -291,6 +323,8 @@ DiskHandleModeSense(
     _In_ ULONG RequiredLength,
     _In_ UCHAR LengthByteIndex,
     _In_ UCHAR LengthValue,
+    _In_ UCHAR DeviceSpecificParameterIndex,
+    _In_ BOOLEAN ReadOnly,
     _Out_ ULONG* DataTransferLength,
     _Out_ UCHAR* SrbStatus
 )
@@ -302,6 +336,9 @@ DiskHandleModeSense(
 
     RtlZeroMemory(DataBuffer, RequiredLength);
     DataBuffer[LengthByteIndex] = LengthValue;
+    if (ReadOnly && DeviceSpecificParameterIndex < RequiredLength) {
+        DataBuffer[DeviceSpecificParameterIndex] = 0x80;
+    }
     *DataTransferLength = RequiredLength;
 }
 
@@ -366,10 +403,28 @@ DiskHandleScsiCdb(
         DiskHandleRequestSense(DataBuffer, transferLength, DataTransferLength);
         break;
     case SCSIOP_MODE_SENSE:
-        DiskHandleModeSense(DataBuffer, transferLength, 4, 0, 3, DataTransferLength, SrbStatus);
+        DiskHandleModeSense(
+            DataBuffer,
+            transferLength,
+            4,
+            0,
+            3,
+            2,
+            disk->ReadOnly,
+            DataTransferLength,
+            SrbStatus);
         break;
     case SCSIOP_MODE_SENSE10:
-        DiskHandleModeSense(DataBuffer, transferLength, 8, 1, 6, DataTransferLength, SrbStatus);
+        DiskHandleModeSense(
+            DataBuffer,
+            transferLength,
+            8,
+            1,
+            6,
+            3,
+            disk->ReadOnly,
+            DataTransferLength,
+            SrbStatus);
         break;
     case SCSIOP_MEDIUM_REMOVAL:
     case SCSIOP_START_STOP_UNIT:
@@ -407,6 +462,14 @@ DiskHandleScsiCdb(
     case SCSIOP_WRITE:
     case SCSIOP_WRITE12:
     case SCSIOP_WRITE16:
+        if (disk->ReadOnly) {
+            *SrbStatus = SRB_STATUS_ERROR;
+            *ScsiStatus = SCSISTAT_CHECK_CONDITION;
+            *DataTransferLength = 0;
+            DiskFillWriteProtectedSense(SenseInfoBuffer, SenseInfoBufferLength);
+            break;
+        }
+
         if (!DiskTryParseReadWriteCdb(disk, Cdb, transferLength, &lba, &blockCount)) {
             *SrbStatus = SRB_STATUS_INVALID_REQUEST;
             *ScsiStatus = SCSISTAT_CHECK_CONDITION;

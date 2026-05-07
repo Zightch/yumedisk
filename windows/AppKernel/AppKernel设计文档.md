@@ -279,6 +279,7 @@ typedef struct AK_DISK_PARAMS {
     UINT16 ReadWorkerCount;
     UINT16 WriteWorkerCount;
     UINT32 AckBatchMaxRanges;
+    UINT32 ReadOnly;
 } AK_DISK_PARAMS;
 ```
 
@@ -287,6 +288,7 @@ typedef struct AK_DISK_PARAMS {
 - `QueueDepth` 按盘解释，不与其他盘共享。
 - `ReadWorkerCount` / `WriteWorkerCount` 是小常数配置，不是拿来硬堆 QD 的扩展点。
 - `WriteSlotBytes` 和 `AckBatchMaxRanges` 由 `AppKernel` 统一执行，不允许业务宿主绕过。
+- `ReadOnly` 只是建盘静态属性透传，`AppKernel` 不单独维护一套只读数据面分支。
 
 ## 5.3 会话接口
 

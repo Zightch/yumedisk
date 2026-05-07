@@ -95,6 +95,7 @@ DiskHandleCreateDisk(
     disk->SectorSize = request->SectorSize;
     disk->SectorCount = request->SectorCount;
     disk->Size = diskSize;
+    disk->ReadOnly = request->ReadOnly != 0u ? TRUE : FALSE;
     disk->Configured = TRUE;
     disk->Present = TRUE;
     disk->Removing = FALSE;
@@ -134,6 +135,7 @@ DiskHandleRemoveDisk(
     disk->Configured = FALSE;
     disk->Present = FALSE;
     disk->Removing = TRUE;
+    disk->ReadOnly = FALSE;
     DiskResetDiskStorage(disk);
     disk->Generation++;
     DiskCompleteTargetPending(DeviceExtension, request->TargetId, STATUS_DEVICE_NOT_CONNECTED);
@@ -162,6 +164,7 @@ DiskHandleRemoveAllDisks(
             Extension->Disk[index].Configured = FALSE;
             Extension->Disk[index].Present = FALSE;
             Extension->Disk[index].Removing = TRUE;
+            Extension->Disk[index].ReadOnly = FALSE;
             DiskResetDiskStorage(&Extension->Disk[index]);
             Extension->Disk[index].Generation++;
         }

@@ -57,6 +57,7 @@ struct CreateDiskRequest {
     ULONG TargetId = YUMEDISK_MAX_TARGETS;
     uint64_t DiskSizeBytes = 0;
     MediaMode RequestedMode = MediaMode::Auto;
+    bool ReadOnly = false;
 };
 
 struct DiskIdentity {
@@ -98,6 +99,7 @@ struct ManagedDisk {
     ULONG TargetId = 0;
     ULONG SectorSize = 0;
     uint64_t DiskSizeBytes = 0;
+    bool ReadOnly = false;
     size_t SlotDepth = 0;
     size_t ReadWorkerCount = 0;
     size_t WriteWorkerCount = 0;

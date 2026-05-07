@@ -850,6 +850,8 @@ AK_STATUS AkProtocolCreateDisk(
     payload = (YUMEDISK_CREATE_DISK*)buffer.Message->Payload;
     payload->TargetId = params->TargetId;
     payload->SectorSize = params->SectorSize;
+    payload->ReadOnly = params->ReadOnly != 0u ? 1u : 0u;
+    payload->Reserved0 = 0u;
     payload->SectorCount = params->DiskSizeBytes / params->SectorSize;
     payload->DiskSizeBytes = params->DiskSizeBytes;
 

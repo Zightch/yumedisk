@@ -41,7 +41,7 @@ typedef struct _YUME_DISK {
     BOOLEAN Configured;
     BOOLEAN Present;
     BOOLEAN Removing;
-    BOOLEAN Reserved;
+    BOOLEAN ReadOnly;
 } YUME_DISK, *PYUME_DISK;
 
 typedef struct _DEVICE_CONTEXT {

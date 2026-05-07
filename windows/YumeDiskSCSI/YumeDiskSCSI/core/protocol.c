@@ -47,6 +47,8 @@ DiskMapNtStatusToSrbStatus(
     switch (Status) {
     case STATUS_CANCELLED:
         return SRB_STATUS_ABORTED;
+    case STATUS_MEDIA_WRITE_PROTECTED:
+        return SRB_STATUS_ERROR;
     case STATUS_DEVICE_DOES_NOT_EXIST:
     case STATUS_DEVICE_NOT_CONNECTED:
     case STATUS_NO_SUCH_DEVICE:
@@ -80,7 +82,9 @@ DiskFillSenseBuffer(
     senseLength = min(Cdb16->SenseInfoBufferLength, 18u);
     RtlZeroMemory(senseBuffer, senseLength);
 
-    if (Status == STATUS_DEVICE_DOES_NOT_EXIST ||
+    if (Status == STATUS_MEDIA_WRITE_PROTECTED) {
+        senseKey = SCSI_SENSE_DATA_PROTECT;
+    } else if (Status == STATUS_DEVICE_DOES_NOT_EXIST ||
         Status == STATUS_DEVICE_NOT_CONNECTED ||
         Status == STATUS_NO_SUCH_DEVICE) {
         senseKey = SCSI_SENSE_NOT_READY;
@@ -98,6 +102,14 @@ DiskFillSenseBuffer(
     }
     if (senseLength > 7) {
         senseBuffer[7] = (UCHAR)(senseLength - 8);
+    }
+    if (Status == STATUS_MEDIA_WRITE_PROTECTED) {
+        if (senseLength > 12) {
+            senseBuffer[12] = 0x27;
+        }
+        if (senseLength > 13) {
+            senseBuffer[13] = 0x00;
+        }
     }
     Cdb16->SenseInfoBufferLength = senseLength;
 }

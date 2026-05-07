@@ -421,6 +421,7 @@ typedef struct AK_DISK_PARAMS {
     UINT16 ReadWorkerCount;
     UINT16 WriteWorkerCount;
     UINT32 AckBatchMaxRanges;
+    UINT32 ReadOnly;
 } AK_DISK_PARAMS;
 ```
 
@@ -435,6 +436,7 @@ typedef struct AK_DISK_PARAMS {
 - `ReadWorkerCount > 0`
 - `WriteWorkerCount > 0`
 - `AckBatchMaxRanges > 0`
+- `ReadOnly == 0` 表示读写盘，`ReadOnly != 0` 表示只读盘
 - `media_ops->read_bytes` 不能为空
 - `media_ops->stage_write` 不能为空
 
@@ -450,6 +452,7 @@ typedef struct AK_DISK_PARAMS {
 | `ReadWorkerCount` | 读 worker 数量 | 只用于分摊该盘 `QueueDepth`，不是拿来硬堆 QD |
 | `WriteWorkerCount` | 写 worker 数量 | 只用于分摊该盘 `QueueDepth`，不是拿来硬堆 QD |
 | `AckBatchMaxRanges` | 单次 `WRITE_ACK_BATCH` 最多携带的 ACK range 数 | 影响 ACK flush 粒度 |
+| `ReadOnly` | 是否对系统暴露为只读盘 | `0 = 读写盘`，非 `0 = 只读盘` |
 
 当前建盘顺序固定为：
 
@@ -464,6 +467,7 @@ typedef struct AK_DISK_PARAMS {
 - `AppKernel` 的该盘 runtime 已经跑起来。
 - 驱动侧 `CREATE_DISK` 已完成。
 - 读路径已具备 probe read 能力。
+- 如果 `ReadOnly != 0`，只读语义会由 `SCSI` 统一对系统宣告并拦截系统写请求。
 
 它不表示：
 
@@ -956,6 +960,7 @@ void RunHost(void)
     disk_params.ReadWorkerCount = 4;
     disk_params.WriteWorkerCount = 2;
     disk_params.AckBatchMaxRanges = 64;
+    disk_params.ReadOnly = 0;
 
     if (AkCreateDisk(session, &disk_params, &media_ops, host_disk_ctx, &disk) != AK_STATUS_SUCCESS) {
         AkClose(session);

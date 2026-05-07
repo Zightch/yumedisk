@@ -73,6 +73,7 @@ typedef struct AK_DISK_PARAMS {
     UINT16 ReadWorkerCount;
     UINT16 WriteWorkerCount;
     UINT32 AckBatchMaxRanges;
+    UINT32 ReadOnly;
 } AK_DISK_PARAMS;
 
 typedef struct AK_READ_OP {
