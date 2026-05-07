@@ -172,20 +172,16 @@ ControlSubmitSlotCompletionRoutine(
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-static
 VOID
-ControlSubmitSlotWorkItem(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_opt_ PVOID Context
+ControlTransportDispatchSlotRequest(
+    _Inout_ PCTRL_ASYNC_SLOT_REQUEST SlotRequest
 )
 {
     PCTRL_ASYNC_SLOT_REQUEST asyncRequest;
     NTSTATUS status;
     LONG ownerState;
 
-    UNREFERENCED_PARAMETER(DeviceObject);
-
-    asyncRequest = (PCTRL_ASYNC_SLOT_REQUEST)Context;
+    asyncRequest = SlotRequest;
     if (asyncRequest == NULL) {
         return;
     }
@@ -217,6 +213,20 @@ ControlSubmitSlotWorkItem(
             completionInformation);
         ControlTransportRuntimeReleaseSlotRequest(asyncRequest);
     }
+}
+
+VOID
+ControlTransportFailSlotRequest(
+    _Inout_ PCTRL_ASYNC_SLOT_REQUEST SlotRequest,
+    _In_ NTSTATUS Status
+)
+{
+    if (SlotRequest == NULL) {
+        return;
+    }
+
+    (VOID)ControlCompleteAsyncSlotRequest(SlotRequest, Status, 0);
+    ControlTransportRuntimeReleaseSlotRequest(SlotRequest);
 }
 
 static
@@ -578,13 +588,6 @@ ControlProxySubmitSlotAsync(
     submitSlot->Slot.Capacity = (UINT32)DirectBufferSize;
     submitSlot->Slot.Flags = YumeDiskSlotFlagNone;
 
-    asyncRequest->WorkItem = IoAllocateWorkItem(Context->MiniportDeviceObject);
-    if (asyncRequest->WorkItem == NULL) {
-        ControlSessionUnregisterPendingSlot(Context);
-        ControlTransportRuntimeReleaseSlotRequest(asyncRequest);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
     irp = asyncRequest->Irp;
     if (asyncRequest->IrpHasBeenSubmitted) {
         IoReuseIrp(irp, STATUS_NOT_SUPPORTED);
@@ -614,7 +617,13 @@ ControlProxySubmitSlotAsync(
         TRUE,
         TRUE);
 
-    IoQueueWorkItem(asyncRequest->WorkItem, ControlSubmitSlotWorkItem, DelayedWorkQueue, asyncRequest);
+    status = ControlTransportRuntimeSubmitSlotRequest(asyncRequest);
+    if (!NT_SUCCESS(status)) {
+        ControlSessionUnregisterPendingSlot(Context);
+        ControlTransportRuntimeReleaseSlotRequest(asyncRequest);
+        return status;
+    }
+
     return STATUS_PENDING;
 }
 

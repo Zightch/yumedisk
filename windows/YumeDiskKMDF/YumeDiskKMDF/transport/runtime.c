@@ -4,6 +4,29 @@
 
 #define CTRL_TRANSPORT_SLOT_POOL_HARD_LIMIT 1024
 
+_When_(Timeout == NULL, _IRQL_requires_max_(APC_LEVEL))
+_When_(Timeout->QuadPart != 0, _IRQL_requires_max_(APC_LEVEL))
+_When_(Timeout->QuadPart == 0, _IRQL_requires_max_(DISPATCH_LEVEL))
+NTSYSAPI
+NTSTATUS
+NTAPI
+ZwWaitForSingleObject(
+    _In_ HANDLE Handle,
+    _In_ BOOLEAN Alertable,
+    _In_opt_ PLARGE_INTEGER Timeout
+);
+
+VOID
+ControlTransportDispatchSlotRequest(
+    _Inout_ PCTRL_ASYNC_SLOT_REQUEST SlotRequest
+);
+
+VOID
+ControlTransportFailSlotRequest(
+    _Inout_ PCTRL_ASYNC_SLOT_REQUEST SlotRequest,
+    _In_ NTSTATUS Status
+);
+
 typedef enum _CTRL_TRANSPORT_RUNTIME_STATE {
     CtrlTransportRuntimeStopped = 0,
     CtrlTransportRuntimeRunning = 1,
@@ -16,10 +39,9 @@ struct _CTRL_TRANSPORT_RUNTIME {
     WDFSPINLOCK SubmitQueueLock;
     LIST_ENTRY FreeList;
     LIST_ENTRY SubmitQueue;
-    KEVENT FreeEvent;
     KEVENT SubmitEvent;
-    KEVENT StopEvent;
     KEVENT ActiveZeroEvent;
+    HANDLE WorkerThreadHandle;
     volatile LONG State;
     volatile LONG ActiveCount;
     volatile LONG PoolObjectCount;
@@ -80,7 +102,6 @@ ControlTransportRuntimeResetSlotRequest(
 {
     SlotRequest->SessionContext = NULL;
     SlotRequest->Request = NULL;
-    SlotRequest->WorkItem = NULL;
     SlotRequest->SlotId = 0;
     SlotRequest->TargetId = 0;
     SlotRequest->SlotType = YumeDiskSlotTypeInvalid;
@@ -106,10 +127,6 @@ ControlTransportRuntimeDestroySlotRequest(
         return;
     }
 
-    if (SlotRequest->WorkItem != NULL) {
-        IoFreeWorkItem(SlotRequest->WorkItem);
-        SlotRequest->WorkItem = NULL;
-    }
     if (SlotRequest->Irp != NULL) {
         IoFreeIrp(SlotRequest->Irp);
         SlotRequest->Irp = NULL;
@@ -139,6 +156,7 @@ ControlTransportRuntimeCreateSlotRequest(
 
     RtlZeroMemory(slotRequest, sizeof(*slotRequest));
     InitializeListHead(&slotRequest->PoolLink);
+    InitializeListHead(&slotRequest->SubmitLink);
     slotRequest->Runtime = Runtime;
     slotRequest->IrpStackSize = IrpStackSize;
 
@@ -184,6 +202,83 @@ ControlTransportRuntimeFreeSlotPool(
 }
 
 static
+PCTRL_ASYNC_SLOT_REQUEST
+ControlTransportRuntimeDequeueSubmitRequest(
+    _Inout_ PCTRL_TRANSPORT_RUNTIME Runtime
+)
+{
+    PLIST_ENTRY entry;
+    PCTRL_ASYNC_SLOT_REQUEST slotRequest;
+
+    slotRequest = NULL;
+    WdfSpinLockAcquire(Runtime->SubmitQueueLock);
+    if (!IsListEmpty(&Runtime->SubmitQueue)) {
+        entry = RemoveHeadList(&Runtime->SubmitQueue);
+        slotRequest = CONTAINING_RECORD(entry, CTRL_ASYNC_SLOT_REQUEST, SubmitLink);
+        InitializeListHead(&slotRequest->SubmitLink);
+    }
+    WdfSpinLockRelease(Runtime->SubmitQueueLock);
+    return slotRequest;
+}
+
+static
+VOID
+ControlTransportRuntimeFlushSubmitQueue(
+    _Inout_ PCTRL_TRANSPORT_RUNTIME Runtime,
+    _In_ NTSTATUS Status
+)
+{
+    PCTRL_ASYNC_SLOT_REQUEST slotRequest;
+
+    for (;;) {
+        slotRequest = ControlTransportRuntimeDequeueSubmitRequest(Runtime);
+        if (slotRequest == NULL) {
+            break;
+        }
+
+        ControlTransportFailSlotRequest(slotRequest, Status);
+    }
+}
+
+static
+VOID
+ControlTransportRuntimeSubmitWorker(
+    _In_ PVOID StartContext
+)
+{
+    PCTRL_TRANSPORT_RUNTIME runtime;
+
+    runtime = (PCTRL_TRANSPORT_RUNTIME)StartContext;
+    if (runtime == NULL) {
+        PsTerminateSystemThread(STATUS_INVALID_PARAMETER);
+    }
+
+    for (;;) {
+        PCTRL_ASYNC_SLOT_REQUEST slotRequest;
+
+        if (InterlockedCompareExchange(&runtime->State, 0, 0) != CtrlTransportRuntimeRunning) {
+            ControlTransportRuntimeFlushSubmitQueue(runtime, STATUS_DELETE_PENDING);
+            break;
+        }
+
+        slotRequest = ControlTransportRuntimeDequeueSubmitRequest(runtime);
+        if (slotRequest == NULL) {
+            (VOID)KeWaitForSingleObject(&runtime->SubmitEvent, Executive, KernelMode, FALSE, NULL);
+            continue;
+        }
+
+        if (InterlockedCompareExchange(&runtime->State, 0, 0) != CtrlTransportRuntimeRunning) {
+            ControlTransportFailSlotRequest(slotRequest, STATUS_DELETE_PENDING);
+            continue;
+        }
+
+        ControlTransportDispatchSlotRequest(slotRequest);
+    }
+
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+static
 VOID
 ControlTransportRuntimeDeleteLocks(
     _Inout_ PCTRL_TRANSPORT_RUNTIME Runtime
@@ -197,6 +292,25 @@ ControlTransportRuntimeDeleteLocks(
     if (Runtime->FreeListLock != NULL) {
         WdfObjectDelete(Runtime->FreeListLock);
         Runtime->FreeListLock = NULL;
+    }
+}
+
+static
+VOID
+ControlTransportRuntimeStopWorker(
+    _Inout_ PCTRL_TRANSPORT_RUNTIME Runtime
+)
+{
+    HANDLE workerThreadHandle;
+
+    InterlockedExchange(&Runtime->State, CtrlTransportRuntimeClosing);
+    KeSetEvent(&Runtime->SubmitEvent, IO_NO_INCREMENT, FALSE);
+
+    workerThreadHandle = Runtime->WorkerThreadHandle;
+    Runtime->WorkerThreadHandle = NULL;
+    if (workerThreadHandle != NULL) {
+        (VOID)ZwWaitForSingleObject(workerThreadHandle, FALSE, NULL);
+        ZwClose(workerThreadHandle);
     }
 }
 
@@ -218,6 +332,7 @@ ControlTransportRuntimeStart(
 )
 {
     WDF_OBJECT_ATTRIBUTES attributes;
+    OBJECT_ATTRIBUTES threadAttributes;
     PCTRL_TRANSPORT_RUNTIME runtime;
     NTSTATUS status;
 
@@ -240,9 +355,7 @@ ControlTransportRuntimeStart(
     runtime->ActiveCount = 0;
     InitializeListHead(&runtime->FreeList);
     InitializeListHead(&runtime->SubmitQueue);
-    KeInitializeEvent(&runtime->FreeEvent, NotificationEvent, FALSE);
-    KeInitializeEvent(&runtime->SubmitEvent, NotificationEvent, FALSE);
-    KeInitializeEvent(&runtime->StopEvent, NotificationEvent, FALSE);
+    KeInitializeEvent(&runtime->SubmitEvent, SynchronizationEvent, FALSE);
     KeInitializeEvent(&runtime->ActiveZeroEvent, NotificationEvent, TRUE);
 
     WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
@@ -262,7 +375,23 @@ ControlTransportRuntimeStart(
         return status;
     }
 
+    InitializeObjectAttributes(&threadAttributes, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    status = PsCreateSystemThread(
+        &runtime->WorkerThreadHandle,
+        THREAD_ALL_ACCESS,
+        &threadAttributes,
+        NULL,
+        NULL,
+        ControlTransportRuntimeSubmitWorker,
+        runtime);
+    if (!NT_SUCCESS(status)) {
+        ControlTransportRuntimeDeleteLocks(runtime);
+        ControlFree(runtime);
+        return status;
+    }
+
     if (InterlockedCompareExchangePointer((PVOID volatile*)&Context->TransportRuntime, runtime, NULL) != NULL) {
+        ControlTransportRuntimeStopWorker(runtime);
         ControlTransportRuntimeDeleteLocks(runtime);
         ControlFree(runtime);
         return STATUS_DEVICE_BUSY;
@@ -288,7 +417,7 @@ ControlTransportRuntimeBeginClose(
     }
 
     InterlockedExchange(&runtime->State, CtrlTransportRuntimeClosing);
-    KeSetEvent(&runtime->StopEvent, IO_NO_INCREMENT, FALSE);
+    KeSetEvent(&runtime->SubmitEvent, IO_NO_INCREMENT, FALSE);
 }
 
 VOID
@@ -310,7 +439,7 @@ ControlTransportRuntimeStop(
     }
 
     InterlockedExchange(&runtime->State, CtrlTransportRuntimeClosing);
-    KeSetEvent(&runtime->StopEvent, IO_NO_INCREMENT, FALSE);
+    ControlTransportRuntimeStopWorker(runtime);
     ControlTransportRuntimeDrainActive(runtime);
     InterlockedExchange(&runtime->State, CtrlTransportRuntimeStopped);
     ControlTransportRuntimeFreeSlotPool(runtime);
@@ -416,17 +545,41 @@ ControlTransportRuntimeReleaseSlotRequest(
         return;
     }
 
-    if (SlotRequest->WorkItem != NULL) {
-        IoFreeWorkItem(SlotRequest->WorkItem);
-        SlotRequest->WorkItem = NULL;
-    }
-
     ControlTransportRuntimeResetSlotRequest(SlotRequest);
 
     WdfSpinLockAcquire(runtime->FreeListLock);
     InsertTailList(&runtime->FreeList, &SlotRequest->PoolLink);
     WdfSpinLockRelease(runtime->FreeListLock);
 
-    KeSetEvent(&runtime->FreeEvent, IO_NO_INCREMENT, FALSE);
     ControlTransportRuntimeDereferenceActive(runtime);
+}
+
+NTSTATUS
+ControlTransportRuntimeSubmitSlotRequest(
+    _Inout_ PCTRL_ASYNC_SLOT_REQUEST SlotRequest
+)
+{
+    PCTRL_TRANSPORT_RUNTIME runtime;
+
+    if (SlotRequest == NULL || SlotRequest->Runtime == NULL) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    runtime = SlotRequest->Runtime;
+    if (InterlockedCompareExchange(&runtime->State, 0, 0) != CtrlTransportRuntimeRunning) {
+        return STATUS_DELETE_PENDING;
+    }
+
+    WdfSpinLockAcquire(runtime->SubmitQueueLock);
+    if (InterlockedCompareExchange(&runtime->State, 0, 0) != CtrlTransportRuntimeRunning) {
+        WdfSpinLockRelease(runtime->SubmitQueueLock);
+        return STATUS_DELETE_PENDING;
+    }
+
+    InsertTailList(&runtime->SubmitQueue, &SlotRequest->SubmitLink);
+    InterlockedIncrement(&runtime->SubmitQueued);
+    WdfSpinLockRelease(runtime->SubmitQueueLock);
+
+    KeSetEvent(&runtime->SubmitEvent, IO_NO_INCREMENT, FALSE);
+    return STATUS_PENDING;
 }

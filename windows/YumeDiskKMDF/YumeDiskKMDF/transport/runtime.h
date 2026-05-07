@@ -4,11 +4,11 @@
 
 typedef struct _CTRL_ASYNC_SLOT_REQUEST {
     LIST_ENTRY PoolLink;
+    LIST_ENTRY SubmitLink;
     PCTRL_TRANSPORT_RUNTIME Runtime;
     PCTRL_FILE_CONTEXT SessionContext;
     WDFREQUEST Request;
     PIRP Irp;
-    PIO_WORKITEM WorkItem;
     UINT64 SlotId;
     UINT32 TargetId;
     UINT32 SlotType;
@@ -51,4 +51,9 @@ ControlTransportRuntimeAcquireSlotRequest(
 VOID
 ControlTransportRuntimeReleaseSlotRequest(
     _Inout_opt_ PCTRL_ASYNC_SLOT_REQUEST SlotRequest
+);
+
+NTSTATUS
+ControlTransportRuntimeSubmitSlotRequest(
+    _Inout_ PCTRL_ASYNC_SLOT_REQUEST SlotRequest
 );
