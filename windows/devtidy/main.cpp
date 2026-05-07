@@ -61,7 +61,7 @@ static const DeviceSpec kDeviceSpecs[] = {
     }
 };
 
-static const char* kOutputSchema = "devtidy.v1";
+static const char* kOutputSchema = "v1";
 
 static std::string WideToUtf8(const std::wstring& value) {
     if (value.empty()) {

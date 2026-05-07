@@ -41,8 +41,7 @@ ControlGetInputMessage(
     }
 
     InputMessage->RequestLength = (ULONG)YUMEDISK_MESSAGE_BASE_SIZE + message->Header.PayloadLength;
-    if (message->Header.Version != YUMEDISK_PROTOCOL_VERSION ||
-        message->Header.Size < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
+    if (message->Header.Size < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
         message->Header.Size > inputSize ||
         message->Header.Size < InputMessage->RequestLength) {
         return STATUS_INVALID_PARAMETER;
@@ -91,15 +90,68 @@ ControlInitOutputMessage(
     message = (PYUMEDISK_MESSAGE)OutputBuffer;
     RtlZeroMemory(OutputBuffer, YUMEDISK_MESSAGE_BASE_SIZE);
     message->Header.Size = YUMEDISK_MESSAGE_BASE_SIZE;
-    message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
     message->Header.Command = Command;
     message->Header.Status = Status;
+    message->Header.Reserved0 = 0u;
     message->Header.SessionId = SessionId;
     if (Header != NULL) {
         message->Header.TxId = Header->TxId;
         message->Header.TargetId = Header->TargetId;
         message->Header.Flags = Header->Flags;
     }
+    message->Header.Reserved1 = 0u;
+}
+
+static
+NTSTATUS
+ControlHandleQueryKmdfInfo(
+    _In_ WDFREQUEST Request,
+    _In_ const CTRL_INPUT_MESSAGE* InputMessage,
+    _In_ size_t OutputBufferLength,
+    _In_ UINT64 SessionId
+)
+{
+    NTSTATUS status;
+    PUCHAR outputBuffer;
+    size_t outputSize;
+    PYUMEDISK_MESSAGE message;
+    PYUMEDISK_KMDF_INFO info;
+
+    if (InputMessage->Message->Header.PayloadLength != 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    outputBuffer = NULL;
+    outputSize = 0;
+    status = ControlGetOutputBuffer(
+        Request,
+        OutputBufferLength,
+        YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_KMDF_INFO),
+        &outputBuffer,
+        &outputSize);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    RtlZeroMemory(outputBuffer, YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_KMDF_INFO));
+    message = (PYUMEDISK_MESSAGE)outputBuffer;
+    ControlInitOutputMessage(
+        outputBuffer,
+        outputSize,
+        &InputMessage->Message->Header,
+        YumeDiskCommandQueryKmdfInfo,
+        SessionId,
+        STATUS_SUCCESS);
+    message->Header.PayloadLength = sizeof(YUMEDISK_KMDF_INFO);
+    message->Header.Size = YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_KMDF_INFO);
+
+    info = (PYUMEDISK_KMDF_INFO)message->Payload;
+    info->VersionBe = YUMEDISK_COMPONENT_VERSION_BE;
+    info->Reserved = 0u;
+    RtlCopyMemory(info->ServiceName, L"YumeDiskKMDF", sizeof(L"YumeDiskKMDF"));
+
+    WdfRequestCompleteWithInformation(Request, STATUS_SUCCESS, message->Header.Size);
+    return STATUS_SUCCESS;
 }
 
 static
@@ -261,7 +313,6 @@ ControlProxyReadAck(
     RtlZeroMemory(buffer, sizeof(buffer));
     message = (PYUMEDISK_MESSAGE)buffer;
     message->Header.Size = sizeof(buffer);
-    message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
     message->Header.Command = YumeDiskCommandReadAck;
     message->Header.SessionId = SessionId;
     message->Header.TargetId = Header->TargetId;
@@ -504,7 +555,14 @@ ControlEvtIoDeviceControl(
     }
 
     switch (command) {
-    case YumeDiskCommandQueryInfo:
+    case YumeDiskCommandQueryKmdfInfo:
+        status = ControlHandleQueryKmdfInfo(Request, &inputMessage, OutputBufferLength, sessionId);
+        if (!NT_SUCCESS(status)) {
+            WdfRequestComplete(Request, status);
+        }
+        ControlSessionRelease(sessionContext);
+        return;
+    case YumeDiskCommandQueryScsiInfo:
     case YumeDiskCommandQueryDebugState:
     case YumeDiskCommandCreateDisk:
     case YumeDiskCommandRemoveDisk:

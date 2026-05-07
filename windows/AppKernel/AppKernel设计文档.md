@@ -364,6 +364,51 @@ LONG AkQueryDiskStats(
 
 返回后，业务宿主可以安全销毁自己的 `media_ctx`。
 
+## 5.4.1 会话版本准入
+
+`AppKernel` 不再单独维护 `ProtocolVersion`。版本号本身就是协议和行为契约的硬门槛。
+
+三方组件：
+
+- `YumeDiskKMDF`
+- `YumeDiskSCSI`
+- `AppKernel`
+
+都只维护一个 `VersionBe`。
+
+规则固定为：
+
+- 版本格式是 `A.B.C.D` 四段十进制。
+- 每段范围 `0-255`。
+- 底层存储为大端序 `UINT32`。
+- 这个版本同时代表：
+  - 二进制版本
+  - 协议版本
+  - 行为契约版本
+
+`AkOpen` 的固定准入顺序必须是：
+
+1. 打开 `YumeDiskKMDF` 控制设备。
+2. 查询 `KMDF.VersionBe`。
+3. 查询 `SCSI.VersionBe`。
+4. 校验 `KMDF.VersionBe == AppKernel.VersionBe`。
+5. 校验 `SCSI.VersionBe == AppKernel.VersionBe`。
+6. 只有全部通过，才允许 session 进入 `Running`。
+
+下列任一情况都必须让 `AkOpen` 直接失败，不允许降级继续工作：
+
+- `KMDF` 版本查询失败。
+- `SCSI` 版本查询失败。
+- `KMDF` 版本与 `AppKernel` 不一致。
+- `SCSI` 版本与 `AppKernel` 不一致。
+
+查询接口也必须按组件拆分，不允许继续依赖“单个模糊 `QueryInfo` 再推断版本来源”的旧做法。至少要有：
+
+- `QueryKmdfInfo`
+- `QueryScsiInfo`
+
+版本常量必须只有一个共享真源头；`KMDF / SCSI / AppKernel` 都从同一处编译进来，不允许三处各自手填。
+
 ## 5.5 状态与统计接口
 
 `AppKernel` 必须把“当前状态”和“累计统计”分开，不允许混成一个大杂烩结构。

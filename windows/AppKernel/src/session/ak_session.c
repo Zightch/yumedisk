@@ -93,26 +93,68 @@ static void AkSessionSnapshotTransport(
     ReleaseSRWLockShared(&session->Lock);
 }
 
-static AK_STATUS AkSessionValidateProtocolInfo(
-    AK_SESSION* session,
-    const YUMEDISK_QUERY_INFO* info)
+static void AkSessionFormatVersion(
+    ULONG version_be,
+    char* buffer,
+    size_t buffer_size)
 {
-    if (info->ProtocolVersion != YUMEDISK_PROTOCOL_VERSION) {
+    if ((buffer == NULL) || (buffer_size == 0u)) {
+        return;
+    }
+
+    (void)snprintf(
+        buffer,
+        buffer_size,
+        "%lu.%lu.%lu.%lu",
+        (unsigned long)YUMEDISK_VERSION_MAJOR(version_be),
+        (unsigned long)YUMEDISK_VERSION_MINOR(version_be),
+        (unsigned long)YUMEDISK_VERSION_PATCH(version_be),
+        (unsigned long)YUMEDISK_VERSION_BUILD(version_be));
+    buffer[buffer_size - 1u] = '\0';
+}
+
+static AK_STATUS AkSessionValidateComponentVersions(
+    AK_SESSION* session,
+    const YUMEDISK_KMDF_INFO* kmdf_info,
+    const YUMEDISK_SCSI_INFO* scsi_info)
+{
+    char expected[32];
+    char actual[32];
+
+    if ((session == NULL) || (kmdf_info == NULL) || (scsi_info == NULL)) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    if (kmdf_info->VersionBe != YUMEDISK_COMPONENT_VERSION_BE) {
+        AkSessionFormatVersion(YUMEDISK_COMPONENT_VERSION_BE, expected, sizeof(expected));
+        AkSessionFormatVersion(kmdf_info->VersionBe, actual, sizeof(actual));
         AkSessionLog(
             session,
             3,
-            "AkOpen: protocol version mismatch expected=%lu actual=%lu",
-            (unsigned long)YUMEDISK_PROTOCOL_VERSION,
-            (unsigned long)info->ProtocolVersion);
+            "AkOpen: KMDF version mismatch expected=%s actual=%s",
+            expected,
+            actual);
         return AK_STATUS_NOT_SUPPORTED;
     }
 
-    if ((info->Features & YumeDiskFeatureAppOwnedQueue) == 0u) {
+    if (scsi_info->VersionBe != YUMEDISK_COMPONENT_VERSION_BE) {
+        AkSessionFormatVersion(YUMEDISK_COMPONENT_VERSION_BE, expected, sizeof(expected));
+        AkSessionFormatVersion(scsi_info->VersionBe, actual, sizeof(actual));
+        AkSessionLog(
+            session,
+            3,
+            "AkOpen: SCSI version mismatch expected=%s actual=%s",
+            expected,
+            actual);
+        return AK_STATUS_NOT_SUPPORTED;
+    }
+
+    if ((scsi_info->Features & YumeDiskFeatureAppOwnedQueue) == 0u) {
         AkSessionLog(
             session,
             3,
             "AkOpen: adapter missing app-owned-queue feature flags=0x%08lX",
-            (unsigned long)info->Features);
+            (unsigned long)scsi_info->Features);
         return AK_STATUS_NOT_SUPPORTED;
     }
 
@@ -316,15 +358,23 @@ AK_STATUS AkSessionOpen(
         return status;
     }
 
-    status = AkProtocolQueryInfo(session->ControlFile, &session->QueryInfo, NULL);
+    status = AkProtocolQueryKmdfInfo(session->ControlFile, &session->KmdfInfo, NULL);
     if (status != AK_STATUS_SUCCESS) {
         AkSessionRecordCommandFailure(session, status);
-        AkSessionLog(session, 3, "AkOpen: query info failed status=0x%08lX", (unsigned long)status);
+        AkSessionLog(session, 3, "AkOpen: query KMDF info failed status=0x%08lX", (unsigned long)status);
         AkSessionDestroy(session);
         return status;
     }
 
-    status = AkSessionValidateProtocolInfo(session, &session->QueryInfo);
+    status = AkProtocolQueryScsiInfo(session->ControlFile, &session->ScsiInfo);
+    if (status != AK_STATUS_SUCCESS) {
+        AkSessionRecordCommandFailure(session, status);
+        AkSessionLog(session, 3, "AkOpen: query SCSI info failed status=0x%08lX", (unsigned long)status);
+        AkSessionDestroy(session);
+        return status;
+    }
+
+    status = AkSessionValidateComponentVersions(session, &session->KmdfInfo, &session->ScsiInfo);
     if (status != AK_STATUS_SUCCESS) {
         AkSessionRecordProtocolFailure(session, status);
         AkSessionDestroy(session);
@@ -388,9 +438,11 @@ AK_STATUS AkSessionOpen(
     AkSessionLog(
         session,
         1,
-        "AkOpen: ready session=%llu features=0x%08lX heartbeat_ms=%lu",
+        "AkOpen: ready session=%llu kmdf=0x%08lX scsi=0x%08lX features=0x%08lX heartbeat_ms=%lu",
         (unsigned long long)session_id,
-        (unsigned long)session->QueryInfo.Features,
+        (unsigned long)session->KmdfInfo.VersionBe,
+        (unsigned long)session->ScsiInfo.VersionBe,
+        (unsigned long)session->ScsiInfo.Features,
         (unsigned long)session->OpenParams.HeartbeatIntervalMs);
 
     *out_session = session;

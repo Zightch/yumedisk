@@ -131,11 +131,12 @@ DiskInitMessageStatus(
     _In_ ULONG PayloadLength
 )
 {
-    Message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
     Message->Header.Command = Command;
     Message->Header.Status = Status;
+    Message->Header.Reserved0 = 0u;
     Message->Header.PayloadLength = PayloadLength;
     Message->Header.Size = YUMEDISK_MESSAGE_BASE_SIZE + PayloadLength;
+    Message->Header.Reserved1 = 0u;
 }
 
 VOID
@@ -203,7 +204,7 @@ DiskClaimSessionLocked(
     _In_ const YUMEDISK_HEADER* Header
 )
 {
-    if (Header->Command == YumeDiskCommandQueryInfo) {
+    if (Header->Command == YumeDiskCommandQueryScsiInfo) {
         return STATUS_SUCCESS;
     }
 

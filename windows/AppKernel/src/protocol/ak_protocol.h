@@ -89,10 +89,14 @@ AK_STATUS AkProtocolAsyncIoCancel(
 AK_STATUS AkProtocolOpenControlDevice(
     HANDLE* out_file);
 
-AK_STATUS AkProtocolQueryInfo(
+AK_STATUS AkProtocolQueryKmdfInfo(
     HANDLE file,
-    YUMEDISK_QUERY_INFO* out_info,
+    YUMEDISK_KMDF_INFO* out_info,
     UINT64* out_session_id);
+
+AK_STATUS AkProtocolQueryScsiInfo(
+    HANDLE file,
+    YUMEDISK_SCSI_INFO* out_info);
 
 AK_STATUS AkProtocolQuerySessionId(
     HANDLE file,

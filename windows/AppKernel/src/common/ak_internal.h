@@ -36,7 +36,8 @@ struct AK_SESSION {
     HANDLE ControlFile;
     HANDLE StopEvent;
     HANDLE HeartbeatThread;
-    YUMEDISK_QUERY_INFO QueryInfo;
+    YUMEDISK_KMDF_INFO KmdfInfo;
+    YUMEDISK_SCSI_INFO ScsiInfo;
     struct AK_DISK* DiskListHead;
     UINT64 NextDiskRuntimeId;
     UINT64 NextTxId;

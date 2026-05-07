@@ -35,7 +35,6 @@ static std::vector<unsigned char> MakeMessageBuffer(ULONG command, ULONG payload
     std::vector<unsigned char> buffer(YUMEDISK_MESSAGE_BASE_SIZE + capacityPayloadLength, 0);
     auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer.data());
     message->Header.Size = static_cast<ULONG>(buffer.size());
-    message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
     message->Header.Command = command;
     message->Header.PayloadLength = payloadLength;
     return buffer;
@@ -141,7 +140,7 @@ static void UpdateSessionId(ControlContext* context, const YUMEDISK_HEADER& head
 }
 
 static bool EnsureSessionId(ControlContext* context) {
-    auto buffer = MakeMessageBuffer(YumeDiskCommandQueryInfo, 0, sizeof(YUMEDISK_QUERY_INFO));
+    auto buffer = MakeMessageBuffer(YumeDiskCommandQueryKmdfInfo, 0, sizeof(YUMEDISK_KMDF_INFO));
     auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer.data());
 
     if (context->sessionId != 0) {
@@ -152,7 +151,7 @@ static bool EnsureSessionId(ControlContext* context) {
         return false;
     }
     if (message->Header.Status != kProtocolSuccess || message->Header.SessionId == 0) {
-        PrintProtocolFailure("QUERY_INFO", message->Header);
+        PrintProtocolFailure("QUERY_KMDF_INFO", message->Header);
         return false;
     }
 
@@ -170,25 +169,42 @@ static bool AttachSession(ControlContext* context, PYUMEDISK_MESSAGE message) {
 }
 
 static int RunQuery(ControlContext* context) {
-    auto buffer = MakeMessageBuffer(YumeDiskCommandQueryInfo, 0, sizeof(YUMEDISK_QUERY_INFO));
-    auto* message = reinterpret_cast<PYUMEDISK_MESSAGE>(buffer.data());
+    auto kmdfBuffer = MakeMessageBuffer(YumeDiskCommandQueryKmdfInfo, 0, sizeof(YUMEDISK_KMDF_INFO));
+    auto scsiBuffer = MakeMessageBuffer(YumeDiskCommandQueryScsiInfo, 0, sizeof(YUMEDISK_SCSI_INFO));
+    auto* kmdfMessage = reinterpret_cast<PYUMEDISK_MESSAGE>(kmdfBuffer.data());
+    auto* scsiMessage = reinterpret_cast<PYUMEDISK_MESSAGE>(scsiBuffer.data());
 
-    if (!SendCommand(context->controlFile, buffer)) {
+    if (!SendCommand(context->controlFile, kmdfBuffer)) {
         return 1;
     }
 
-    if (message->Header.Status != kProtocolSuccess || message->Header.PayloadLength < sizeof(YUMEDISK_QUERY_INFO)) {
-        PrintProtocolFailure("QUERY_INFO", message->Header);
+    if (kmdfMessage->Header.Status != kProtocolSuccess ||
+        kmdfMessage->Header.PayloadLength < sizeof(YUMEDISK_KMDF_INFO)) {
+        PrintProtocolFailure("QUERY_KMDF_INFO", kmdfMessage->Header);
         return 1;
     }
 
-    UpdateSessionId(context, message->Header);
-    auto* info = reinterpret_cast<PYUMEDISK_QUERY_INFO>(message->Payload);
-    std::wcout << L"service=" << info->ServiceName << std::endl;
-    std::cout << "protocol=" << info->ProtocolVersion
-              << ", maxTargets=" << info->MaxTargets
-              << ", features=0x" << std::hex << info->Features << std::dec
-              << ", session=" << message->Header.SessionId
+    UpdateSessionId(context, kmdfMessage->Header);
+
+    if (!SendCommand(context->controlFile, scsiBuffer)) {
+        return 1;
+    }
+
+    if (scsiMessage->Header.Status != kProtocolSuccess ||
+        scsiMessage->Header.PayloadLength < sizeof(YUMEDISK_SCSI_INFO)) {
+        PrintProtocolFailure("QUERY_SCSI_INFO", scsiMessage->Header);
+        return 1;
+    }
+
+    auto* kmdfInfo = reinterpret_cast<PYUMEDISK_KMDF_INFO>(kmdfMessage->Payload);
+    auto* scsiInfo = reinterpret_cast<PYUMEDISK_SCSI_INFO>(scsiMessage->Payload);
+    std::wcout << L"kmdf.service=" << kmdfInfo->ServiceName << std::endl;
+    std::wcout << L"scsi.service=" << scsiInfo->ServiceName << std::endl;
+    std::cout << "kmdf.version=0x" << std::hex << kmdfInfo->VersionBe
+              << ", scsi.version=0x" << scsiInfo->VersionBe
+              << ", maxTargets=" << std::dec << scsiInfo->MaxTargets
+              << ", features=0x" << std::hex << scsiInfo->Features << std::dec
+              << ", session=" << kmdfMessage->Header.SessionId
               << std::endl;
     return 0;
 }

@@ -8,7 +8,7 @@
 
 ```json
 {
-  "schema": "devtidy.v1",
+  "schema": "v1",
   "level": "info|error",
   "event": "snake_case_event_name",
   "device": "YumeDiskSCSI|YumeDiskKMDF|null",
@@ -20,7 +20,7 @@
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `schema` | string | 输出 schema 版本，当前固定为 `devtidy.v1` |
+| `schema` | string | 输出版本，当前固定为 `v1` |
 | `level` | string | 事件级别，当前为 `info` 或 `error` |
 | `event` | string | 事件名，使用 `snake_case` |
 | `device` | string\|null | 事件所属设备；全局事件为 `null` |
@@ -99,11 +99,11 @@ devtidy.exe install
 ```
 
 ```json
-{"data":{"package_root":"C:\\work\\devtidy-bundle"},"device":null,"event":"package_root","level":"info","schema":"devtidy.v1"}
-{"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskSCSI.inf"},"device":"YumeDiskSCSI","event":"package_present","level":"info","schema":"devtidy.v1"}
-{"data":{"instance_id":"ROOT\\YUMEDISKSCSI\\0000","instance_count":2,"duplicate_count":1},"device":"YumeDiskSCSI","event":"device_kept","level":"info","schema":"devtidy.v1"}
-{"data":{"instance_id":"ROOT\\YUMEDISKSCSI\\0001","need_reboot":false},"device":"YumeDiskSCSI","event":"device_removed","level":"info","schema":"devtidy.v1"}
-{"data":{"ok":true},"device":null,"event":"summary","level":"info","schema":"devtidy.v1"}
+{"data":{"package_root":"C:\\work\\devtidy-bundle"},"device":null,"event":"package_root","level":"info","schema":"v1"}
+{"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskSCSI.inf"},"device":"YumeDiskSCSI","event":"package_present","level":"info","schema":"v1"}
+{"data":{"instance_id":"ROOT\\YUMEDISKSCSI\\0000","instance_count":2,"duplicate_count":1},"device":"YumeDiskSCSI","event":"device_kept","level":"info","schema":"v1"}
+{"data":{"instance_id":"ROOT\\YUMEDISKSCSI\\0001","need_reboot":false},"device":"YumeDiskSCSI","event":"device_removed","level":"info","schema":"v1"}
+{"data":{"ok":true},"device":null,"event":"summary","level":"info","schema":"v1"}
 ```
 
 ### uninstall
@@ -123,16 +123,16 @@ devtidy.exe uninstall --package-root C:\work\devtidy-bundle
 示例输出：
 
 ```json
-{"data":{"package_root":"C:\\work\\devtidy-bundle"},"device":null,"event":"package_root","level":"info","schema":"devtidy.v1"}
-{"data":{"instance_id":"ROOT\\YUMEDISKSCSI\\0000","need_reboot":false},"device":"YumeDiskSCSI","event":"device_removed","level":"info","schema":"devtidy.v1"}
-{"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskSCSI.inf","need_reboot":false},"device":"YumeDiskSCSI","event":"package_uninstalled","level":"info","schema":"devtidy.v1"}
-{"data":{"instance_id":"ROOT\\YUMEDISKKMDF\\0000","need_reboot":false},"device":"YumeDiskKMDF","event":"device_removed","level":"info","schema":"devtidy.v1"}
-{"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskKMDF\\YumeDiskKMDF.inf","need_reboot":false},"device":"YumeDiskKMDF","event":"package_uninstalled","level":"info","schema":"devtidy.v1"}
-{"data":{"ok":true},"device":null,"event":"summary","level":"info","schema":"devtidy.v1"}
+{"data":{"package_root":"C:\\work\\devtidy-bundle"},"device":null,"event":"package_root","level":"info","schema":"v1"}
+{"data":{"instance_id":"ROOT\\YUMEDISKSCSI\\0000","need_reboot":false},"device":"YumeDiskSCSI","event":"device_removed","level":"info","schema":"v1"}
+{"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskSCSI.inf","need_reboot":false},"device":"YumeDiskSCSI","event":"package_uninstalled","level":"info","schema":"v1"}
+{"data":{"instance_id":"ROOT\\YUMEDISKKMDF\\0000","need_reboot":false},"device":"YumeDiskKMDF","event":"device_removed","level":"info","schema":"v1"}
+{"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskKMDF\\YumeDiskKMDF.inf","need_reboot":false},"device":"YumeDiskKMDF","event":"package_uninstalled","level":"info","schema":"v1"}
+{"data":{"ok":true},"device":null,"event":"summary","level":"info","schema":"v1"}
 ```
 
 若某类设备当前不存在，则不会报错，而是输出：
 
 ```json
-{"data":{"instance_count":0},"device":"YumeDiskSCSI","event":"device_absent","level":"info","schema":"devtidy.v1"}
+{"data":{"instance_count":0},"device":"YumeDiskSCSI","event":"device_absent","level":"info","schema":"v1"}
 ```

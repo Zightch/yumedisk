@@ -76,7 +76,7 @@ ControlEvtFileCreate: ... status=C00000BB
 
 - `C00000BB` 是 `STATUS_NOT_SUPPORTED`。
 - 失败发生在 `ControlSessionTryOpen` 的“创建 file/session 资源”阶段，还没进入真正的数据面。
-- 如果 `QUERY_INFO`/miniport 探测日志还没出现，说明问题在 KMDF session 资源创建，不在 SCSI。
+- 如果 `QueryScsiInfo`/miniport 探测日志还没出现，说明问题在 KMDF session 资源创建，不在 SCSI。
 
 根因：
 
@@ -139,7 +139,7 @@ active_read_slots=1
 第一类是接口选错：
 
 - `KMDF` 枚举 `GUID_DEVINTERFACE_STORAGEPORT` 时会扫到大量非本驱动接口。
-- 只有通过 `QUERY_INFO` 校验签名、协议版本、service name 后，才能确认目标 miniport。
+- 只有通过 `QueryScsiInfo` 校验签名、组件版本、service name 后，才能确认目标 miniport。
 - 否则容易打开到别的 storageport 接口，`ZwDeviceIoControlFile(IOCTL_SCSI_MINIPORT)` 直接失败。
 
 第二类是首个 probe read 没真正闭环：
@@ -177,7 +177,7 @@ active_read_slots=1
   - read slot 返回 `sizeof(YUMEDISK_READ_SLOT_EVENT)`
   - write slot 返回 `YUMEDISK_WRITE_SLOT_HEADER_BASE_SIZE + DataLength`
 - App 侧保留 `posting_read_slots / posting_write_slots` 调试计数，用来区分“已经投递但没完成”和“还卡在投递调用内部”。
-- storageport 接口选择必须以 `QUERY_INFO` 签名为最终裁决，而不是“第一个能打开的接口”。
+- storageport 接口选择必须以 `QueryScsiInfo` 返回的签名和版本为最终裁决，而不是“第一个能打开的接口”。
 
 注意事项：
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include "yumedisk_proto.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,6 +14,8 @@ extern "C" {
 #endif
 
 #define AK_CALL __cdecl
+
+#define AK_VERSION_BE YUMEDISK_COMPONENT_VERSION_BE
 
 typedef struct AK_SESSION AK_SESSION;
 typedef struct AK_DISK AK_DISK;

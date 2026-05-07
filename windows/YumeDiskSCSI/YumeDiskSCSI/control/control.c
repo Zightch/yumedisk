@@ -2,27 +2,27 @@
 
 static
 NTSTATUS
-DiskHandleQueryInfo(
+DiskHandleQueryScsiInfo(
     _In_ PDEVICE_CONTEXT Extension,
     _Inout_ PYUMEDISK_MESSAGE Message
 )
 {
-    PYUMEDISK_QUERY_INFO info;
+    PYUMEDISK_SCSI_INFO info;
     KIRQL oldIrql;
 
-    if (Message->Header.Size < YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_QUERY_INFO)) {
+    if (Message->Header.Size < YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_SCSI_INFO)) {
         return STATUS_BUFFER_TOO_SMALL;
     }
 
-    info = (PYUMEDISK_QUERY_INFO)Message->Payload;
+    info = (PYUMEDISK_SCSI_INFO)Message->Payload;
     RtlZeroMemory(info, sizeof(*info));
-    info->ProtocolVersion = YUMEDISK_PROTOCOL_VERSION;
+    info->VersionBe = YUMEDISK_COMPONENT_VERSION_BE;
     info->MaxTargets = YUMEDISK_USABLE_TARGET_COUNT;
     info->Features = YumeDiskFeatureDynamicDisk | YumeDiskFeatureAppOwnedQueue;
     RtlCopyMemory(info->AdapterSignature, YUMEDISK_MINIPORT_SIGNATURE, sizeof(info->AdapterSignature));
     RtlCopyMemory(info->ServiceName, L"YumeDiskSCSI", sizeof(L"YumeDiskSCSI"));
 
-    DiskInitMessageStatus(Message, YumeDiskCommandQueryInfo, STATUS_SUCCESS, sizeof(YUMEDISK_QUERY_INFO));
+    DiskInitMessageStatus(Message, YumeDiskCommandQueryScsiInfo, STATUS_SUCCESS, sizeof(YUMEDISK_SCSI_INFO));
     KeAcquireSpinLock(&Extension->SessionLock, &oldIrql);
     if (Extension->CurrentSessionId != 0) {
         Message->Header.SessionId = Extension->CurrentSessionId;
@@ -227,8 +227,7 @@ DiskHandleIoControlSrb(
     }
 
     message = (PYUMEDISK_MESSAGE)(srbIoControl + 1);
-    if (message->Header.Version != YUMEDISK_PROTOCOL_VERSION ||
-        message->Header.Size < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
+    if (message->Header.Size < (ULONG)YUMEDISK_MESSAGE_BASE_SIZE ||
         message->Header.Size > srbIoControl->Length ||
         (ULONG)(YUMEDISK_MESSAGE_BASE_SIZE + message->Header.PayloadLength) > message->Header.Size) {
         DiskInitMessageStatus(message, message->Header.Command, STATUS_REVISION_MISMATCH, 0);
@@ -249,8 +248,8 @@ DiskHandleIoControlSrb(
     }
 
     switch (message->Header.Command) {
-    case YumeDiskCommandQueryInfo:
-        status = DiskHandleQueryInfo(extension, message);
+    case YumeDiskCommandQueryScsiInfo:
+        status = DiskHandleQueryScsiInfo(extension, message);
         break;
     case YumeDiskCommandQueryDebugState:
         status = DiskHandleQueryDebugState(DeviceExtension, message);

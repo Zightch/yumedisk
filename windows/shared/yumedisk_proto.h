@@ -1,6 +1,5 @@
 #pragma once
 
-#define YUMEDISK_PROTOCOL_VERSION 1u
 #define YUMEDISK_MAX_TARGETS 255u
 #define YUMEDISK_MIN_TARGET_ID 0u
 #define YUMEDISK_MAX_USABLE_TARGET_ID 254u
@@ -15,6 +14,16 @@
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x900, METHOD_OUT_DIRECT, FILE_ANY_ACCESS)
 
 #define YUMEDISK_MINIPORT_SIGNATURE "YMDISK1"
+#define YUMEDISK_VERSION_BE(_a, _b, _c, _d) \
+    ((((ULONG)(_a) & 0xffu) << 24) | \
+     (((ULONG)(_b) & 0xffu) << 16) | \
+     (((ULONG)(_c) & 0xffu) << 8) | \
+     ((ULONG)(_d) & 0xffu))
+#define YUMEDISK_VERSION_MAJOR(_versionBe) (((ULONG)(_versionBe) >> 24) & 0xffu)
+#define YUMEDISK_VERSION_MINOR(_versionBe) (((ULONG)(_versionBe) >> 16) & 0xffu)
+#define YUMEDISK_VERSION_PATCH(_versionBe) (((ULONG)(_versionBe) >> 8) & 0xffu)
+#define YUMEDISK_VERSION_BUILD(_versionBe) ((ULONG)(_versionBe) & 0xffu)
+#define YUMEDISK_COMPONENT_VERSION_BE YUMEDISK_VERSION_BE(0u, 1u, 0u, 0u)
 
 static const GUID GUID_YUMEDISK_CONTROL = {
     0x72d587ef, 0xab50, 0x490a, { 0x9f, 0xf2, 0x90, 0x72, 0xcd, 0xe5, 0x1d, 0x42 }
@@ -22,11 +31,12 @@ static const GUID GUID_YUMEDISK_CONTROL = {
 
 typedef enum _YUMEDISK_COMMAND {
     YumeDiskCommandInvalid = 0,
-    YumeDiskCommandQueryInfo = 1,
-    YumeDiskCommandCreateDisk = 2,
-    YumeDiskCommandRemoveDisk = 3,
-    YumeDiskCommandRemoveAllDisks = 4,
-    YumeDiskCommandHeartbeat = 5,
+    YumeDiskCommandQueryKmdfInfo = 1,
+    YumeDiskCommandQueryScsiInfo = 2,
+    YumeDiskCommandCreateDisk = 3,
+    YumeDiskCommandRemoveDisk = 4,
+    YumeDiskCommandRemoveAllDisks = 5,
+    YumeDiskCommandHeartbeat = 6,
     YumeDiskCommandPostReadSlot = 20,
     YumeDiskCommandPostWriteSlot = 21,
     YumeDiskCommandReadAck = 22,
@@ -53,15 +63,15 @@ typedef enum _YUMEDISK_SLOT_FLAGS {
 
 typedef struct _YUMEDISK_HEADER {
     ULONG Size;
-    ULONG Version;
     ULONG Command;
     LONG Status;
+    ULONG Reserved0;
     ULONGLONG SessionId;
     ULONGLONG TxId;
     ULONG TargetId;
     ULONG Flags;
     ULONG PayloadLength;
-    ULONG Reserved;
+    ULONG Reserved1;
 } YUMEDISK_HEADER, *PYUMEDISK_HEADER;
 
 typedef struct _YUMEDISK_MESSAGE {
@@ -71,14 +81,20 @@ typedef struct _YUMEDISK_MESSAGE {
 
 #define YUMEDISK_MESSAGE_BASE_SIZE FIELD_OFFSET(YUMEDISK_MESSAGE, Payload)
 
-typedef struct _YUMEDISK_QUERY_INFO {
-    ULONG ProtocolVersion;
+typedef struct _YUMEDISK_KMDF_INFO {
+    ULONG VersionBe;
+    ULONG Reserved;
+    WCHAR ServiceName[16];
+} YUMEDISK_KMDF_INFO, *PYUMEDISK_KMDF_INFO;
+
+typedef struct _YUMEDISK_SCSI_INFO {
+    ULONG VersionBe;
     ULONG MaxTargets;
     ULONG Features;
     ULONG Reserved;
     CHAR AdapterSignature[8];
     WCHAR ServiceName[16];
-} YUMEDISK_QUERY_INFO, *PYUMEDISK_QUERY_INFO;
+} YUMEDISK_SCSI_INFO, *PYUMEDISK_SCSI_INFO;
 
 typedef struct _YUMEDISK_CREATE_DISK {
     ULONG TargetId;

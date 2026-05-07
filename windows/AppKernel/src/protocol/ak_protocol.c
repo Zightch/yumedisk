@@ -52,15 +52,15 @@ AK_STATUS AkProtocolMessageAllocate(
     }
 
     message->Header.Size = (ULONG)total_size;
-    message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
     message->Header.Command = command;
     message->Header.Status = AK_STATUS_SUCCESS;
+    message->Header.Reserved0 = 0u;
     message->Header.SessionId = 0ull;
     message->Header.TxId = 0ull;
     message->Header.TargetId = 0u;
     message->Header.Flags = 0u;
     message->Header.PayloadLength = payload_length;
-    message->Header.Reserved = 0u;
+    message->Header.Reserved1 = 0u;
 
     out_buffer->Message = message;
     out_buffer->Size = (DWORD)total_size;
@@ -97,15 +97,15 @@ AK_STATUS AkProtocolMessageReset(
 
     (void)memset(buffer->Message, 0, buffer->Size);
     buffer->Message->Header.Size = buffer->Size;
-    buffer->Message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
     buffer->Message->Header.Command = command;
     buffer->Message->Header.Status = AK_STATUS_SUCCESS;
+    buffer->Message->Header.Reserved0 = 0u;
     buffer->Message->Header.SessionId = session_id;
     buffer->Message->Header.TxId = tx_id;
     buffer->Message->Header.TargetId = target_id;
     buffer->Message->Header.Flags = flags;
     buffer->Message->Header.PayloadLength = payload_length;
-    buffer->Message->Header.Reserved = 0u;
+    buffer->Message->Header.Reserved1 = 0u;
     return AK_STATUS_SUCCESS;
 }
 
@@ -460,9 +460,9 @@ static AK_STATUS AkProtocolSendShortCommand(
     return AK_STATUS_SUCCESS;
 }
 
-static AK_STATUS AkProtocolValidateInfoResponse(
+static AK_STATUS AkProtocolValidateKmdfInfoResponse(
     const AK_PROTOCOL_MESSAGE_BUFFER* buffer,
-    YUMEDISK_QUERY_INFO* out_info,
+    YUMEDISK_KMDF_INFO* out_info,
     UINT64* out_session_id)
 {
     if ((buffer == NULL) || (buffer->Message == NULL)) {
@@ -473,7 +473,7 @@ static AK_STATUS AkProtocolValidateInfoResponse(
         return buffer->Message->Header.Status;
     }
 
-    if (buffer->Message->Header.PayloadLength < sizeof(YUMEDISK_QUERY_INFO)) {
+    if (buffer->Message->Header.PayloadLength < sizeof(YUMEDISK_KMDF_INFO)) {
         return AK_STATUS_UNSUCCESSFUL;
     }
 
@@ -486,8 +486,29 @@ static AK_STATUS AkProtocolValidateInfoResponse(
     }
 
     if (out_info != NULL) {
-        *out_info = *(const YUMEDISK_QUERY_INFO*)buffer->Message->Payload;
+        *out_info = *(const YUMEDISK_KMDF_INFO*)buffer->Message->Payload;
     }
+
+    return AK_STATUS_SUCCESS;
+}
+
+static AK_STATUS AkProtocolValidateScsiInfoResponse(
+    const AK_PROTOCOL_MESSAGE_BUFFER* buffer,
+    YUMEDISK_SCSI_INFO* out_info)
+{
+    if ((buffer == NULL) || (buffer->Message == NULL) || (out_info == NULL)) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    if (buffer->Message->Header.Status != AK_STATUS_SUCCESS) {
+        return buffer->Message->Header.Status;
+    }
+
+    if (buffer->Message->Header.PayloadLength < sizeof(YUMEDISK_SCSI_INFO)) {
+        return AK_STATUS_UNSUCCESSFUL;
+    }
+
+    *out_info = *(const YUMEDISK_SCSI_INFO*)buffer->Message->Payload;
 
     return AK_STATUS_SUCCESS;
 }
@@ -652,18 +673,18 @@ AK_STATUS AkProtocolOpenControlDevice(
     return last_status;
 }
 
-AK_STATUS AkProtocolQueryInfo(
+AK_STATUS AkProtocolQueryKmdfInfo(
     HANDLE file,
-    YUMEDISK_QUERY_INFO* out_info,
+    YUMEDISK_KMDF_INFO* out_info,
     UINT64* out_session_id)
 {
     AK_PROTOCOL_MESSAGE_BUFFER buffer;
     AK_STATUS status;
 
     status = AkProtocolMessageAllocate(
-        YumeDiskCommandQueryInfo,
+        YumeDiskCommandQueryKmdfInfo,
         0u,
-        (ULONG)sizeof(YUMEDISK_QUERY_INFO),
+        (ULONG)sizeof(YUMEDISK_KMDF_INFO),
         &buffer);
     if (status != AK_STATUS_SUCCESS) {
         return status;
@@ -671,7 +692,36 @@ AK_STATUS AkProtocolQueryInfo(
 
     status = AkProtocolSendMessage(file, &buffer);
     if (status == AK_STATUS_SUCCESS) {
-        status = AkProtocolValidateInfoResponse(&buffer, out_info, out_session_id);
+        status = AkProtocolValidateKmdfInfoResponse(&buffer, out_info, out_session_id);
+    }
+
+    AkProtocolMessageRelease(&buffer);
+    return status;
+}
+
+AK_STATUS AkProtocolQueryScsiInfo(
+    HANDLE file,
+    YUMEDISK_SCSI_INFO* out_info)
+{
+    AK_PROTOCOL_MESSAGE_BUFFER buffer;
+    AK_STATUS status;
+
+    if (out_info == NULL) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    status = AkProtocolMessageAllocate(
+        YumeDiskCommandQueryScsiInfo,
+        0u,
+        (ULONG)sizeof(YUMEDISK_SCSI_INFO),
+        &buffer);
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    status = AkProtocolSendMessage(file, &buffer);
+    if (status == AK_STATUS_SUCCESS) {
+        status = AkProtocolValidateScsiInfoResponse(&buffer, out_info);
     }
 
     AkProtocolMessageRelease(&buffer);
@@ -682,7 +732,7 @@ AK_STATUS AkProtocolQuerySessionId(
     HANDLE file,
     UINT64* out_session_id)
 {
-    return AkProtocolQueryInfo(file, NULL, out_session_id);
+    return AkProtocolQueryKmdfInfo(file, NULL, out_session_id);
 }
 
 AK_STATUS AkProtocolSendHeartbeat(

@@ -384,17 +384,16 @@ ControlProbeMiniportHandle(
     _In_ HANDLE Handle
 )
 {
-    UCHAR buffer[YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_QUERY_INFO)];
+    UCHAR buffer[YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_SCSI_INFO)];
     PYUMEDISK_MESSAGE message;
-    PYUMEDISK_QUERY_INFO info;
+    PYUMEDISK_SCSI_INFO info;
     ULONG bytesReturned;
     NTSTATUS status;
 
     RtlZeroMemory(buffer, sizeof(buffer));
     message = (PYUMEDISK_MESSAGE)buffer;
     message->Header.Size = sizeof(buffer);
-    message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
-    message->Header.Command = YumeDiskCommandQueryInfo;
+    message->Header.Command = YumeDiskCommandQueryScsiInfo;
 
     status = ControlSendMiniportBuffer(
         Handle,
@@ -406,16 +405,20 @@ ControlProbeMiniportHandle(
         return status;
     }
 
-    if (bytesReturned < YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_QUERY_INFO)) {
+    if (bytesReturned < YUMEDISK_MESSAGE_BASE_SIZE + sizeof(YUMEDISK_SCSI_INFO)) {
         return STATUS_DEVICE_PROTOCOL_ERROR;
     }
 
-    info = (PYUMEDISK_QUERY_INFO)message->Payload;
+    info = (PYUMEDISK_SCSI_INFO)message->Payload;
     if (RtlCompareMemory(
             info->AdapterSignature,
             YUMEDISK_MINIPORT_SIGNATURE,
             sizeof(info->AdapterSignature)) != sizeof(info->AdapterSignature)) {
         return STATUS_NOT_FOUND;
+    }
+
+    if (info->VersionBe != YUMEDISK_COMPONENT_VERSION_BE) {
+        return STATUS_REVISION_MISMATCH;
     }
 
     return STATUS_SUCCESS;
@@ -634,7 +637,6 @@ ControlProxySubmitSlotAsync(
 
     message = (PYUMEDISK_MESSAGE)(srbIoControl + 1);
     message->Header.Size = bufferSize;
-    message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
     message->Header.Command = YumeDiskCommandSubmitSlot;
     message->Header.SessionId = SessionId;
     message->Header.TargetId = TargetId;
@@ -732,7 +734,6 @@ ControlSendSessionCleanup(
     RtlZeroMemory(buffer, sizeof(buffer));
     message = (PYUMEDISK_MESSAGE)buffer;
     message->Header.Size = sizeof(buffer);
-    message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
     message->Header.Command = YumeDiskCommandRemoveAllDisks;
     message->Header.SessionId = Context->SessionId;
     message->Header.Flags = YUMEDISK_SESSION_CLOSE_FLAG;
