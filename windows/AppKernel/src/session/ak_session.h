@@ -26,6 +26,9 @@ AK_STATUS AkSessionAcquireTransport(
     HANDLE* out_control_file,
     UINT64* out_session_id);
 
+UINT64 AkSessionAllocateTxId(
+    AK_SESSION* session);
+
 AK_STATUS AkSessionRegisterDisk(
     AK_SESSION* session,
     AK_DISK* disk,

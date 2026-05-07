@@ -195,7 +195,6 @@ static void AkSessionDestroy(
     session->DiskListHead = NULL;
     while (disk != NULL) {
         next_disk = disk->SessionNext;
-        disk->Session = NULL;
         disk->SessionNext = NULL;
         disk->RegisteredInSession = FALSE;
         AkDiskDestroyDetached(disk);
@@ -289,6 +288,7 @@ AK_STATUS AkSessionOpen(
     session->HeartbeatThread = NULL;
     session->DiskListHead = NULL;
     session->NextDiskRuntimeId = 1ull;
+    session->NextTxId = 1ull;
     session->State.Lifecycle = AkStateStarting;
     session->State.LastError = AK_STATUS_SUCCESS;
     session->State.HeartbeatRunning = FALSE;
@@ -519,6 +519,30 @@ AK_STATUS AkSessionAcquireTransport(
     *out_session_id = session->State.SessionId;
     ReleaseSRWLockShared(&session->Lock);
     return AK_STATUS_SUCCESS;
+}
+
+UINT64 AkSessionAllocateTxId(
+    AK_SESSION* session)
+{
+    UINT64 tx_id;
+
+    if (session == NULL) {
+        return 0ull;
+    }
+
+    AcquireSRWLockExclusive(&session->Lock);
+    tx_id = session->NextTxId;
+    session->NextTxId += 1ull;
+    if (session->NextTxId == 0ull) {
+        session->NextTxId = 1ull;
+    }
+    ReleaseSRWLockExclusive(&session->Lock);
+
+    if (tx_id == 0ull) {
+        return 1ull;
+    }
+
+    return tx_id;
 }
 
 AK_STATUS AkSessionRegisterDisk(

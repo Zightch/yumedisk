@@ -269,6 +269,10 @@
 
 ### Step 6. 实现读路径
 
+状态：
+
+- 已完成最小真实读闭环。
+
 目标：
 
 - `POST_READ_SLOT` 完成后，调用宿主 `read_bytes` 取得 overlay 后可见读视图。
@@ -281,6 +285,35 @@
 - `AppKernel` 不持有介质数据。
 - `read_bytes` 并发调用成立。
 - late ACK / stale ACK 仍交由 `SCSI` 最终判定。
+
+当前实现收口：
+
+- per-disk read worker 已从占位线程切换为真实 slot engine：
+  - 按 worker 持有独立 read slot context 集合
+  - 按 worker 持有独立 read ack context 集合
+  - worker 内循环推进 `POST_READ_SLOT -> read_bytes -> READ_ACK`
+- `POST_READ_SLOT` 已接入真实协议 transport：
+  - 使用 `protocol` 层统一组包
+  - 使用异步 `OVERLAPPED` wait/finish
+  - `TxId` 由 session 统一分配
+- 读事件校验已在 `AppKernel` 边界收口：
+  - `TargetId`
+  - `EventId`
+  - `DataLength`
+  - `BlockCount * SectorSize`
+- `read_bytes` 仍只处理单个读事件：
+  - 读错误只回写到单个 `READ_ACK`
+  - 不放大成整盘失败
+  - 不引入跨盘共享调度结构
+- 停止/关闭路径已形成最小 drain：
+  - stop 后不再投新 read slot
+  - 活跃 read slot 走 `CANCEL_SLOT`
+  - 活跃 `READ_ACK` 走 `CancelIoEx`
+- 当前仍未完成：
+  - 写路径
+  - 最终写裁决事件
+  - 宿主切换
+  - SDK 文档落地
 
 ### Step 7. 实现写路径和最终裁决
 

@@ -21,6 +21,7 @@ typedef struct AK_DISK_WORKER_CONTEXT {
     struct AK_DISK* Disk;
     UINT32 WorkerIndex;
     UINT32 WorkerKind;
+    UINT32 SlotCount;
 } AK_DISK_WORKER_CONTEXT;
 
 struct AK_SESSION {
@@ -35,6 +36,7 @@ struct AK_SESSION {
     YUMEDISK_QUERY_INFO QueryInfo;
     struct AK_DISK* DiskListHead;
     UINT64 NextDiskRuntimeId;
+    UINT64 NextTxId;
 };
 
 struct AK_DISK {
