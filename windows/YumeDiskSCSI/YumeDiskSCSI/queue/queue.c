@@ -39,6 +39,39 @@ typedef struct _YUME_WRITE_REQUEST {
     ULONG AckedBits[1];
 } YUME_WRITE_REQUEST, *PYUME_WRITE_REQUEST;
 
+#define DISK_QUEUE_TRACE_LIMIT 160
+
+static volatile LONG g_DiskQueueTraceCount = 0;
+
+static
+BOOLEAN
+DiskShouldTraceQueue(
+    _In_ NTSTATUS Status
+)
+{
+    if (!NT_SUCCESS(Status)) {
+        return TRUE;
+    }
+
+    return InterlockedIncrement(&g_DiskQueueTraceCount) <= DISK_QUEUE_TRACE_LIMIT;
+}
+
+static
+const char*
+DiskSlotTypeName(
+    _In_ ULONG SlotType
+)
+{
+    switch (SlotType) {
+    case YumeDiskSlotTypeRead:
+        return "read";
+    case YumeDiskSlotTypeWrite:
+        return "write";
+    default:
+        return "invalid";
+    }
+}
+
 static
 VOID
 DiskResetWriteSlotShapeLocked(
@@ -282,6 +315,15 @@ DiskCompleteWriteRequest(
         InterlockedIncrement64(&((PDEVICE_CONTEXT)DeviceExtension)->DebugWriteRequestsCompleted);
         DiskCompleteScsiSrb(DeviceExtension, Request->Srb, STATUS_SUCCESS, Request->TotalBytes);
     } else {
+        DbgPrint(
+            "YumeDiskSCSI write request fail event=%I64u status=%08X bytes=%lu totalSeq=%lu issued=%lu acked=%lu srb=%p\n",
+            (unsigned __int64)Request->EventId,
+            (unsigned long)Request->FinalStatus,
+            Request->TotalBytes,
+            Request->TotalSeq,
+            Request->NextIssueSeq,
+            Request->AckedCount,
+            Request->Srb);
         InterlockedIncrement64(&((PDEVICE_CONTEXT)DeviceExtension)->DebugWriteRequestsFailed);
         DiskCompleteScsiSrb(DeviceExtension, Request->Srb, Request->FinalStatus, 0);
     }
@@ -519,6 +561,15 @@ DiskDrainWriteSlots(
         KeAcquireSpinLock(&queue->WriteQueueLock, &oldIrql);
         request = DiskFindNextWritableRequestLocked(queue);
         if (request == NULL || IsListEmpty(&queue->PostedWriteSlots)) {
+            if (DiskShouldTraceQueue(STATUS_SUCCESS)) {
+                DbgPrint(
+                    "YumeDiskSCSI write drain idle target=%u pendingWrites=%lu postedWriteSlots=%lu payload=%lu request=%p\n",
+                    TargetId,
+                    queue->PendingWriteCount,
+                    queue->PostedWriteSlotCount,
+                    queue->WriteSlotPayloadBytes,
+                    request);
+            }
             KeReleaseSpinLock(&queue->WriteQueueLock, oldIrql);
             break;
         }
@@ -531,8 +582,30 @@ DiskDrainWriteSlots(
         if (NT_SUCCESS(DiskWriteWriteSlotPayload(disk, request, seq, slot))) {
             InterlockedIncrement64(&extension->DebugWriteFragmentsIssued);
             DiskTickProgress(extension);
+            if (DiskShouldTraceQueue(STATUS_SUCCESS)) {
+                DbgPrint(
+                    "YumeDiskSCSI write slot dispatch target=%u event=%I64u slot=%I64u seq=%lu totalSeq=%lu bytes=%lu pendingWrites=%lu postedWriteSlots=%lu srb=%p slotSrb=%p\n",
+                    TargetId,
+                    (unsigned __int64)request->EventId,
+                    (unsigned __int64)slot->SlotId,
+                    seq,
+                    request->TotalSeq,
+                    request->PayloadBytes,
+                    queue->PendingWriteCount,
+                    queue->PostedWriteSlotCount,
+                    request->Srb,
+                    slot->Srb);
+            }
             DiskCompleteSlotSrb(DeviceExtension, slot, STATUS_SUCCESS);
         } else {
+            DbgPrint(
+                "YumeDiskSCSI write slot payload failed target=%u event=%I64u slot=%I64u seq=%lu capacity=%lu payload=%lu\n",
+                TargetId,
+                (unsigned __int64)request->EventId,
+                (unsigned __int64)slot->SlotId,
+                seq,
+                slot->Capacity,
+                request->PayloadBytes);
             DiskCompleteSlotSrb(DeviceExtension, slot, STATUS_BUFFER_TOO_SMALL);
         }
 
@@ -799,6 +872,18 @@ DiskQueueWriteSrb(
     KeAcquireSpinLock(&disk->Queue.WriteQueueLock, &oldIrql);
     InsertTailList(&disk->Queue.PendingWrites, &request->Link);
     disk->Queue.PendingWriteCount++;
+    if (DiskShouldTraceQueue(STATUS_SUCCESS)) {
+        DbgPrint(
+            "YumeDiskSCSI write queue target=%u event=%I64u lba=%I64u blocks=%lu bytes=%lu pendingWrites=%lu postedWriteSlots=%lu srb=%p\n",
+            TargetId,
+            (unsigned __int64)request->EventId,
+            (unsigned __int64)Lba,
+            BlockCount,
+            DataLength,
+            disk->Queue.PendingWriteCount,
+            disk->Queue.PostedWriteSlotCount,
+            Srb);
+    }
     KeReleaseSpinLock(&disk->Queue.WriteQueueLock, oldIrql);
 
     InterlockedIncrement64(&extension->DebugWriteRequestsQueued);
@@ -824,6 +909,10 @@ DiskHandleSubmitSlotIoctl(
 
     extension = (PDEVICE_CONTEXT)DeviceExtension;
     if (Message->Header.PayloadLength < sizeof(*submitSlot)) {
+        DbgPrint(
+            "YumeDiskSCSI submit slot reject short payload target=%lu payload=%lu\n",
+            Message->Header.TargetId,
+            Message->Header.PayloadLength);
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -834,29 +923,67 @@ DiskHandleSubmitSlotIoctl(
         slotDescriptor->KernelVa == 0 ||
         slotDescriptor->TargetId >= extension->MaxTargets ||
         !DiskIsUsableTargetId(slotDescriptor->TargetId)) {
+        DbgPrint(
+            "YumeDiskSCSI submit slot reject descriptor msgTarget=%lu descTarget=%lu session=%I64u msgSession=%I64u slot=%I64u type=%s kernelVa=%I64X capacity=%lu\n",
+            Message->Header.TargetId,
+            slotDescriptor->TargetId,
+            (unsigned __int64)slotDescriptor->SessionId,
+            (unsigned __int64)Message->Header.SessionId,
+            (unsigned __int64)slotDescriptor->SlotId,
+            DiskSlotTypeName(slotDescriptor->SlotType),
+            (unsigned __int64)slotDescriptor->KernelVa,
+            slotDescriptor->Capacity);
         return STATUS_INVALID_PARAMETER;
     }
 
     disk = &extension->Disk[slotDescriptor->TargetId];
     if (!disk->Present || !disk->Configured) {
+        DbgPrint(
+            "YumeDiskSCSI submit slot reject not-present target=%lu slot=%I64u type=%s present=%u configured=%u\n",
+            slotDescriptor->TargetId,
+            (unsigned __int64)slotDescriptor->SlotId,
+            DiskSlotTypeName(slotDescriptor->SlotType),
+            disk->Present,
+            disk->Configured);
         return STATUS_DEVICE_NOT_CONNECTED;
     }
 
     if (slotDescriptor->SlotType == YumeDiskSlotTypeRead) {
         if (slotDescriptor->Capacity < sizeof(YUMEDISK_READ_SLOT_EVENT)) {
+            DbgPrint(
+                "YumeDiskSCSI submit read slot reject small target=%lu slot=%I64u capacity=%lu\n",
+                slotDescriptor->TargetId,
+                (unsigned __int64)slotDescriptor->SlotId,
+                slotDescriptor->Capacity);
             return STATUS_BUFFER_TOO_SMALL;
         }
     } else if (slotDescriptor->SlotType == YumeDiskSlotTypeWrite) {
         writePayloadBytes = DiskComputeWritePayloadBytes(disk->SectorSize, slotDescriptor->Capacity);
         if (writePayloadBytes == 0) {
+            DbgPrint(
+                "YumeDiskSCSI submit write slot reject small target=%lu slot=%I64u capacity=%lu sector=%lu\n",
+                slotDescriptor->TargetId,
+                (unsigned __int64)slotDescriptor->SlotId,
+                slotDescriptor->Capacity,
+                disk->SectorSize);
             return STATUS_BUFFER_TOO_SMALL;
         }
     } else {
+        DbgPrint(
+            "YumeDiskSCSI submit slot reject bad type target=%lu slot=%I64u type=%lu\n",
+            slotDescriptor->TargetId,
+            (unsigned __int64)slotDescriptor->SlotId,
+            slotDescriptor->SlotType);
         return STATUS_INVALID_PARAMETER;
     }
 
     postedSlot = DiskAllocPostedSlot(Srb, slotDescriptor);
     if (postedSlot == NULL) {
+        DbgPrint(
+            "YumeDiskSCSI submit slot alloc failed target=%lu slot=%I64u type=%s\n",
+            slotDescriptor->TargetId,
+            (unsigned __int64)slotDescriptor->SlotId,
+            DiskSlotTypeName(slotDescriptor->SlotType));
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -876,12 +1003,29 @@ DiskHandleSubmitSlotIoctl(
         disk->Queue.WriteSlotPayloadBytes = writePayloadBytes;
     } else if (disk->Queue.WriteSlotPayloadBytes != writePayloadBytes) {
         KeReleaseSpinLock(&disk->Queue.WriteQueueLock, oldIrql);
+        DbgPrint(
+            "YumeDiskSCSI submit write slot reject payload-mismatch target=%lu slot=%I64u payload=%lu expected=%lu capacity=%lu\n",
+            slotDescriptor->TargetId,
+            (unsigned __int64)slotDescriptor->SlotId,
+            writePayloadBytes,
+            disk->Queue.WriteSlotPayloadBytes,
+            slotDescriptor->Capacity);
         DiskFree(postedSlot);
         return STATUS_INVALID_PARAMETER;
     }
 
     InsertTailList(&disk->Queue.PostedWriteSlots, &postedSlot->Link);
     disk->Queue.PostedWriteSlotCount++;
+    if (DiskShouldTraceQueue(STATUS_SUCCESS)) {
+        DbgPrint(
+            "YumeDiskSCSI write slot posted target=%lu slot=%I64u payload=%lu pendingWrites=%lu postedWriteSlots=%lu srb=%p\n",
+            slotDescriptor->TargetId,
+            (unsigned __int64)slotDescriptor->SlotId,
+            writePayloadBytes,
+            disk->Queue.PendingWriteCount,
+            disk->Queue.PostedWriteSlotCount,
+            Srb);
+    }
     KeReleaseSpinLock(&disk->Queue.WriteQueueLock, oldIrql);
 
     DiskTickProgress(extension);
