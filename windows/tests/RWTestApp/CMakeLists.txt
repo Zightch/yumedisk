@@ -5,6 +5,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 project(RWTestApp)
 
+add_subdirectory(
+    ../../AppKernel
+    ${CMAKE_CURRENT_BINARY_DIR}/AppKernel
+)
+
 add_executable(
     RWTestApp
     main.cpp
@@ -19,6 +24,7 @@ target_include_directories(
 target_link_libraries(
     RWTestApp
     PRIVATE
+    AppKernel
     setupapi
 )
 

@@ -384,6 +384,29 @@
 - 新旧双轨不存在。
 - `RWTestApp` 只是宿主，不再是另一套数据面内核。
 
+当前状态：
+
+- 已完成第一阶段主切换。
+- `RWTestApp` 已按 [开发原则](../development-principles.md) 直接删除旧数据面主干，不再保留：
+  - direct `POST_READ_SLOT` worker
+  - direct `POST_WRITE_SLOT` worker
+  - direct `WRITE_ACK_BATCH` flusher
+  - direct session heartbeat / slot cancel / transport 拼装逻辑
+- 当前 `RWTestApp` 已重建为 `AppKernel` 宿主：
+  - 打开 `AK_SESSION`
+  - 创建 `AK_DISK`
+  - 提供 `AK_MEDIA_OPS.read_bytes`
+  - 提供 `AK_MEDIA_OPS.stage_write`
+  - 消费 `AkWaitEvent`
+  - 对 `AkEventWriteFinalCommitted / Rejected` 做宿主侧 `commit / discard`
+- 宿主当前只保留：
+  - 内存介质
+  - staged write 记录
+  - overlay read 视图
+  - 可见盘枚举
+  - CLI
+- `RWTestApp` 的构建已直接链接 `AppKernel`，不再和旧数据面双轨并存。
+
 ### Step 9. 编译与验证口径
 
 目标：
