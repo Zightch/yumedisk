@@ -337,6 +337,9 @@ AK_STATUS AkSessionOpen(
     session->State.TransportReady = FALSE;
     session->State.DiskCount = 0u;
     session->State.SessionId = 0ull;
+    session->State.AppKernelVersionBe = AK_VERSION_BE;
+    session->State.KmdfVersionBe = 0u;
+    session->State.ScsiVersionBe = 0u;
 
     (void)memset(&session->Stats, 0, sizeof(session->Stats));
 
@@ -432,6 +435,9 @@ AK_STATUS AkSessionOpen(
     session->State.TransportReady = TRUE;
     session->State.HeartbeatRunning = TRUE;
     session->State.Lifecycle = AkStateRunning;
+    session->State.AppKernelVersionBe = AK_VERSION_BE;
+    session->State.KmdfVersionBe = session->KmdfInfo.VersionBe;
+    session->State.ScsiVersionBe = session->ScsiInfo.VersionBe;
     session->State.LastError = AK_STATUS_SUCCESS;
     ReleaseSRWLockExclusive(&session->Lock);
 

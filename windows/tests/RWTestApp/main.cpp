@@ -638,6 +638,18 @@ std::wstring FormatStatusHex(
     return stream.str();
 }
 
+std::wstring FormatVersionBe(
+    UINT32 version_be)
+{
+    std::wostringstream stream;
+
+    stream << ((version_be >> 24) & 0xffu)
+           << L'.' << ((version_be >> 16) & 0xffu)
+           << L'.' << ((version_be >> 8) & 0xffu)
+           << L'.' << (version_be & 0xffu);
+    return stream.str();
+}
+
 std::wstring LifecycleToText(
     AK_LIFECYCLE_STATE lifecycle)
 {
@@ -1157,6 +1169,9 @@ void PrintDebugSnapshot(
                    << L", heartbeat_running=" << (session_state.HeartbeatRunning ? L"true" : L"false")
                    << L", transport_ready=" << (session_state.TransportReady ? L"true" : L"false")
                    << L", disk_count=" << session_state.DiskCount
+                   << L", appkernel_version=" << FormatVersionBe(session_state.AppKernelVersionBe)
+                   << L", kmdf_version=" << FormatVersionBe(session_state.KmdfVersionBe)
+                   << L", scsi_version=" << FormatVersionBe(session_state.ScsiVersionBe)
                    << L", last_error=" << FormatStatusHex(session_state.LastError)
                    << std::endl;
     }
@@ -1222,6 +1237,9 @@ void RunQuery(
                << L", heartbeat_running=" << (session_state.HeartbeatRunning ? L"true" : L"false")
                << L", transport_ready=" << (session_state.TransportReady ? L"true" : L"false")
                << L", disk_count=" << session_state.DiskCount
+               << L", appkernel_version=" << FormatVersionBe(session_state.AppKernelVersionBe)
+               << L", kmdf_version=" << FormatVersionBe(session_state.KmdfVersionBe)
+               << L", scsi_version=" << FormatVersionBe(session_state.ScsiVersionBe)
                << L", last_error=" << FormatStatusHex(session_state.LastError)
                << std::endl;
     std::wcout << L"session_heartbeat_sent=" << session_stats.HeartbeatSent
@@ -1565,6 +1583,10 @@ int main(
     }
 
     std::wcout << L"control_session=" << session_state.SessionId << std::endl;
+    std::wcout << L"appkernel_version=" << FormatVersionBe(session_state.AppKernelVersionBe)
+               << L", kmdf_version=" << FormatVersionBe(session_state.KmdfVersionBe)
+               << L", scsi_version=" << FormatVersionBe(session_state.ScsiVersionBe)
+               << std::endl;
     std::wcout << L"queue_depth=" << config.queueDepth
                << L", slot_bytes=" << config.writeSlotBytes
                << L", sector_size=" << config.sectorSize

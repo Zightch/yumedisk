@@ -129,6 +129,9 @@ typedef struct AK_SESSION_STATE {
     BOOLEAN HeartbeatRunning;
     BOOLEAN TransportReady;
     UINT32 DiskCount;
+    UINT32 AppKernelVersionBe;
+    UINT32 KmdfVersionBe;
+    UINT32 ScsiVersionBe;
     AK_STATUS LastError;
 } AK_SESSION_STATE;
 
