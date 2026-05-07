@@ -2,7 +2,7 @@
 
 本文档定义 `AppKernel` 的正式目标方案。
 
-当前代码里，用户态逻辑仍主要承载在 `RWTestApp` 中；`AppKernel` 还没有完全独立落地。本文件描述的是下一步实现时必须收敛到的唯一边界，而不是历史草案。
+当前代码里，用户态逻辑仍主要承载在 `TestApp` 中；`AppKernel` 还没有完全独立落地。本文件描述的是下一步实现时必须收敛到的唯一边界，而不是历史草案。
 
 ## 1. 目标
 
@@ -17,9 +17,9 @@
 
 其中：
 
-- 业务宿主层先继续由 `RWTestApp` 承载。
+- 业务宿主层先继续由 `TestApp` 承载。
 - `AppKernel` 是唯一用户态数据面内核。
-- 不保留“旧 `RWTestApp` 直连实现”和“新 `AppKernel` 实现”双轨长期并存。
+- 不保留“旧 `TestApp` 直连实现”和“新 `AppKernel` 实现”双轨长期并存。
 
 ## 2. 分层与职责
 
@@ -554,9 +554,9 @@ typedef struct AK_DISK_STATS {
 
 实现阶段按以下顺序推进：
 
-1. 先把当前 `RWTestApp` 中的 `KMDF` 会话、slot worker、ACK flush 和统计抽进 `AppKernel`。
+1. 先把当前 `TestApp` 中的 `KMDF` 会话、slot worker、ACK flush 和统计抽进 `AppKernel`。
 2. 再把正式介质、暂存层、overlay 读视图和介质锁完全上移到业务宿主。
-3. 最后把 `RWTestApp` 收缩成“驱动收敛 + 介质对象 + CLI + AppKernel 宿主”。
+3. 最后把 `TestApp` 收缩成“驱动收敛 + 介质对象 + CLI + AppKernel 宿主”。
 4. 同步产出 `AppKernel SDK` 文档，收敛导出接口、调用时序、宿主职责和错误语义。
 
 收口后的最终形态必须是：
