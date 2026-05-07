@@ -4,7 +4,6 @@
 #include <cfgmgr32.h>
 #include <devguid.h>
 #include <json/json.h>
-#include <newdev.h>
 #include <setupapi.h>
 
 #include <algorithm>

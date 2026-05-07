@@ -6,7 +6,7 @@
 
 ## 1. 目标
 
-`AppKernel` 的职责只有一件事：把用户态数据面从业务宿主里剥出来，形成一个只负责 `KMDF` 会话、per-disk slot runtime、ACK 和线程调度的纯 `C` 内核。
+`AppKernel` 的职责只有一件事：把用户态数据面从业务宿主里剥出来，形成一个只负责 `KMDF` 会话、per-disk slot runtime、ACK 和线程调度的纯 `C` 内核，并以 `DLL` 形式存在。
 
 重构后，用户态分层固定为：
 
@@ -106,7 +106,33 @@ typedef struct AK_SESSION AK_SESSION;
 typedef struct AK_DISK AK_DISK;
 ```
 
-业务宿主只能通过这两个句柄和 `AppKernel` 交互，不允许直接穿透到底层 `DeviceIoControl`。
+业务宿主只能通过这两个句柄和 `AppKernel` 导出的 `C ABI` 交互，不允许直接穿透到底层 `DeviceIoControl`。
+
+## 4.1.1 ABI 交付边界
+
+`AppKernel` 的交付形式固定为：
+
+- 一个 `Windows DLL`
+- 一套稳定的 `C` 导出函数
+- 一份与导出接口对应的公开头文件
+- 一份与公开头文件和 DLL 导出边界对应的 `SDK` 文档
+
+固定约束：
+
+- `AppKernel` 内部实现继续按纯 `C` 收敛，不引入第二套 `C++` 宿主包装 API。
+- 导出边界只暴露 opaque handle、POD 结构和函数指针回调。
+- 宿主只能依赖公开头文件和 DLL 导出，不允许依赖内部结构布局。
+- 当前阶段只承诺“本仓当前唯一实现”的导出边界，不额外承诺历史兼容 ABI。
+- `AppKernel` 的 DLL 构建和宿主接入必须同时兼容 `MSVC` 和 `MinGW`。
+- 公开头文件不得依赖只对单一工具链成立的扩展语义；导出宏、调用约定、整数类型和结构体布局必须走两种工具链都能成立的 `C ABI` 写法。
+
+为此固定要求：
+
+- 公开头使用统一的 `AK_API` / `AK_CALL` 一类宏收口 `dllexport/dllimport` 和调用约定。
+- 导出函数必须使用 `extern "C"` 语义，避免 C++ name mangling。
+- 公开结构只使用稳定的 Win32/C 基础类型和明确宽度整数类型，不暴露 STL、异常、RTTI 或编译器私有对象模型。
+- `CMake` 和样例宿主在落地阶段必须至少验证一次 `MSVC` 构建与一次 `MinGW` 构建。
+- `SDK` 文档必须与当前导出函数、结构定义、状态模型、事件模型和宿主接入方式保持一致，不记录历史分叉。
 
 ## 4.2 介质操作
 
@@ -457,7 +483,6 @@ typedef struct AK_DISK_STATS {
 
 本方案明确不做：
 
-- DLL 化。
 - plugin 化。
 - 多宿主 ABI 稳定承诺。
 - “AppKernel C + AppKernel C++ 双实现”。
@@ -471,9 +496,12 @@ typedef struct AK_DISK_STATS {
 1. 先把当前 `RWTestApp` 中的 `KMDF` 会话、slot worker、ACK flush 和统计抽进 `AppKernel`。
 2. 再把正式介质、暂存层、overlay 读视图和介质锁完全上移到业务宿主。
 3. 最后把 `RWTestApp` 收缩成“驱动收敛 + 介质对象 + CLI + AppKernel 宿主”。
+4. 同步产出 `AppKernel SDK` 文档，收敛导出接口、调用时序、宿主职责和错误语义。
 
 收口后的最终形态必须是：
 
 - 业务宿主只拥有控制和介质。
 - `AppKernel` 只拥有协议和运行时。
 - 驱动只拥有 session、target queue 和系统 I/O。
+- DLL 导出边界在 `MSVC` / `MinGW` 下都可构建、可链接、可被宿主调用。
+- `SDK` 文档能够单独指导宿主完成接入，而不需要回头翻实现源码猜接口语义。
