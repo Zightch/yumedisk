@@ -422,6 +422,115 @@ RemoveAllDisks | SessionClose
 - 如果单盘掉速、多盘总吞吐却还能继续涨，优先怀疑 per-disk 数据面模型，不要先怀疑 KMDF 全局锁。
 - 吞吐恢复后，如果内核 CPU 仍明显偏高，再把重点切到 `KMDF async slot transport` 的每-slot 固定开销。
 
+### 3.9 锁临界区过大导致 kernel CPU 偏高或清理互等
+
+现象：
+
+- 吞吐已经恢复，但 kernel CPU 占用仍明显偏高。
+- 高 QD 时系统没有完全挂死，但内核态时间异常高。
+- cleanup、watchdog、`rm all`、Ctrl+C 偶发等待很久。
+- WinDbg 或采样能看到大量时间消耗在锁竞争、系统 worker 调度、completion 互等附近。
+
+常见根因：
+
+- `KMDF` 把 `SessionLock` 放进每个 `POST_READ_SLOT/POST_WRITE_SLOT` 高频路径。
+- 持有 `SessionLock` 后再等待 pending slot drain，导致 cleanup 和 completion 容易互相等。
+- `submit queue/free list` 锁内做了 `IoCallDriver`、`WdfRequestComplete`、对象分配释放。
+- `SCSI` queue lock 内做大块 `RtlCopyMemory` 或 `StorPortNotification(RequestComplete)`。
+- remove/cleanup 没有先把 pending 对象移动到本地 list，而是在锁内边遍历边完成。
+- write ACK range 太大时，`WriteQueueLock` 内 bitmap 检查/置位循环过长。
+
+判定方法：
+
+- 先看是否有实际 I/O 进展：如果没有进展，优先按 QD 挂死、cancel、pending SRB 泄漏排查。
+- 如果吞吐仍有但 kernel CPU 高，重点看 `KMDF async slot transport` 和锁竞争。
+- 对 KMDF 看每 slot 是否仍在走 `ControlAlloc + IoAllocateIrp + IoAllocateWorkItem + IoQueueWorkItem`。
+- 对 KMDF 看 `ControlSessionRegisterPendingSlot` 是否仍每 slot 获取 `WDFWAITLOCK`。
+- 对 SCSI 看锁内是否出现 copy、completion、free、wait、IO call。
+- 对 cleanup 看是否持锁等待 `PendingSlotZeroEvent` 或 pending SRB drain。
+
+固定修复原则：
+
+```text
+锁外准备
+  -> 锁内摘状态 / 转移所有权
+  -> 立即解锁
+  -> 锁外 copy / complete / free / wait / IoCallDriver
+```
+
+注意事项：
+
+- `KSPIN_LOCK` 不是错误，SCSI per-target queue 使用 spin lock 是合理的；错误通常是锁内做了太多事。
+- `WDFWAITLOCK` 也不是错误，但它不能进入 slot 高频热路径。
+- 不要通过把 spin lock 换成 wait lock 来掩盖临界区过大；先缩小临界区。
+- 如果线性查找成为热点，应增加 ready list、pending-unissued list 或 eventId index，而不是扩大锁范围。
+- `DiskResetDiskStorage` 一类释放大块内存的路径也应使用“锁内交换指针，锁外释放”的方式，避免把释放成本塞进锁内。
+
+### 3.10 热路径固定开销导致 kernel CPU 偏高
+
+现象：
+
+- 单盘吞吐已经能到数百 MB/s，甚至约 `600 MB/s`，但 CPU 仍明显偏高。
+- CPU 时间主要落在 kernel time，而不是 App user time。
+- 关闭热路径 print 后吞吐恢复，但 kernel CPU 仍比预期高。
+- 多盘总吞吐能继续扩展，说明 App per-disk worker 和 SCSI per-target queue 大方向成立。
+
+常见热路径来源：
+
+- 热路径 `DbgPrint`：每次 read/write dispatch、slot submit、slot complete、ACK 都打印。
+- 每 slot 分配释放：`ControlAlloc(asyncRequest)`、`ControlAlloc(ioctlBuffer)`、`IoAllocateIrp`、`IoFreeIrp`。
+- 每 slot work item：`IoAllocateWorkItem`、`IoQueueWorkItem`、`IoFreeWorkItem`。
+- 每 slot 进入系统 worker queue，造成调度和上下文切换成本。
+- 每 slot 获取 `WDFWAITLOCK` 做 session 检查。
+- 短控制命令每次都分配临时 `SRB_IO_CONTROL` buffer 和 event。
+- ACK batch 太小，导致命令次数过多。
+- App 每个完成都立刻补投/ACK，批量度太低。
+
+当前最热的 KMDF slot transport 形态：
+
+```text
+POST_READ_SLOT / POST_WRITE_SLOT
+  -> ControlProxySubmitSlotAsync
+  -> alloc asyncRequest
+  -> alloc ioctlBuffer
+  -> IoAllocateIrp
+  -> IoAllocateWorkItem
+  -> IoQueueWorkItem
+  -> IoCallDriver
+  -> completion
+  -> WdfRequestComplete
+  -> free work item / IRP / buffers
+```
+
+判断方法：
+
+- 如果去掉热路径 print 后吞吐大幅上升，说明 print 是第一层瓶颈。
+- 如果吞吐已经恢复但 kernel CPU 仍高，继续看每-slot 固定开销。
+- 对 KMDF，优先查 `ControlProxySubmitSlotAsync` 是否每次都 alloc/free IRP、buffer、work item。
+- 对 SCSI，查 `DiskAllocPostedSlot`、`DiskAllocReadRequest`、`DiskAllocWriteRequest` 是否在高 IOPS 下成为频繁分配点。
+- 对 App，查是否每个 slot 完成都唤醒过多线程或立即发送过小 ACK batch。
+- 用计数器看每秒 slot submit/complete、ACK command、work item、pool miss、allocation failure，而不是只看 MB/s。
+
+固定修复方向：
+
+- 热路径 print 默认关闭，只保留低频 debug counter。
+- `KMDF async slot transport` 改成 session-owned 对象池。
+- 池对象长期持有 `IRP + IOCTL buffer + completion context`。
+- 用 `IoReuseIrp` 复用 IRP，去掉每-slot `IoAllocateIrp/IoFreeIrp`。
+- 用 session-owned 长期 submit worker，去掉每-slot `IoAllocateWorkItem/IoFreeWorkItem`。
+- worker 批量 drain submit queue，不能一个 slot 一个 worker。
+- 高频 session 准入用原子 state + pending ref，不走 `WDFWAITLOCK`。
+- `READ_ACK` 保持小描述符 + `KernelVa`，不要把 1MB 数据塞进 `SRB_IO_CONTROL`。
+- `WRITE_ACK_BATCH` 保持独立 batch，必要时提高 batch 合并度，但不恢复 piggyback ACK。
+
+注意事项：
+
+- 热路径优化不能改变协议语义，第一阶段只压对象生命周期和调度成本。
+- 不要为了减少命令数立即设计新协议；当前协议已经能支撑吞吐，先压实现固定成本。
+- 不要把 App worker 数继续堆大来掩盖 KMDF kernel CPU 问题；这会把上下文切换重新拉高。
+- 如果对象池满，初版宁可返回 busy 让 App 重投，也不要在 KMDF 内无限等待池对象。
+- 热路径优化必须和 cleanup 一起验证：`Ctrl+C`、`rm all`、App exit、heartbeat timeout 都要能收干净。
+
 ## 4. 调试和压测注意事项
 
 ### 4.1 `diskspd` 使用注意
@@ -448,3 +557,5 @@ RemoveAllDisks | SessionClose
 3. `App` 只按盘并发，不共享全局数据面 worker 池。
 4. `WRITE_ACK_BATCH` 是唯一 ACK 入口，不再恢复 piggyback ACK。
 5. 热路径 print 只用于短期定位，定位完成后必须删除，否则性能数据不可信。
+6. 锁内只做状态转移，copy、complete、free、wait、`IoCallDriver` 都放到锁外。
+7. 热路径不做 per-slot alloc/free IRP/work item，优先用 session-owned 对象池和长期 worker。
