@@ -19,3 +19,6 @@ AK_STATUS AkDiskQueryState(
 AK_STATUS AkDiskQueryStats(
     AK_DISK* disk,
     AK_DISK_STATS* out_stats);
+
+void AkDiskDestroyDetached(
+    AK_DISK* disk);

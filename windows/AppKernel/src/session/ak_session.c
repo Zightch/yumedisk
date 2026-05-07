@@ -1,5 +1,6 @@
 #include "session/ak_session.h"
 
+#include "disk/ak_disk.h"
 #include "protocol/ak_protocol.h"
 
 #include <stdarg.h>
@@ -183,8 +184,22 @@ static DWORD WINAPI AkSessionHeartbeatThreadProc(
 static void AkSessionDestroy(
     AK_SESSION* session)
 {
+    AK_DISK* disk;
+    AK_DISK* next_disk;
+
     if (session == NULL) {
         return;
+    }
+
+    disk = session->DiskListHead;
+    session->DiskListHead = NULL;
+    while (disk != NULL) {
+        next_disk = disk->SessionNext;
+        disk->Session = NULL;
+        disk->SessionNext = NULL;
+        disk->RegisteredInSession = FALSE;
+        AkDiskDestroyDetached(disk);
+        disk = next_disk;
     }
 
     if (session->HeartbeatThread != NULL) {
@@ -205,6 +220,24 @@ static void AkSessionDestroy(
     }
 
     AkFree(session);
+}
+
+static BOOLEAN AkSessionDiskTargetExistsLocked(
+    const AK_SESSION* session,
+    UINT32 target_id)
+{
+    const AK_DISK* disk;
+
+    disk = session->DiskListHead;
+    while (disk != NULL) {
+        if (disk->State.TargetId == target_id) {
+            return TRUE;
+        }
+
+        disk = disk->SessionNext;
+    }
+
+    return FALSE;
 }
 
 static AK_STATUS AkValidateOpenParams(const AK_OPEN_PARAMS* params)
@@ -254,6 +287,8 @@ AK_STATUS AkSessionOpen(
     session->ControlFile = NULL;
     session->StopEvent = NULL;
     session->HeartbeatThread = NULL;
+    session->DiskListHead = NULL;
+    session->NextDiskRuntimeId = 1ull;
     session->State.Lifecycle = AkStateStarting;
     session->State.LastError = AK_STATUS_SUCCESS;
     session->State.HeartbeatRunning = FALSE;
@@ -462,4 +497,95 @@ AK_STATUS AkSessionQueryStats(
 
     *out_stats = session->Stats;
     return AK_STATUS_SUCCESS;
+}
+
+AK_STATUS AkSessionAcquireTransport(
+    AK_SESSION* session,
+    HANDLE* out_control_file,
+    UINT64* out_session_id)
+{
+    if ((session == NULL) || (out_control_file == NULL) || (out_session_id == NULL)) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    AcquireSRWLockShared(&session->Lock);
+    if (!session->State.TransportReady || (session->ControlFile == NULL) ||
+        (session->ControlFile == INVALID_HANDLE_VALUE) || (session->State.SessionId == 0ull)) {
+        ReleaseSRWLockShared(&session->Lock);
+        return AK_STATUS_DEVICE_NOT_READY;
+    }
+
+    *out_control_file = session->ControlFile;
+    *out_session_id = session->State.SessionId;
+    ReleaseSRWLockShared(&session->Lock);
+    return AK_STATUS_SUCCESS;
+}
+
+AK_STATUS AkSessionRegisterDisk(
+    AK_SESSION* session,
+    AK_DISK* disk,
+    UINT64* out_runtime_id)
+{
+    UINT64 runtime_id;
+
+    if ((session == NULL) || (disk == NULL) || (out_runtime_id == NULL)) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    AcquireSRWLockExclusive(&session->Lock);
+
+    if (session->State.Lifecycle != AkStateRunning) {
+        ReleaseSRWLockExclusive(&session->Lock);
+        return AK_STATUS_DEVICE_NOT_READY;
+    }
+
+    if (AkSessionDiskTargetExistsLocked(session, disk->Params.TargetId)) {
+        ReleaseSRWLockExclusive(&session->Lock);
+        return AK_STATUS_ALREADY_EXISTS;
+    }
+
+    runtime_id = session->NextDiskRuntimeId;
+    session->NextDiskRuntimeId += 1ull;
+
+    disk->SessionNext = session->DiskListHead;
+    session->DiskListHead = disk;
+    disk->RegisteredInSession = TRUE;
+    disk->State.DiskRuntimeId = runtime_id;
+    disk->State.TargetId = disk->Params.TargetId;
+    session->State.DiskCount += 1u;
+
+    ReleaseSRWLockExclusive(&session->Lock);
+
+    *out_runtime_id = runtime_id;
+    return AK_STATUS_SUCCESS;
+}
+
+void AkSessionUnregisterDisk(
+    AK_SESSION* session,
+    AK_DISK* disk)
+{
+    AK_DISK** link;
+
+    if ((session == NULL) || (disk == NULL)) {
+        return;
+    }
+
+    AcquireSRWLockExclusive(&session->Lock);
+
+    link = &session->DiskListHead;
+    while (*link != NULL) {
+        if (*link == disk) {
+            *link = disk->SessionNext;
+            disk->SessionNext = NULL;
+            if (session->State.DiskCount > 0u) {
+                session->State.DiskCount -= 1u;
+            }
+            break;
+        }
+
+        link = &(*link)->SessionNext;
+    }
+
+    disk->RegisteredInSession = FALSE;
+    ReleaseSRWLockExclusive(&session->Lock);
 }

@@ -219,7 +219,7 @@
 
 状态：
 
-- 当前唯一下一步。
+- 已完成骨架闭环；下一步进入读路径接入。
 
 目标：
 
@@ -241,6 +241,31 @@
 - 结构上彻底避免再回到“有设备无盘”的旧问题。
 - `QueueDepth` 明确按盘解释，不与其他盘共享。
 - 多盘完整并发成立，不回退到旧单盘 `Q` 队列模型。
+
+当前实现收口：
+
+- `AkCreateDisk` / `AkRemoveDisk` / `AkQueryDiskState` / `AkQueryDiskStats` 已接入真实实现，不再返回 `protocol unavailable`。
+- `session` 已持有 per-disk runtime 注册表，并分配 `DiskRuntimeId` 与按盘 `DiskCount`。
+- `disk runtime` 已具备独立对象边界：
+  - session 归属
+  - per-disk 锁
+  - stop event
+  - read worker 集合
+  - write worker 集合
+  - ack flusher worker
+  - per-disk 生命周期与统计快照
+- 建盘顺序已经按正式方案固定：
+  1. 创建 runtime
+  2. 启动 worker
+  3. 标记 read slot availability ready
+  4. 再发 `CREATE_DISK`
+- 删盘顺序已经形成最小收口：
+  1. 置为 removing
+  2. 停止该盘 worker
+  3. 发送 `REMOVE_DISK`
+  4. 注入 `DiskRemoved` 事件并回收 runtime
+- `AkClose` 已能连带销毁 session 下残留 disk runtime，避免 session 关闭后遗留后台线程或句柄。
+- 当前 worker 仍是占位骨架，只提供生命周期和并发结构；真实 `POST_READ_SLOT` / `POST_WRITE_SLOT` 数据面推进留在后续步骤。
 
 ### Step 6. 实现读路径
 
