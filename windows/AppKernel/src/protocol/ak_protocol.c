@@ -395,13 +395,24 @@ static AK_STATUS AkProtocolSendMessage(
     HANDLE file,
     AK_PROTOCOL_MESSAGE_BUFFER* buffer)
 {
+    OVERLAPPED overlapped;
+    HANDLE event_handle;
     DWORD bytes_returned;
     BOOL ok;
+    DWORD error;
+    AK_STATUS status;
 
     if ((file == NULL) || (file == INVALID_HANDLE_VALUE) || (buffer == NULL) || (buffer->Message == NULL)) {
         return AK_STATUS_INVALID_PARAMETER;
     }
 
+    event_handle = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (event_handle == NULL) {
+        return AkFromWin32Error(GetLastError());
+    }
+
+    (void)memset(&overlapped, 0, sizeof(overlapped));
+    overlapped.hEvent = event_handle;
     bytes_returned = 0u;
     ok = DeviceIoControl(
         file,
@@ -411,14 +422,24 @@ static AK_STATUS AkProtocolSendMessage(
         buffer->Message,
         buffer->Size,
         &bytes_returned,
-        NULL);
-    (void)bytes_returned;
-
+        &overlapped);
     if (!ok) {
-        return AkFromWin32Error(GetLastError());
+        error = GetLastError();
+        if (error == ERROR_IO_PENDING) {
+            ok = GetOverlappedResult(file, &overlapped, &bytes_returned, TRUE);
+            if (!ok) {
+                error = GetLastError();
+            }
+        }
     }
 
-    return AK_STATUS_SUCCESS;
+    status = AK_STATUS_SUCCESS;
+    if (!ok) {
+        status = AkFromWin32Error(error);
+    }
+
+    CloseHandle(event_handle);
+    return status;
 }
 
 static AK_STATUS AkProtocolSendShortCommand(
