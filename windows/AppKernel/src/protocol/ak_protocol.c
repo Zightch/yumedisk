@@ -1,13 +1,27 @@
 #include "protocol/ak_protocol.h"
 
 #include <setupapi.h>
+#include <string.h>
 
-typedef struct AK_PROTOCOL_MESSAGE_BUFFER {
-    PYUMEDISK_MESSAGE Message;
-    DWORD Size;
-} AK_PROTOCOL_MESSAGE_BUFFER;
+static AK_STATUS AkProtocolValidateMessageBuffer(
+    const AK_PROTOCOL_MESSAGE_BUFFER* buffer,
+    ULONG payload_length)
+{
+    size_t minimum_size;
 
-static AK_STATUS AkProtocolAllocateMessage(
+    if ((buffer == NULL) || (buffer->Message == NULL)) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    minimum_size = (size_t)YUMEDISK_MESSAGE_BASE_SIZE + (size_t)payload_length;
+    if ((size_t)buffer->Size < minimum_size) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    return AK_STATUS_SUCCESS;
+}
+
+AK_STATUS AkProtocolMessageAllocate(
     ULONG command,
     ULONG payload_length,
     ULONG capacity_payload_length,
@@ -19,6 +33,9 @@ static AK_STATUS AkProtocolAllocateMessage(
     if (out_buffer == NULL) {
         return AK_STATUS_INVALID_PARAMETER;
     }
+
+    out_buffer->Message = NULL;
+    out_buffer->Size = 0u;
 
     if (capacity_payload_length < payload_length) {
         capacity_payload_length = payload_length;
@@ -50,7 +67,7 @@ static AK_STATUS AkProtocolAllocateMessage(
     return AK_STATUS_SUCCESS;
 }
 
-static void AkProtocolFreeMessage(
+void AkProtocolMessageRelease(
     AK_PROTOCOL_MESSAGE_BUFFER* buffer)
 {
     if (buffer == NULL) {
@@ -60,6 +77,318 @@ static void AkProtocolFreeMessage(
     AkFree(buffer->Message);
     buffer->Message = NULL;
     buffer->Size = 0u;
+}
+
+AK_STATUS AkProtocolMessageReset(
+    AK_PROTOCOL_MESSAGE_BUFFER* buffer,
+    ULONG command,
+    ULONG payload_length,
+    UINT64 session_id,
+    UINT64 tx_id,
+    ULONG target_id,
+    ULONG flags)
+{
+    AK_STATUS status;
+
+    status = AkProtocolValidateMessageBuffer(buffer, payload_length);
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    (void)memset(buffer->Message, 0, buffer->Size);
+    buffer->Message->Header.Size = buffer->Size;
+    buffer->Message->Header.Version = YUMEDISK_PROTOCOL_VERSION;
+    buffer->Message->Header.Command = command;
+    buffer->Message->Header.Status = AK_STATUS_SUCCESS;
+    buffer->Message->Header.SessionId = session_id;
+    buffer->Message->Header.TxId = tx_id;
+    buffer->Message->Header.TargetId = target_id;
+    buffer->Message->Header.Flags = flags;
+    buffer->Message->Header.PayloadLength = payload_length;
+    buffer->Message->Header.Reserved = 0u;
+    return AK_STATUS_SUCCESS;
+}
+
+ULONG AkProtocolWriteAckBatchPayloadSize(
+    UINT32 range_count)
+{
+    if (range_count == 0u) {
+        return 0u;
+    }
+
+    return YUMEDISK_WRITE_ACK_BATCH_SIZE(range_count);
+}
+
+AK_STATUS AkProtocolPreparePostReadSlot(
+    AK_PROTOCOL_MESSAGE_BUFFER* request,
+    UINT64 session_id,
+    UINT32 target_id,
+    UINT64 tx_id)
+{
+    return AkProtocolMessageReset(
+        request,
+        YumeDiskCommandPostReadSlot,
+        0u,
+        session_id,
+        tx_id,
+        target_id,
+        0u);
+}
+
+AK_STATUS AkProtocolPreparePostWriteSlot(
+    AK_PROTOCOL_MESSAGE_BUFFER* request,
+    UINT64 session_id,
+    UINT32 target_id,
+    UINT64 tx_id)
+{
+    return AkProtocolMessageReset(
+        request,
+        YumeDiskCommandPostWriteSlot,
+        0u,
+        session_id,
+        tx_id,
+        target_id,
+        0u);
+}
+
+AK_STATUS AkProtocolPrepareReadAck(
+    AK_PROTOCOL_MESSAGE_BUFFER* request,
+    UINT64 session_id,
+    UINT32 target_id,
+    const YUMEDISK_READ_ACK* ack)
+{
+    YUMEDISK_READ_ACK* payload;
+    AK_STATUS status;
+
+    if (ack == NULL) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    status = AkProtocolMessageReset(
+        request,
+        YumeDiskCommandReadAck,
+        (ULONG)sizeof(YUMEDISK_READ_ACK),
+        session_id,
+        0ull,
+        target_id,
+        0u);
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    payload = (YUMEDISK_READ_ACK*)request->Message->Payload;
+    *payload = *ack;
+    return AK_STATUS_SUCCESS;
+}
+
+AK_STATUS AkProtocolPrepareWriteAckBatch(
+    AK_PROTOCOL_MESSAGE_BUFFER* request,
+    UINT64 session_id,
+    UINT32 target_id,
+    const YUMEDISK_WRITE_ACK_RANGE* ranges,
+    UINT32 range_count)
+{
+    ULONG payload_length;
+    PYUMEDISK_WRITE_ACK_BATCH payload;
+    AK_STATUS status;
+
+    payload_length = AkProtocolWriteAckBatchPayloadSize(range_count);
+    status = AkProtocolMessageReset(
+        request,
+        YumeDiskCommandWriteAckBatch,
+        payload_length,
+        session_id,
+        0ull,
+        target_id,
+        0u);
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    if (range_count == 0u) {
+        return AK_STATUS_SUCCESS;
+    }
+
+    if (ranges == NULL) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    payload = (PYUMEDISK_WRITE_ACK_BATCH)request->Message->Payload;
+    payload->RangeCount = range_count;
+    payload->Reserved = 0u;
+    (void)memcpy(
+        payload->Ranges,
+        ranges,
+        (size_t)range_count * sizeof(YUMEDISK_WRITE_ACK_RANGE));
+    return AK_STATUS_SUCCESS;
+}
+
+AK_STATUS AkProtocolAsyncIoInitialize(
+    AK_PROTOCOL_ASYNC_IO* async_io)
+{
+    if (async_io == NULL) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    (void)memset(async_io, 0, sizeof(*async_io));
+    async_io->Overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (async_io->Overlapped.hEvent == NULL) {
+        return AkFromWin32Error(GetLastError());
+    }
+
+    async_io->BytesTransferred = 0u;
+    async_io->Active = FALSE;
+    return AK_STATUS_SUCCESS;
+}
+
+void AkProtocolAsyncIoDestroy(
+    AK_PROTOCOL_ASYNC_IO* async_io)
+{
+    if (async_io == NULL) {
+        return;
+    }
+
+    if (async_io->Overlapped.hEvent != NULL) {
+        CloseHandle(async_io->Overlapped.hEvent);
+        async_io->Overlapped.hEvent = NULL;
+    }
+
+    async_io->BytesTransferred = 0u;
+    async_io->Active = FALSE;
+}
+
+AK_STATUS AkProtocolAsyncIoBegin(
+    HANDLE file,
+    void* input_buffer,
+    DWORD input_buffer_size,
+    void* output_buffer,
+    DWORD output_buffer_size,
+    AK_PROTOCOL_ASYNC_IO* async_io)
+{
+    HANDLE event_handle;
+    OVERLAPPED reset_overlapped;
+    DWORD transferred;
+    BOOL ok;
+    DWORD error;
+
+    if ((file == NULL) || (file == INVALID_HANDLE_VALUE) || (async_io == NULL) ||
+        (async_io->Overlapped.hEvent == NULL)) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    event_handle = async_io->Overlapped.hEvent;
+    (void)memset(&reset_overlapped, 0, sizeof(reset_overlapped));
+    reset_overlapped.hEvent = event_handle;
+    async_io->Overlapped = reset_overlapped;
+    async_io->BytesTransferred = 0u;
+    async_io->Active = FALSE;
+    ResetEvent(event_handle);
+
+    transferred = 0u;
+    ok = DeviceIoControl(
+        file,
+        IOCTL_YUMEDISK_APP_COMMAND,
+        input_buffer,
+        input_buffer_size,
+        output_buffer,
+        output_buffer_size,
+        &transferred,
+        &async_io->Overlapped);
+    if (ok) {
+        async_io->BytesTransferred = transferred;
+        async_io->Active = TRUE;
+        SetEvent(event_handle);
+        return AK_STATUS_SUCCESS;
+    }
+
+    error = GetLastError();
+    if (error == ERROR_IO_PENDING) {
+        async_io->Active = TRUE;
+        return AK_STATUS_SUCCESS;
+    }
+
+    return AkFromWin32Error(error);
+}
+
+AK_STATUS AkProtocolAsyncIoWait(
+    AK_PROTOCOL_ASYNC_IO* async_io,
+    DWORD timeout_ms)
+{
+    DWORD wait_status;
+
+    if ((async_io == NULL) || (async_io->Overlapped.hEvent == NULL)) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    wait_status = WaitForSingleObject(async_io->Overlapped.hEvent, timeout_ms);
+    if (wait_status == WAIT_OBJECT_0) {
+        return AK_STATUS_SUCCESS;
+    }
+
+    if (wait_status == WAIT_TIMEOUT) {
+        return AK_STATUS_TIMEOUT;
+    }
+
+    return AkFromWin32Error(GetLastError());
+}
+
+AK_STATUS AkProtocolAsyncIoFinish(
+    HANDLE file,
+    AK_PROTOCOL_ASYNC_IO* async_io,
+    DWORD* out_bytes_transferred)
+{
+    DWORD transferred;
+    BOOL ok;
+    DWORD error;
+
+    if ((file == NULL) || (file == INVALID_HANDLE_VALUE) || (async_io == NULL) ||
+        (async_io->Overlapped.hEvent == NULL) || !async_io->Active) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    transferred = 0u;
+    ok = GetOverlappedResult(file, &async_io->Overlapped, &transferred, FALSE);
+    if (ok) {
+        async_io->BytesTransferred = transferred;
+        async_io->Active = FALSE;
+        if (out_bytes_transferred != NULL) {
+            *out_bytes_transferred = transferred;
+        }
+        return AK_STATUS_SUCCESS;
+    }
+
+    error = GetLastError();
+    if (error == ERROR_IO_INCOMPLETE) {
+        return AK_STATUS_TIMEOUT;
+    }
+
+    async_io->Active = FALSE;
+    return AkFromWin32Error(error);
+}
+
+AK_STATUS AkProtocolAsyncIoCancel(
+    HANDLE file,
+    AK_PROTOCOL_ASYNC_IO* async_io)
+{
+    BOOL ok;
+    DWORD error;
+
+    if ((file == NULL) || (file == INVALID_HANDLE_VALUE) || (async_io == NULL) ||
+        (async_io->Overlapped.hEvent == NULL)) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    ok = CancelIoEx(file, &async_io->Overlapped);
+    if (ok) {
+        return AK_STATUS_SUCCESS;
+    }
+
+    error = GetLastError();
+    if (error == ERROR_NOT_FOUND) {
+        return AK_STATUS_NOT_FOUND;
+    }
+
+    return AkFromWin32Error(error);
 }
 
 static AK_STATUS AkProtocolSendMessage(
@@ -87,6 +416,24 @@ static AK_STATUS AkProtocolSendMessage(
 
     if (!ok) {
         return AkFromWin32Error(GetLastError());
+    }
+
+    return AK_STATUS_SUCCESS;
+}
+
+static AK_STATUS AkProtocolSendShortCommand(
+    HANDLE file,
+    AK_PROTOCOL_MESSAGE_BUFFER* buffer)
+{
+    AK_STATUS status;
+
+    status = AkProtocolSendMessage(file, buffer);
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    if (buffer->Message->Header.Status != AK_STATUS_SUCCESS) {
+        return buffer->Message->Header.Status;
     }
 
     return AK_STATUS_SUCCESS;
@@ -261,7 +608,7 @@ AK_STATUS AkProtocolQueryInfo(
     AK_PROTOCOL_MESSAGE_BUFFER buffer;
     AK_STATUS status;
 
-    status = AkProtocolAllocateMessage(
+    status = AkProtocolMessageAllocate(
         YumeDiskCommandQueryInfo,
         0u,
         (ULONG)sizeof(YUMEDISK_QUERY_INFO),
@@ -275,7 +622,7 @@ AK_STATUS AkProtocolQueryInfo(
         status = AkProtocolValidateInfoResponse(&buffer, out_info, out_session_id);
     }
 
-    AkProtocolFreeMessage(&buffer);
+    AkProtocolMessageRelease(&buffer);
     return status;
 }
 
@@ -293,7 +640,7 @@ AK_STATUS AkProtocolSendHeartbeat(
     AK_PROTOCOL_MESSAGE_BUFFER buffer;
     AK_STATUS status;
 
-    status = AkProtocolAllocateMessage(
+    status = AkProtocolMessageAllocate(
         YumeDiskCommandHeartbeat,
         0u,
         0u,
@@ -302,14 +649,22 @@ AK_STATUS AkProtocolSendHeartbeat(
         return status;
     }
 
-    buffer.Message->Header.SessionId = session_id;
-
-    status = AkProtocolSendMessage(file, &buffer);
-    if ((status == AK_STATUS_SUCCESS) && (buffer.Message->Header.Status != AK_STATUS_SUCCESS)) {
-        status = buffer.Message->Header.Status;
+    status = AkProtocolMessageReset(
+        &buffer,
+        YumeDiskCommandHeartbeat,
+        0u,
+        session_id,
+        0ull,
+        0u,
+        0u);
+    if (status != AK_STATUS_SUCCESS) {
+        AkProtocolMessageRelease(&buffer);
+        return status;
     }
 
-    AkProtocolFreeMessage(&buffer);
+    status = AkProtocolSendShortCommand(file, &buffer);
+
+    AkProtocolMessageRelease(&buffer);
     return status;
 }
 
@@ -321,7 +676,7 @@ AK_STATUS AkProtocolRemoveAllDisks(
     AK_PROTOCOL_MESSAGE_BUFFER buffer;
     AK_STATUS status;
 
-    status = AkProtocolAllocateMessage(
+    status = AkProtocolMessageAllocate(
         YumeDiskCommandRemoveAllDisks,
         0u,
         0u,
@@ -330,15 +685,208 @@ AK_STATUS AkProtocolRemoveAllDisks(
         return status;
     }
 
-    buffer.Message->Header.SessionId = session_id;
-    buffer.Message->Header.Flags = flags;
-
-    status = AkProtocolSendMessage(file, &buffer);
-    if ((status == AK_STATUS_SUCCESS) && (buffer.Message->Header.Status != AK_STATUS_SUCCESS)) {
-        status = buffer.Message->Header.Status;
+    status = AkProtocolMessageReset(
+        &buffer,
+        YumeDiskCommandRemoveAllDisks,
+        0u,
+        session_id,
+        0ull,
+        0u,
+        flags);
+    if (status != AK_STATUS_SUCCESS) {
+        AkProtocolMessageRelease(&buffer);
+        return status;
     }
 
-    AkProtocolFreeMessage(&buffer);
+    status = AkProtocolSendShortCommand(file, &buffer);
+
+    AkProtocolMessageRelease(&buffer);
+    return status;
+}
+
+AK_STATUS AkProtocolCreateDisk(
+    HANDLE file,
+    UINT64 session_id,
+    const AK_DISK_PARAMS* params)
+{
+    AK_PROTOCOL_MESSAGE_BUFFER buffer;
+    YUMEDISK_CREATE_DISK* payload;
+    AK_STATUS status;
+
+    if (params == NULL) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    if ((params->SectorSize == 0u) || (params->DiskSizeBytes == 0ull) ||
+        ((params->DiskSizeBytes % params->SectorSize) != 0ull)) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    status = AkProtocolMessageAllocate(
+        YumeDiskCommandCreateDisk,
+        (ULONG)sizeof(YUMEDISK_CREATE_DISK),
+        (ULONG)sizeof(YUMEDISK_CREATE_DISK),
+        &buffer);
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    status = AkProtocolMessageReset(
+        &buffer,
+        YumeDiskCommandCreateDisk,
+        (ULONG)sizeof(YUMEDISK_CREATE_DISK),
+        session_id,
+        0ull,
+        params->TargetId,
+        0u);
+    if (status != AK_STATUS_SUCCESS) {
+        AkProtocolMessageRelease(&buffer);
+        return status;
+    }
+
+    payload = (YUMEDISK_CREATE_DISK*)buffer.Message->Payload;
+    payload->TargetId = params->TargetId;
+    payload->SectorSize = params->SectorSize;
+    payload->SectorCount = params->DiskSizeBytes / params->SectorSize;
+    payload->DiskSizeBytes = params->DiskSizeBytes;
+
+    status = AkProtocolSendShortCommand(file, &buffer);
+    AkProtocolMessageRelease(&buffer);
+    return status;
+}
+
+AK_STATUS AkProtocolRemoveDisk(
+    HANDLE file,
+    UINT64 session_id,
+    UINT32 target_id,
+    ULONG flags)
+{
+    AK_PROTOCOL_MESSAGE_BUFFER buffer;
+    YUMEDISK_REMOVE_DISK* payload;
+    AK_STATUS status;
+
+    status = AkProtocolMessageAllocate(
+        YumeDiskCommandRemoveDisk,
+        (ULONG)sizeof(YUMEDISK_REMOVE_DISK),
+        (ULONG)sizeof(YUMEDISK_REMOVE_DISK),
+        &buffer);
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    status = AkProtocolMessageReset(
+        &buffer,
+        YumeDiskCommandRemoveDisk,
+        (ULONG)sizeof(YUMEDISK_REMOVE_DISK),
+        session_id,
+        0ull,
+        target_id,
+        0u);
+    if (status != AK_STATUS_SUCCESS) {
+        AkProtocolMessageRelease(&buffer);
+        return status;
+    }
+
+    payload = (YUMEDISK_REMOVE_DISK*)buffer.Message->Payload;
+    payload->TargetId = target_id;
+    payload->Flags = flags;
+
+    status = AkProtocolSendShortCommand(file, &buffer);
+    AkProtocolMessageRelease(&buffer);
+    return status;
+}
+
+AK_STATUS AkProtocolQueryDebugState(
+    HANDLE file,
+    UINT64 session_id,
+    YUMEDISK_DEBUG_STATE* out_debug_state)
+{
+    AK_PROTOCOL_MESSAGE_BUFFER buffer;
+    AK_STATUS status;
+
+    if (out_debug_state == NULL) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    status = AkProtocolMessageAllocate(
+        YumeDiskCommandQueryDebugState,
+        0u,
+        (ULONG)sizeof(YUMEDISK_DEBUG_STATE),
+        &buffer);
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    status = AkProtocolMessageReset(
+        &buffer,
+        YumeDiskCommandQueryDebugState,
+        0u,
+        session_id,
+        0ull,
+        0u,
+        0u);
+    if (status != AK_STATUS_SUCCESS) {
+        AkProtocolMessageRelease(&buffer);
+        return status;
+    }
+
+    status = AkProtocolSendShortCommand(file, &buffer);
+    if (status == AK_STATUS_SUCCESS) {
+        if (buffer.Message->Header.PayloadLength < sizeof(YUMEDISK_DEBUG_STATE)) {
+            status = AK_STATUS_UNSUCCESSFUL;
+        } else {
+            *out_debug_state = *(const YUMEDISK_DEBUG_STATE*)buffer.Message->Payload;
+        }
+    }
+
+    AkProtocolMessageRelease(&buffer);
+    return status;
+}
+
+AK_STATUS AkProtocolCancelSlot(
+    HANDLE file,
+    UINT64 session_id,
+    UINT32 target_id,
+    UINT32 slot_type,
+    UINT64 slot_id)
+{
+    AK_PROTOCOL_MESSAGE_BUFFER buffer;
+    YUMEDISK_CANCEL_SLOT* payload;
+    AK_STATUS status;
+
+    status = AkProtocolMessageAllocate(
+        YumeDiskCommandCancelSlot,
+        (ULONG)sizeof(YUMEDISK_CANCEL_SLOT),
+        (ULONG)sizeof(YUMEDISK_CANCEL_SLOT),
+        &buffer);
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    status = AkProtocolMessageReset(
+        &buffer,
+        YumeDiskCommandCancelSlot,
+        (ULONG)sizeof(YUMEDISK_CANCEL_SLOT),
+        session_id,
+        0ull,
+        target_id,
+        0u);
+    if (status != AK_STATUS_SUCCESS) {
+        AkProtocolMessageRelease(&buffer);
+        return status;
+    }
+
+    payload = (YUMEDISK_CANCEL_SLOT*)buffer.Message->Payload;
+    payload->SlotId = slot_id;
+    payload->SlotType = slot_type;
+    payload->TargetId = target_id;
+
+    status = AkProtocolSendShortCommand(file, &buffer);
+    if (status == AK_STATUS_NOT_FOUND) {
+        status = AK_STATUS_SUCCESS;
+    }
+
+    AkProtocolMessageRelease(&buffer);
     return status;
 }
 

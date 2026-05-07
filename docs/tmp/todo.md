@@ -181,7 +181,7 @@
 
 状态：
 
-- 当前唯一下一步。
+- 已完成。
 
 目标：
 
@@ -196,7 +196,30 @@
 - 宿主不再自己直通 `DeviceIoControl` 操作这些数据面命令。
 - 后续多盘 runtime 只调 `AppKernel` 内部 transport，不再各盘各自拼 `IOCTL`。
 
+当前实现收口：
+
+- 同步短命令已经统一收进 `protocol` 层：
+  - `QUERY_INFO`
+  - `CREATE_DISK`
+  - `REMOVE_DISK`
+  - `REMOVE_ALL_DISKS`
+  - `QUERY_DEBUG_STATE`
+  - `CANCEL_SLOT`
+- 异步基础设施已经落地：
+  - `AK_PROTOCOL_ASYNC_IO`
+  - `begin / wait / finish / cancel`
+- slot wire-format 组包已经开始统一收口：
+  - `POST_READ_SLOT`
+  - `POST_WRITE_SLOT`
+  - `READ_ACK`
+  - `WRITE_ACK_BATCH`
+- `disk runtime` 下一步只需调用 protocol transport，不再自己拼 `OVERLAPPED + DeviceIoControl + payload`。
+
 ### Step 5. 实现 per-disk runtime 骨架
+
+状态：
+
+- 当前唯一下一步。
 
 目标：
 

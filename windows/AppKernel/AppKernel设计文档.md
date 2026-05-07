@@ -78,6 +78,15 @@
 
 `AppKernel` 不能把驱动侧职责重新抬回用户态。
 
+当前实现进度补充：
+
+- `session` 最小闭环已经落地。
+- `session-owned` 事件队列已经落地。
+- `protocol transport` 已经开始独立成层：
+  - 同步短命令统一走一套内部封装。
+  - 异步 slot I/O 的 `OVERLAPPED` 生命周期和 wait/finish/cancel 已统一收口。
+  - 后续 per-disk runtime 只调用 protocol transport，不再自行拼底层 `IOCTL`。
+
 ## 3. 单一真实来源
 
 状态归属固定如下：
