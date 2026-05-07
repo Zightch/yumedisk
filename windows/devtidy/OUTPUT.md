@@ -80,6 +80,8 @@
 | `device_create_failed` | `error` | 必填 | `error_code`, `error` |
 | `device_hwid_failed` | `error` | 必填 | `error_code`, `error` |
 | `device_register_failed` | `error` | 必填 | `error_code`, `error` |
+| `device_bind_failed` | `error` | 必填 | `source_inf`, `hardware_id`, `error_code`, `error` |
+| `device_bound` | `info` | 必填 | `source_inf`, `hardware_id`, `need_reboot` |
 | `device_created` | `info` | 必填 | `instance_id`, `instance_count`, `duplicate_count` |
 | `device_kept` | `info` | 必填 | `instance_id`, `instance_count`, `duplicate_count` |
 | `device_absent` | `info` | 必填 | `instance_count` |

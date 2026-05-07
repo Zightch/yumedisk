@@ -1550,8 +1550,11 @@ int main(
 
     status = AkOpen(&open_params, &backend.Session);
     if (status != AK_STATUS_SUCCESS) {
+        const DWORD last_error = GetLastError();
         std::cerr << "open appkernel session failed, status="
-                  << std::hex << std::uppercase << (unsigned long)status << std::dec << std::endl;
+                  << std::hex << std::uppercase << (unsigned long)status
+                  << ", win32=" << last_error
+                  << std::dec << std::endl;
         CloseHandle(g_StopEvent);
         g_StopEvent = nullptr;
         return 1;

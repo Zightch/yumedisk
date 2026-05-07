@@ -12,6 +12,7 @@ jsoncpp/
 **/build/
 **/cmake-build-*/
 **/out/
+
 **/tmp*/
 !docs/tmp/
 docs/tmp/*

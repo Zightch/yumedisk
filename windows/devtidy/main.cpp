@@ -3,6 +3,7 @@
 #include <Windows.h>
 #include <cfgmgr32.h>
 #include <devguid.h>
+#include <newdev.h>
 #include <json/json.h>
 #include <setupapi.h>
 
@@ -656,12 +657,55 @@ static bool CreateRootDevice(const DeviceSpec& spec, std::wstring* createdInstan
     return true;
 }
 
-static bool EnsureUniqueDevice(const DeviceSpec& spec) {
+static bool BindDriverToHardwareId(
+    const DeviceSpec& spec,
+    const fs::path& infPath)
+{
+    BOOL rebootRequired = FALSE;
+
+    if (!UpdateDriverForPlugAndPlayDevicesW(
+            nullptr,
+            spec.hardwareId,
+            infPath.c_str(),
+            INSTALLFLAG_FORCE,
+            &rebootRequired)) {
+        const DWORD error = GetLastError();
+        WriteErrorDeviceEvent(
+            "device_bind_failed",
+            spec.name,
+            JsonObject({
+                {"source_inf", JsonText(infPath.native())},
+                {"hardware_id", JsonText(spec.hardwareId)},
+                {"error_code", JsonUint(error)},
+                {"error", JsonText(GetLastErrorMessage(error))}
+            }));
+        return false;
+    }
+
+    WriteInfoDeviceEvent(
+        "device_bound",
+        spec.name,
+        JsonObject({
+            {"source_inf", JsonText(infPath.native())},
+            {"hardware_id", JsonText(spec.hardwareId)},
+            {"need_reboot", Json::Value(rebootRequired != FALSE)}
+        }));
+    return true;
+}
+
+static bool EnsureUniqueDevice(
+    const DeviceSpec& spec,
+    const fs::path& infPath)
+{
     std::vector<DeviceInstance> devices = EnumerateDevicesByHardwareId(spec);
 
     if (devices.empty()) {
         std::wstring createdInstanceId;
         if (!CreateRootDevice(spec, &createdInstanceId)) {
+            return false;
+        }
+
+        if (!BindDriverToHardwareId(spec, infPath)) {
             return false;
         }
 
@@ -674,6 +718,10 @@ static bool EnsureUniqueDevice(const DeviceSpec& spec) {
                 {"duplicate_count", JsonSize(0)}
             }));
         return true;
+    }
+
+    if (!BindDriverToHardwareId(spec, infPath)) {
+        return false;
     }
 
     const size_t keepIndex = ChoosePrimaryDeviceIndex(devices);
@@ -830,7 +878,7 @@ static bool RunInstall(const fs::path& packageRoot) {
             continue;
         }
 
-        if (!EnsureUniqueDevice(spec)) {
+        if (!EnsureUniqueDevice(spec, infPath)) {
             ok = false;
         }
     }

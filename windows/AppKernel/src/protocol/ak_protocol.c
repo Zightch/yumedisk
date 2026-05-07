@@ -473,7 +473,8 @@ static AK_STATUS AkProtocolValidateInfoResponse(
 
 static AK_STATUS AkProtocolOpenInterfacePath(
     PCWSTR device_path,
-    HANDLE* out_file)
+    HANDLE* out_file,
+    DWORD* out_error)
 {
     HANDLE file;
 
@@ -483,10 +484,21 @@ static AK_STATUS AkProtocolOpenInterfacePath(
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         NULL,
         OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+        FILE_FLAG_OVERLAPPED,
         NULL);
     if (file == INVALID_HANDLE_VALUE) {
-        return AkFromWin32Error(GetLastError());
+        DWORD error;
+
+        error = GetLastError();
+        if (out_error != NULL) {
+            *out_error = error;
+        }
+
+        return AkFromWin32Error(error);
+    }
+
+    if (out_error != NULL) {
+        *out_error = ERROR_SUCCESS;
     }
 
     *out_file = file;
@@ -496,8 +508,9 @@ static AK_STATUS AkProtocolOpenInterfacePath(
 AK_STATUS AkProtocolOpenControlDevice(
     HANDLE* out_file)
 {
-    HDEVINFO info_set;
-    DWORD index;
+    const ULONGLONG timeout_ms = 2000ull;
+    const DWORD retry_delay_ms = 100u;
+    const ULONGLONG deadline = GetTickCount64() + timeout_ms;
     DWORD last_error;
     AK_STATUS last_status;
 
@@ -509,91 +522,109 @@ AK_STATUS AkProtocolOpenControlDevice(
     last_error = ERROR_NOT_FOUND;
     last_status = AK_STATUS_NOT_FOUND;
 
-    info_set = SetupDiGetClassDevsW(
-        &GUID_YUMEDISK_CONTROL,
-        NULL,
-        NULL,
-        DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
-    if (info_set == INVALID_HANDLE_VALUE) {
-        return AkFromWin32Error(GetLastError());
-    }
-
-    index = 0u;
     for (;;) {
-        SP_DEVICE_INTERFACE_DATA interface_data;
-        DWORD required_size;
-        PSP_DEVICE_INTERFACE_DETAIL_DATA_W detail_data;
-        AK_STATUS status;
+        HDEVINFO info_set;
+        DWORD index;
 
-        ZeroMemory(&interface_data, sizeof(interface_data));
-        interface_data.cbSize = sizeof(interface_data);
-
-        if (!SetupDiEnumDeviceInterfaces(
-                info_set,
-                NULL,
-                &GUID_YUMEDISK_CONTROL,
-                index,
-                &interface_data)) {
-            last_error = GetLastError();
-            if (last_error == ERROR_NO_MORE_ITEMS) {
-                break;
-            }
-
-            last_status = AkFromWin32Error(last_error);
-            break;
-        }
-
-        required_size = 0u;
-        if (!SetupDiGetDeviceInterfaceDetailW(
-                info_set,
-                &interface_data,
-                NULL,
-                0u,
-                &required_size,
-                NULL)) {
-            last_error = GetLastError();
-            if (last_error != ERROR_INSUFFICIENT_BUFFER) {
-                last_status = AkFromWin32Error(last_error);
-                break;
-            }
-        }
-
-        detail_data = (PSP_DEVICE_INTERFACE_DETAIL_DATA_W)AkAllocZero(required_size);
-        if (detail_data == NULL) {
-            last_status = AK_STATUS_INSUFFICIENT_RESOURCES;
-            break;
-        }
-
-        detail_data->cbSize = sizeof(*detail_data);
-        if (!SetupDiGetDeviceInterfaceDetailW(
-                info_set,
-                &interface_data,
-                detail_data,
-                required_size,
-                NULL,
-                NULL)) {
+        info_set = SetupDiGetClassDevsW(
+            &GUID_YUMEDISK_CONTROL,
+            NULL,
+            NULL,
+            DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
+        if (info_set == INVALID_HANDLE_VALUE) {
             last_error = GetLastError();
             last_status = AkFromWin32Error(last_error);
-            AkFree(detail_data);
+        } else {
+            index = 0u;
+            for (;;) {
+                SP_DEVICE_INTERFACE_DATA interface_data;
+                DWORD required_size;
+                PSP_DEVICE_INTERFACE_DETAIL_DATA_W detail_data;
+                DWORD open_error;
+                AK_STATUS status;
+
+                ZeroMemory(&interface_data, sizeof(interface_data));
+                interface_data.cbSize = sizeof(interface_data);
+
+                if (!SetupDiEnumDeviceInterfaces(
+                        info_set,
+                        NULL,
+                        &GUID_YUMEDISK_CONTROL,
+                        index,
+                        &interface_data)) {
+                    last_error = GetLastError();
+                    if (last_error == ERROR_NO_MORE_ITEMS) {
+                        break;
+                    }
+
+                    last_status = AkFromWin32Error(last_error);
+                    break;
+                }
+
+                required_size = 0u;
+                if (!SetupDiGetDeviceInterfaceDetailW(
+                        info_set,
+                        &interface_data,
+                        NULL,
+                        0u,
+                        &required_size,
+                        NULL)) {
+                    last_error = GetLastError();
+                    if (last_error != ERROR_INSUFFICIENT_BUFFER) {
+                        last_status = AkFromWin32Error(last_error);
+                        break;
+                    }
+                }
+
+                detail_data = (PSP_DEVICE_INTERFACE_DETAIL_DATA_W)AkAllocZero(required_size);
+                if (detail_data == NULL) {
+                    last_status = AK_STATUS_INSUFFICIENT_RESOURCES;
+                    last_error = ERROR_OUTOFMEMORY;
+                    break;
+                }
+
+                detail_data->cbSize = sizeof(*detail_data);
+                if (!SetupDiGetDeviceInterfaceDetailW(
+                        info_set,
+                        &interface_data,
+                        detail_data,
+                        required_size,
+                        NULL,
+                        NULL)) {
+                    last_error = GetLastError();
+                    last_status = AkFromWin32Error(last_error);
+                    AkFree(detail_data);
+                    break;
+                }
+
+                open_error = ERROR_SUCCESS;
+                status = AkProtocolOpenInterfacePath(detail_data->DevicePath, out_file, &open_error);
+                AkFree(detail_data);
+
+                if (status == AK_STATUS_SUCCESS) {
+                    last_status = status;
+                    last_error = ERROR_SUCCESS;
+                    break;
+                }
+
+                last_status = status;
+                last_error = open_error;
+                ++index;
+            }
+
+            SetupDiDestroyDeviceInfoList(info_set);
+        }
+
+        if (*out_file != INVALID_HANDLE_VALUE) {
+            return AK_STATUS_SUCCESS;
+        }
+
+        if ((last_status != AK_STATUS_NOT_FOUND) ||
+            (GetTickCount64() >= deadline)) {
             break;
         }
 
-        status = AkProtocolOpenInterfacePath(detail_data->DevicePath, out_file);
-        AkFree(detail_data);
-
-        if (status == AK_STATUS_SUCCESS) {
-            last_status = status;
-            break;
-        }
-
-        last_status = status;
-        last_error = ERROR_OPEN_FAILED;
-        ++index;
-    }
-
-    SetupDiDestroyDeviceInfoList(info_set);
-    if (*out_file != INVALID_HANDLE_VALUE) {
-        return AK_STATUS_SUCCESS;
+        Sleep(retry_delay_ms);
     }
 
     SetLastError(last_error);

@@ -29,6 +29,7 @@ target_link_libraries(
     devtidy
     PRIVATE
     jsoncpp_static
+    newdev
     setupapi
     cfgmgr32
 )
