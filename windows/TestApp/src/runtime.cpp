@@ -294,6 +294,7 @@ void PrintRuntimeHelp()
         << "  query                        print AppKernel session state\n"
         << "  ct <disk-size-mb> [auto|dense|sparse] [true|false] [target]\n"
         << "                               create one disk target through AppKernel\n"
+        << "                               true=system read-only, false=read-write\n"
         << "  rm <target>                  remove one disk target\n"
         << "  rm all                       remove all disk targets\n"
         << "  ls                           list managed targets and visible YumeDisk disks\n"

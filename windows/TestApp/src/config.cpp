@@ -137,7 +137,9 @@ void PrintUsage()
         << "  dense media limit = " << (kMaxDenseMediaBytes / (1024ull * 1024ull)) << " MiB\n"
         << "\n"
         << "runtime create syntax:\n"
-        << "  ct <disk-size-mb> [auto|dense|sparse] [true|false] [target]\n";
+        << "  ct <disk-size-mb> [auto|dense|sparse] [true|false] [target]\n"
+        << "    true  = system read-only disk\n"
+        << "    false = read-write disk\n";
 }
 
 ParseResult ParseArgs(
