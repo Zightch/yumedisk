@@ -135,8 +135,7 @@ ControlCompleteAsyncSlotRequest(
     }
 
     WdfRequestCompleteWithInformation(AsyncRequest->Request, status, completionInformation);
-    ControlSessionUnregisterPendingSlot(AsyncRequest->SessionContext);
-    ControlSessionRelease(AsyncRequest->SessionContext);
+    ControlSessionReleaseSlot(AsyncRequest->SessionContext);
     return status;
 }
 
@@ -533,11 +532,6 @@ ControlProxySubmitSlotAsync(
         return STATUS_INVALID_PARAMETER;
     }
 
-    status = ControlSessionRegisterPendingSlot(Context);
-    if (!NT_SUCCESS(status)) {
-        return status;
-    }
-
     bufferSize = YUMEDISK_MESSAGE_BASE_SIZE + YUMEDISK_SUBMIT_SLOT_SIZE();
     ioctlBufferSize = sizeof(SRB_IO_CONTROL) + bufferSize;
 
@@ -547,7 +541,6 @@ ControlProxySubmitSlotAsync(
         ioctlBufferSize,
         &asyncRequest);
     if (!NT_SUCCESS(status)) {
-        ControlSessionUnregisterPendingSlot(Context);
         return status;
     }
 
@@ -619,7 +612,6 @@ ControlProxySubmitSlotAsync(
 
     status = ControlTransportRuntimeSubmitSlotRequest(asyncRequest);
     if (!NT_SUCCESS(status)) {
-        ControlSessionUnregisterPendingSlot(Context);
         ControlTransportRuntimeReleaseSlotRequest(asyncRequest);
         return status;
     }

@@ -36,7 +36,7 @@ typedef struct _CTRL_FILE_CONTEXT {
     volatile LONG InFlightRequestCount;
     KEVENT PendingSlotZeroEvent;
     volatile LONG PendingSlotCount;
-    ULONG State;
+    volatile LONG State;
     PCTRL_TRANSPORT_RUNTIME TransportRuntime;
 } CTRL_FILE_CONTEXT, *PCTRL_FILE_CONTEXT;
 

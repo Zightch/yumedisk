@@ -39,11 +39,13 @@ ControlSessionRelease(
 );
 
 NTSTATUS
-ControlSessionRegisterPendingSlot(
-    _In_ PCTRL_FILE_CONTEXT SessionContext
+ControlSessionAcquireSlot(
+    _In_ WDFFILEOBJECT FileObject,
+    _Outptr_ PCTRL_FILE_CONTEXT* SessionContext,
+    _Out_ UINT64* SessionId
 );
 
 VOID
-ControlSessionUnregisterPendingSlot(
+ControlSessionReleaseSlot(
     _In_ PCTRL_FILE_CONTEXT SessionContext
 );

@@ -430,6 +430,7 @@ ControlEvtIoDeviceControl(
     CTRL_INPUT_MESSAGE inputMessage;
     UINT64 sessionId;
     NTSTATUS status;
+    ULONG command;
 
     UNREFERENCED_PARAMETER(Queue);
 
@@ -450,7 +451,9 @@ ControlEvtIoDeviceControl(
         return;
     }
 
-    if (inputMessage.Message->Header.Command == YumeDiskCommandHeartbeat) {
+    command = inputMessage.Message->Header.Command;
+
+    if (command == YumeDiskCommandHeartbeat) {
         status = ControlSessionHeartbeat(fileObject, &sessionId);
         if (!NT_SUCCESS(status)) {
             WdfRequestComplete(Request, status);
@@ -461,6 +464,38 @@ ControlEvtIoDeviceControl(
         return;
     }
 
+    if (command == YumeDiskCommandPostReadSlot) {
+        sessionContext = NULL;
+        status = ControlSessionAcquireSlot(fileObject, &sessionContext, &sessionId);
+        if (!NT_SUCCESS(status)) {
+            WdfRequestComplete(Request, status);
+            return;
+        }
+
+        status = ControlHandlePostReadSlot(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
+        if (!NT_SUCCESS(status) && status != STATUS_PENDING) {
+            ControlSessionReleaseSlot(sessionContext);
+            WdfRequestComplete(Request, status);
+        }
+        return;
+    }
+
+    if (command == YumeDiskCommandPostWriteSlot) {
+        sessionContext = NULL;
+        status = ControlSessionAcquireSlot(fileObject, &sessionContext, &sessionId);
+        if (!NT_SUCCESS(status)) {
+            WdfRequestComplete(Request, status);
+            return;
+        }
+
+        status = ControlHandlePostWriteSlot(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
+        if (!NT_SUCCESS(status) && status != STATUS_PENDING) {
+            ControlSessionReleaseSlot(sessionContext);
+            WdfRequestComplete(Request, status);
+        }
+        return;
+    }
+
     sessionContext = NULL;
     status = ControlSessionAcquire(fileObject, &sessionContext, &sessionId);
     if (!NT_SUCCESS(status)) {
@@ -468,7 +503,7 @@ ControlEvtIoDeviceControl(
         return;
     }
 
-    switch (inputMessage.Message->Header.Command) {
+    switch (command) {
     case YumeDiskCommandQueryInfo:
     case YumeDiskCommandQueryDebugState:
     case YumeDiskCommandCreateDisk:
@@ -511,20 +546,6 @@ ControlEvtIoDeviceControl(
             WdfRequestComplete(Request, status);
         }
         ControlSessionRelease(sessionContext);
-        return;
-    case YumeDiskCommandPostReadSlot:
-        status = ControlHandlePostReadSlot(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
-        if (!NT_SUCCESS(status) && status != STATUS_PENDING) {
-            ControlSessionRelease(sessionContext);
-            WdfRequestComplete(Request, status);
-        }
-        return;
-    case YumeDiskCommandPostWriteSlot:
-        status = ControlHandlePostWriteSlot(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
-        if (!NT_SUCCESS(status) && status != STATUS_PENDING) {
-            ControlSessionRelease(sessionContext);
-            WdfRequestComplete(Request, status);
-        }
         return;
     case YumeDiskCommandReadAck:
         ControlHandleReadAck(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);

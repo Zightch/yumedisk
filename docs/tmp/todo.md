@@ -29,13 +29,13 @@ Source:
 - Step 2 done: async slot requests now come from the session-owned transport runtime pool. Pool objects keep the `IRP` and `IOCTL_SCSI_MINIPORT` buffer across submissions, while per-submit fields are reset before reuse.
 - Step 3 done: pooled IRPs are reused with `IoReuseIrp`; hot-path per-slot `IoAllocateIrp/IoFreeIrp` is removed. Per-slot work item submission is still intentionally left in place for the next isolated step.
 - Step 4 done: `POST_*_SLOT` now enqueues prepared slot objects to a session-owned submit queue. A long-lived runtime worker drains the queue and calls `IoCallDriver` outside locks; per-slot `IoAllocateWorkItem/IoQueueWorkItem/IoFreeWorkItem` is removed.
+- Step 5 done: `POST_READ_SLOT/POST_WRITE_SLOT` now use slot-specific atomic admission. The hot path no longer enters `SessionLock`; it takes `InFlightRequestCount + PendingSlotCount` refs, rechecks active session state and transport pointers, then releases both refs from slot completion. Cleanup/watchdog still publish closing under `SessionLock`, wake the transport runtime, drain in-flight work, stop the runtime, then drain pending slots before closing the miniport handle.
 
 ## Pending Substeps
 
-1. 将 `POST_READ_SLOT/POST_WRITE_SLOT` 高频准入从 `WDFWAITLOCK` 改成原子 state + pending ref。
-2. 保持当前取消模型不变，确认对象池不会破坏 cleanup、session close 和 late ACK 处理。
-3. 在不改协议的前提下重新测单盘吞吐与 kernel CPU。
+1. 保持当前取消模型不变，确认对象池不会破坏 cleanup、session close 和 late ACK 处理。
+2. 在不改协议的前提下重新测单盘吞吐与 kernel CPU。
 
 ## Current Unique Next Step
 
-继续按 [kmdf-kernel-cpu-reduction-draft.md](./kmdf-kernel-cpu-reduction-draft.md) 实施高频 session 准入去锁化：将 `POST_READ_SLOT/POST_WRITE_SLOT` 的 pending slot 准入从每次 `WDFWAITLOCK` 改成原子 state + pending ref，并保持 cleanup/watchdog 的 drain 语义不变。
+在 VM 中按当前闭环验证 KMDF transport 重建结果：`ct -> disk visible -> Q1/Q2/Q8/Q32 read/write -> Ctrl+C while active -> rm all -> app exit`，重点观察单盘 kernel CPU 是否下降，以及 cleanup/watchdog 是否仍能可靠释放 pending slot。
