@@ -26,16 +26,16 @@ Source:
 ## Progress
 
 - Step 1 done: `KMDF` session now owns a transport runtime skeleton. Runtime is initialized after miniport handle/session fields are published, begins closing before cleanup/watchdog drains, and is stopped/freed before miniport handle close. Current data path behavior is intentionally unchanged.
+- Step 2 done: async slot requests now come from the session-owned transport runtime pool. Pool objects keep the `IRP` and `IOCTL_SCSI_MINIPORT` buffer across submissions, while per-submit fields are reset before reuse.
+- Step 3 done: pooled IRPs are reused with `IoReuseIrp`; hot-path per-slot `IoAllocateIrp/IoFreeIrp` is removed. Per-slot work item submission is still intentionally left in place for the next isolated step.
 
 ## Pending Substeps
 
-1. 引入 async slot object pool，让对象长期持有 `IRP + IOCTL buffer + completion context`。
-2. 用 `IoReuseIrp` 复用池内 IRP，去掉每-slot `IoAllocateIrp/IoFreeIrp`。
-3. 改成 session-owned 长期 submit worker，去掉每-slot `IoAllocateWorkItem/IoFreeWorkItem`。
-4. 将 `POST_READ_SLOT/POST_WRITE_SLOT` 高频准入从 `WDFWAITLOCK` 改成原子 state + pending ref。
-5. 保持当前取消模型不变，确认对象池不会破坏 cleanup、session close 和 late ACK 处理。
-6. 在不改协议的前提下重新测单盘吞吐与 kernel CPU。
+1. 改成 session-owned 长期 submit worker，去掉每-slot `IoAllocateWorkItem/IoFreeWorkItem`。
+2. 将 `POST_READ_SLOT/POST_WRITE_SLOT` 高频准入从 `WDFWAITLOCK` 改成原子 state + pending ref。
+3. 保持当前取消模型不变，确认对象池不会破坏 cleanup、session close 和 late ACK 处理。
+4. 在不改协议的前提下重新测单盘吞吐与 kernel CPU。
 
 ## Current Unique Next Step
 
-继续按 [kmdf-kernel-cpu-reduction-draft.md](./kmdf-kernel-cpu-reduction-draft.md) 实施 Step 2：引入 async slot object pool，让池对象长期持有 `IRP + IOCTL buffer + completion context`。本步仍优先保持旧 work item 投递方式，先验证对象生命周期，再进入 `IoReuseIrp` 和长期 worker。
+继续按 [kmdf-kernel-cpu-reduction-draft.md](./kmdf-kernel-cpu-reduction-draft.md) 实施长期 submit worker：把 `POST_*_SLOT` 从每 slot `IoAllocateWorkItem/IoQueueWorkItem/IoFreeWorkItem` 改成 session-owned submit queue + fixed worker，并保持 `IoCallDriver` 在锁外执行。

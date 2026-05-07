@@ -4,6 +4,7 @@
 
 #include "..\core\memory.h"
 #include "..\session\session.h"
+#include "runtime.h"
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSYSAPI
@@ -32,24 +33,6 @@ ZwWaitForSingleObject(
 static const GUID ControlStoragePortGuid = {
     0x2accfe60, 0xc130, 0x11d2, { 0xb0, 0x82, 0x00, 0xa0, 0xc9, 0x1e, 0xfb, 0x8b }
 };
-
-typedef struct _CTRL_ASYNC_SLOT_REQUEST {
-    PCTRL_FILE_CONTEXT SessionContext;
-    WDFREQUEST Request;
-    PIRP Irp;
-    PIO_WORKITEM WorkItem;
-    UINT64 SlotId;
-    UINT32 TargetId;
-    UINT32 SlotType;
-    PUCHAR DirectBuffer;
-    size_t DirectBufferSize;
-    PUCHAR IoctlBuffer;
-    ULONG IoctlBufferSize;
-    IO_STATUS_BLOCK IoStatusBlock;
-    volatile LONG CompletionState;
-    NTSTATUS CompletionStatus;
-    ULONG_PTR CompletionInformation;
-} CTRL_ASYNC_SLOT_REQUEST, *PCTRL_ASYNC_SLOT_REQUEST;
 
 static
 PYUMEDISK_MESSAGE
@@ -86,28 +69,6 @@ ControlMapSubmitSlotStatus(
     }
 
     return Status;
-}
-
-static
-VOID
-ControlFreeAsyncSlotRequest(
-    _Inout_opt_ PCTRL_ASYNC_SLOT_REQUEST AsyncRequest
-)
-{
-    if (AsyncRequest == NULL) {
-        return;
-    }
-
-    if (AsyncRequest->Irp != NULL) {
-        IoFreeIrp(AsyncRequest->Irp);
-        AsyncRequest->Irp = NULL;
-    }
-    if (AsyncRequest->WorkItem != NULL) {
-        IoFreeWorkItem(AsyncRequest->WorkItem);
-        AsyncRequest->WorkItem = NULL;
-    }
-    ControlFree(AsyncRequest->IoctlBuffer);
-    ControlFree(AsyncRequest);
 }
 
 static
@@ -204,7 +165,7 @@ ControlSubmitSlotCompletionRoutine(
                 asyncRequest,
                 Irp->IoStatus.Status,
                 Irp->IoStatus.Information);
-            ControlFreeAsyncSlotRequest(asyncRequest);
+            ControlTransportRuntimeReleaseSlotRequest(asyncRequest);
         }
     }
 
@@ -236,7 +197,7 @@ ControlSubmitSlotWorkItem(
             asyncRequest,
             asyncRequest->CompletionStatus,
             asyncRequest->CompletionInformation);
-        ControlFreeAsyncSlotRequest(asyncRequest);
+        ControlTransportRuntimeReleaseSlotRequest(asyncRequest);
         return;
     }
 
@@ -254,7 +215,7 @@ ControlSubmitSlotWorkItem(
             asyncRequest,
             completionStatus,
             completionInformation);
-        ControlFreeAsyncSlotRequest(asyncRequest);
+        ControlTransportRuntimeReleaseSlotRequest(asyncRequest);
     }
 }
 
@@ -567,13 +528,19 @@ ControlProxySubmitSlotAsync(
         return status;
     }
 
-    asyncRequest = (PCTRL_ASYNC_SLOT_REQUEST)ControlAlloc(sizeof(*asyncRequest));
-    if (asyncRequest == NULL) {
+    bufferSize = YUMEDISK_MESSAGE_BASE_SIZE + YUMEDISK_SUBMIT_SLOT_SIZE();
+    ioctlBufferSize = sizeof(SRB_IO_CONTROL) + bufferSize;
+
+    status = ControlTransportRuntimeAcquireSlotRequest(
+        Context,
+        Context->MiniportDeviceObject->StackSize,
+        ioctlBufferSize,
+        &asyncRequest);
+    if (!NT_SUCCESS(status)) {
         ControlSessionUnregisterPendingSlot(Context);
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return status;
     }
 
-    RtlZeroMemory(asyncRequest, sizeof(*asyncRequest));
     asyncRequest->SessionContext = Context;
     asyncRequest->Request = Request;
     asyncRequest->SlotId = SlotId;
@@ -585,16 +552,6 @@ ControlProxySubmitSlotAsync(
     asyncRequest->CompletionStatus = STATUS_UNSUCCESSFUL;
     asyncRequest->CompletionInformation = 0;
 
-    bufferSize = YUMEDISK_MESSAGE_BASE_SIZE + YUMEDISK_SUBMIT_SLOT_SIZE();
-    ioctlBufferSize = sizeof(SRB_IO_CONTROL) + bufferSize;
-    asyncRequest->IoctlBuffer = (PUCHAR)ControlAlloc(ioctlBufferSize);
-    if (asyncRequest->IoctlBuffer == NULL) {
-        ControlSessionUnregisterPendingSlot(Context);
-        ControlFreeAsyncSlotRequest(asyncRequest);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    asyncRequest->IoctlBufferSize = ioctlBufferSize;
     RtlZeroMemory(asyncRequest->IoctlBuffer, ioctlBufferSize);
 
     srbIoControl = (PSRB_IO_CONTROL)asyncRequest->IoctlBuffer;
@@ -621,19 +578,18 @@ ControlProxySubmitSlotAsync(
     submitSlot->Slot.Capacity = (UINT32)DirectBufferSize;
     submitSlot->Slot.Flags = YumeDiskSlotFlagNone;
 
-    irp = IoAllocateIrp(Context->MiniportDeviceObject->StackSize, FALSE);
-    if (irp == NULL) {
-        ControlSessionUnregisterPendingSlot(Context);
-        ControlFreeAsyncSlotRequest(asyncRequest);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    asyncRequest->Irp = irp;
     asyncRequest->WorkItem = IoAllocateWorkItem(Context->MiniportDeviceObject);
     if (asyncRequest->WorkItem == NULL) {
         ControlSessionUnregisterPendingSlot(Context);
-        ControlFreeAsyncSlotRequest(asyncRequest);
+        ControlTransportRuntimeReleaseSlotRequest(asyncRequest);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
+
+    irp = asyncRequest->Irp;
+    if (asyncRequest->IrpHasBeenSubmitted) {
+        IoReuseIrp(irp, STATUS_NOT_SUPPORTED);
+    }
+    asyncRequest->IrpHasBeenSubmitted = TRUE;
 
     irp->RequestorMode = KernelMode;
     irp->AssociatedIrp.SystemBuffer = asyncRequest->IoctlBuffer;
