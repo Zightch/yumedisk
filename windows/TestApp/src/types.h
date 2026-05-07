@@ -20,12 +20,10 @@
 
 namespace testapp {
 
-constexpr ULONG kDefaultTargetId = 0;
 constexpr ULONG kDefaultSectorSize = 4096;
 constexpr size_t kDefaultQueueDepth = 32;
 constexpr size_t kMaxSlotEngineQueueDepth = MAXIMUM_WAIT_OBJECTS / 2;
 constexpr size_t kDefaultWriteSlotBytes = 1024 * 1024;
-constexpr uint64_t kDefaultDiskSizeBytes = 64ull * 1024ull * 1024ull;
 constexpr uint64_t kMaxDenseMediaBytes = 1024ull * 1024ull * 1024ull;
 constexpr size_t kMaxReadWorkersPerDisk = 4;
 constexpr size_t kMaxWriteWorkersPerDisk = 2;
@@ -50,12 +48,15 @@ enum class ParseResult {
 };
 
 struct AppConfig {
-    ULONG TargetId = kDefaultTargetId;
     ULONG SectorSize = kDefaultSectorSize;
     size_t QueueDepth = kDefaultQueueDepth;
     size_t WriteSlotBytes = kDefaultWriteSlotBytes;
-    uint64_t DiskSizeBytes = kDefaultDiskSizeBytes;
-    MediaMode DefaultMediaMode = MediaMode::Auto;
+};
+
+struct CreateDiskRequest {
+    ULONG TargetId = YUMEDISK_MAX_TARGETS;
+    uint64_t DiskSizeBytes = 0;
+    MediaMode RequestedMode = MediaMode::Auto;
 };
 
 struct DiskIdentity {

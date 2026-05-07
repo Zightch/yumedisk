@@ -95,8 +95,6 @@ int main(
     std::wcout << L"queue_depth=" << config.QueueDepth
                << L", slot_bytes=" << config.WriteSlotBytes
                << L", sector_size=" << config.SectorSize
-               << L", disk_bytes=" << config.DiskSizeBytes
-               << L", default_media=" << MediaModeToText(config.DefaultMediaMode)
                << std::endl;
     std::wcout << L"state=ready(appkernel-host)" << std::endl;
 

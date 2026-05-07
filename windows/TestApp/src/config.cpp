@@ -109,18 +109,17 @@ bool ParseTargetToken(
 void PrintUsage()
 {
     std::cout
-        << "TestApp [--queue-depth N] [--slot-bytes BYTES] [--disk-size-mb MB]\n"
-        << "        [--sector-size BYTES] [--target ID] [--media auto|dense|sparse]\n"
+        << "TestApp [--queue-depth N] [--slot-bytes BYTES] [--sector-size BYTES]\n"
         << "\n"
         << "defaults:\n"
         << "  queue-depth = " << kDefaultQueueDepth << "\n"
         << "  slot-bytes  = " << kDefaultWriteSlotBytes << "\n"
-        << "  disk-size-mb = " << (kDefaultDiskSizeBytes / (1024ull * 1024ull)) << "\n"
         << "  sector-size = " << kDefaultSectorSize << "\n"
-        << "  target      = " << kDefaultTargetId << "\n"
-        << "  media       = auto\n"
         << "  queue-depth max = " << kMaxSlotEngineQueueDepth << "\n"
-        << "  dense media limit = " << (kMaxDenseMediaBytes / (1024ull * 1024ull)) << " MiB\n";
+        << "  dense media limit = " << (kMaxDenseMediaBytes / (1024ull * 1024ull)) << " MiB\n"
+        << "\n"
+        << "runtime create syntax:\n"
+        << "  ct <disk-size-mb> [auto|dense|sparse] [target]\n";
 }
 
 ParseResult ParseArgs(
@@ -162,13 +161,6 @@ ParseResult ParseArgs(
             config->WriteSlotBytes = (size_t)value;
             continue;
         }
-        if (arg == "--disk-size-mb") {
-            if (!next_value(&value) || (value == 0)) {
-                return ParseResult::Error;
-            }
-            config->DiskSizeBytes = value * 1024ull * 1024ull;
-            continue;
-        }
         if (arg == "--sector-size") {
             if (!next_value(&value) || (value == 0) ||
                 (value > std::numeric_limits<ULONG>::max())) {
@@ -177,44 +169,99 @@ ParseResult ParseArgs(
             config->SectorSize = (ULONG)value;
             continue;
         }
-        if (arg == "--target") {
-            if (!next_value(&value) || (value > YUMEDISK_MAX_USABLE_TARGET_ID)) {
-                return ParseResult::Error;
-            }
-            config->TargetId = (ULONG)value;
-            continue;
-        }
-        if (arg == "--media") {
-            MediaMode mode;
-
-            if ((index + 1) >= argc) {
-                return ParseResult::Error;
-            }
-            index += 1;
-            if (!TryParseMediaMode(argv[index], &mode)) {
-                return ParseResult::Error;
-            }
-            config->DefaultMediaMode = mode;
-            continue;
-        }
 
         return ParseResult::Error;
     }
 
     if ((config->QueueDepth == 0) ||
         (config->WriteSlotBytes < config->SectorSize) ||
-        ((config->WriteSlotBytes % config->SectorSize) != 0) ||
-        (config->DiskSizeBytes == 0) ||
-        ((config->DiskSizeBytes % config->SectorSize) != 0)) {
-        return ParseResult::Error;
-    }
-
-    if ((ResolveMediaMode(config->DefaultMediaMode, config->DiskSizeBytes) == MediaMode::Dense) &&
-        (config->DiskSizeBytes > kMaxDenseMediaBytes)) {
+        ((config->WriteSlotBytes % config->SectorSize) != 0)) {
         return ParseResult::Error;
     }
 
     return ParseResult::Ok;
+}
+
+bool ParseCreateDiskCommand(
+    const AppConfig& config,
+    const std::vector<std::string>& tokens,
+    CreateDiskRequest* request,
+    std::wstring* error_text)
+{
+    uint64_t disk_size_mb;
+    uint64_t disk_size_bytes;
+    size_t index;
+    bool mode_seen;
+    bool target_seen;
+
+    if ((request == nullptr) || (error_text == nullptr)) {
+        return false;
+    }
+
+    if (tokens.empty()) {
+        *error_text = L"ct requires <disk-size-mb> [auto|dense|sparse] [target]";
+        return false;
+    }
+
+    disk_size_mb = 0;
+    if (!ParseUnsigned(tokens[0].c_str(), &disk_size_mb) || (disk_size_mb == 0)) {
+        *error_text = L"invalid disk size mb";
+        return false;
+    }
+
+    disk_size_bytes = disk_size_mb * 1024ull * 1024ull;
+    if ((disk_size_bytes / (1024ull * 1024ull)) != disk_size_mb) {
+        *error_text = L"disk size overflow";
+        return false;
+    }
+
+    request->DiskSizeBytes = disk_size_bytes;
+    request->RequestedMode = MediaMode::Auto;
+    request->TargetId = YUMEDISK_MAX_TARGETS;
+    mode_seen = false;
+    target_seen = false;
+
+    for (index = 1; index < tokens.size(); ++index) {
+        MediaMode parsed_mode;
+        ULONG parsed_target;
+
+        if (TryParseMediaMode(tokens[index], &parsed_mode)) {
+            if (mode_seen) {
+                *error_text = L"duplicate media mode";
+                return false;
+            }
+            request->RequestedMode = parsed_mode;
+            mode_seen = true;
+            continue;
+        }
+
+        parsed_target = 0;
+        if (ParseTargetToken(tokens[index], &parsed_target)) {
+            if (target_seen) {
+                *error_text = L"duplicate target";
+                return false;
+            }
+            request->TargetId = parsed_target;
+            target_seen = true;
+            continue;
+        }
+
+        *error_text = L"invalid ct argument";
+        return false;
+    }
+
+    if ((disk_size_bytes % config.SectorSize) != 0) {
+        *error_text = L"disk size must align to sector size";
+        return false;
+    }
+
+    if ((ResolveMediaMode(request->RequestedMode, disk_size_bytes) == MediaMode::Dense) &&
+        (disk_size_bytes > kMaxDenseMediaBytes)) {
+        *error_text = L"dense media requires disk size <= 1024 MiB";
+        return false;
+    }
+
+    return true;
 }
 
 } // namespace testapp

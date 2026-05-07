@@ -487,9 +487,3 @@
 - 当前 `RWTestApp` 的多盘并发模型被完整迁入 `AppKernel`，而不是回退成旧单盘 `Q` 队列模型。
 - 旧数据面结构在切换完成后被删除，而不是挂着不用。
 - 文档、实现、`progress` 三者描述一致。
-
-## 7. 当前唯一下一步
-
-当前唯一下一步：
-
-- 实现 `Step 2`：把 `AkOpen / AkClose / AkQuerySessionState / AkQuerySessionStats` 从当前占位实现推进到真实 `KMDF session` 最小闭环，收口 `control device open`、`QueryInfo / SessionId`、heartbeat 线程与同步关闭链路。

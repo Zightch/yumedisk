@@ -246,12 +246,8 @@ bool QueryDiskIdentity(
 }
 
 bool IsTargetDiskCandidate(
-    const DiskIdentity& identity,
-    const AppConfig& config)
+    const DiskIdentity& identity)
 {
-    if (identity.LengthBytes != config.DiskSizeBytes) {
-        return false;
-    }
     if (!ContainsInsensitive(identity.Vendor, L"Zightch")) {
         return false;
     }
@@ -263,8 +259,7 @@ bool IsTargetDiskCandidate(
 
 } // namespace
 
-std::vector<DiskIdentity> EnumerateVisibleYumeDisks(
-    const AppConfig& config)
+std::vector<DiskIdentity> EnumerateVisibleYumeDisks()
 {
     std::vector<DiskIdentity> identities;
     const auto interfaces = EnumerateDeviceInterfaces(&GUID_DEVINTERFACE_DISK);
@@ -272,7 +267,7 @@ std::vector<DiskIdentity> EnumerateVisibleYumeDisks(
     for (const auto& path : interfaces) {
         DiskIdentity identity;
 
-        if (QueryDiskIdentity(path, &identity) && IsTargetDiskCandidate(identity, config)) {
+        if (QueryDiskIdentity(path, &identity) && IsTargetDiskCandidate(identity)) {
             identities.push_back(identity);
         }
     }

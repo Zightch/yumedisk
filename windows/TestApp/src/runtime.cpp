@@ -137,7 +137,7 @@ bool TryRefreshManagedDiskIdentity(
     const ULONGLONG start_tick = GetTickCount64();
 
     for (;;) {
-        const auto visible_disks = EnumerateVisibleYumeDisks(context->Config);
+        const auto visible_disks = EnumerateVisibleYumeDisks();
         const DiskIdentity* selected = nullptr;
 
         for (const auto& identity : visible_disks) {
@@ -286,7 +286,7 @@ void PrintRuntimeHelp()
         << "commands:\n"
         << "  help                         show this help\n"
         << "  query                        print AppKernel session state\n"
-        << "  ct [target] [auto|dense|sparse]\n"
+        << "  ct <disk-size-mb> [auto|dense|sparse] [target]\n"
         << "                               create one disk target through AppKernel\n"
         << "  rm <target>                  remove one disk target\n"
         << "  rm all                       remove all disk targets\n"
@@ -337,7 +337,7 @@ void ListManagedDisks(
     BackendContext* context)
 {
     const auto managed_disks = SnapshotManagedDisks(context);
-    const auto visible_disks = EnumerateVisibleYumeDisks(context->Config);
+    const auto visible_disks = EnumerateVisibleYumeDisks();
 
     std::wcout << L"managed_target_count=" << managed_disks.size() << std::endl;
     for (const auto& disk : managed_disks) {
@@ -375,26 +375,25 @@ void ListManagedDisks(
 
 bool CreateManagedDisk(
     BackendContext* context,
-    ULONG target_id,
-    MediaMode requested_mode)
+    const CreateDiskRequest& request)
 {
     std::shared_ptr<ManagedDisk> disk;
     AK_DISK_PARAMS params{};
     AK_DISK* handle;
     AK_STATUS status;
     std::wstring media_reason;
-    const auto visible_disks_before_create = EnumerateVisibleYumeDisks(context->Config);
+    const auto visible_disks_before_create = EnumerateVisibleYumeDisks();
 
-    if (ManagedDiskExists(context, target_id)) {
-        std::wcerr << L"create failed, target already exists: " << target_id << std::endl;
+    if (ManagedDiskExists(context, request.TargetId)) {
+        std::wcerr << L"create failed, target already exists: " << request.TargetId << std::endl;
         return false;
     }
 
     disk = std::make_shared<ManagedDisk>();
     disk->Backend = context;
-    disk->TargetId = target_id;
+    disk->TargetId = request.TargetId;
     disk->SectorSize = context->Config.SectorSize;
-    disk->DiskSizeBytes = context->Config.DiskSizeBytes;
+    disk->DiskSizeBytes = request.DiskSizeBytes;
     disk->SlotDepth = context->Config.QueueDepth;
     disk->ReadWorkerCount = ComputeWorkerCount(
         disk->SlotDepth,
@@ -405,9 +404,9 @@ bool CreateManagedDisk(
         kWriteSlotsPerWorkerTarget,
         kMaxWriteWorkersPerDisk);
 
-    if (!InitializeManagedDiskMedia(disk.get(), requested_mode, &media_reason)) {
-        std::wcerr << L"create failed, target=" << target_id
-                   << L", media=" << MediaModeToText(requested_mode)
+    if (!InitializeManagedDiskMedia(disk.get(), request.RequestedMode, &media_reason)) {
+        std::wcerr << L"create failed, target=" << request.TargetId
+                   << L", media=" << MediaModeToText(request.RequestedMode)
                    << L", reason=" << media_reason
                    << std::endl;
         return false;
@@ -415,9 +414,9 @@ bool CreateManagedDisk(
 
     InsertManagedDisk(context, disk);
 
-    params.TargetId = target_id;
+    params.TargetId = request.TargetId;
     params.SectorSize = context->Config.SectorSize;
-    params.DiskSizeBytes = context->Config.DiskSizeBytes;
+    params.DiskSizeBytes = request.DiskSizeBytes;
     params.QueueDepth = (UINT32)context->Config.QueueDepth;
     params.WriteSlotBytes = (UINT32)context->Config.WriteSlotBytes;
     params.ReadWorkerCount = (UINT16)disk->ReadWorkerCount;
@@ -427,15 +426,16 @@ bool CreateManagedDisk(
     handle = nullptr;
     status = AkCreateDisk(context->Session, &params, &kMediaOps, disk.get(), &handle);
     if (status != AK_STATUS_SUCCESS) {
-        RemoveManagedDiskFromMap(context, target_id);
+        RemoveManagedDiskFromMap(context, request.TargetId);
         CleanupManagedDiskMedia(disk.get());
-        std::wcerr << L"create failed, target=" << target_id
+        std::wcerr << L"create failed, target=" << request.TargetId
                    << L", status=" << FormatStatusHex(status) << std::endl;
         return false;
     }
 
     disk->Handle = handle;
-    std::wcout << L"created target=" << target_id
+    std::wcout << L"created target=" << request.TargetId
+               << L", disk_bytes=" << request.DiskSizeBytes
                << L", media=" << MediaModeToText(disk->Mode)
                << L", queue_depth=" << context->Config.QueueDepth
                << L", slot_bytes=" << context->Config.WriteSlotBytes
@@ -445,7 +445,7 @@ bool CreateManagedDisk(
                    << L", physical_drive=" << MakePhysicalDrivePath(disk->Identity.DeviceNumber)
                    << std::endl;
     } else {
-        std::wcout << L"visible_path=<pending-enumeration>, target=" << target_id << std::endl;
+        std::wcout << L"visible_path=<pending-enumeration>, target=" << request.TargetId << std::endl;
     }
 
     return true;
@@ -751,62 +751,29 @@ void RunCommandLoop(
             break;
         }
         if (command == "ct") {
-            ULONG target_id;
-            MediaMode requested_mode;
-            bool target_seen;
-            bool mode_seen;
+            CreateDiskRequest request{};
             std::string token;
-
-            target_id = 0;
-            requested_mode = context->Config.DefaultMediaMode;
-            target_seen = false;
-            mode_seen = false;
+            std::vector<std::string> tokens;
+            std::wstring error_text;
 
             while (input >> token) {
-                ULONG parsed_target;
-                MediaMode parsed_mode;
-
-                parsed_target = 0;
-                if (ParseTargetToken(token, &parsed_target)) {
-                    if (target_seen) {
-                        std::wcerr << L"invalid ct arguments: duplicate target" << std::endl;
-                        target_id = YUMEDISK_MAX_TARGETS;
-                        break;
-                    }
-                    target_id = parsed_target;
-                    target_seen = true;
-                    continue;
-                }
-
-                if (TryParseMediaMode(token, &parsed_mode)) {
-                    if (mode_seen) {
-                        std::wcerr << L"invalid ct arguments: duplicate media mode" << std::endl;
-                        target_id = YUMEDISK_MAX_TARGETS;
-                        break;
-                    }
-                    requested_mode = parsed_mode;
-                    mode_seen = true;
-                    continue;
-                }
-
-                std::wcerr << L"invalid ct argument: " << std::wstring(token.begin(), token.end()) << std::endl;
-                target_id = YUMEDISK_MAX_TARGETS;
-                break;
+                tokens.push_back(token);
             }
 
-            if (target_id >= YUMEDISK_MAX_TARGETS) {
+            if (!ParseCreateDiskCommand(context->Config, tokens, &request, &error_text)) {
+                std::wcerr << L"create failed, reason=" << error_text << std::endl;
                 continue;
             }
 
-            if (!target_seen) {
-                target_id = FindFirstFreeTarget(context);
-                if (target_id >= YUMEDISK_MAX_TARGETS) {
+            if (request.TargetId >= YUMEDISK_MAX_TARGETS) {
+                request.TargetId = FindFirstFreeTarget(context);
+                if (request.TargetId >= YUMEDISK_MAX_TARGETS) {
                     std::wcerr << L"no free target" << std::endl;
                     continue;
                 }
             }
 
-            (void)CreateManagedDisk(context, target_id, requested_mode);
+            (void)CreateManagedDisk(context, request);
             continue;
         }
         if (command == "rm") {
