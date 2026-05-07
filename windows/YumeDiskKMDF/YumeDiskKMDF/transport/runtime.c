@@ -202,23 +202,33 @@ ControlTransportRuntimeFreeSlotPool(
 }
 
 static
-PCTRL_ASYNC_SLOT_REQUEST
-ControlTransportRuntimeDequeueSubmitRequest(
-    _Inout_ PCTRL_TRANSPORT_RUNTIME Runtime
+BOOLEAN
+ControlTransportRuntimeTakeSubmitQueue(
+    _Inout_ PCTRL_TRANSPORT_RUNTIME Runtime,
+    _Inout_ PLIST_ENTRY LocalList
 )
 {
-    PLIST_ENTRY entry;
-    PCTRL_ASYNC_SLOT_REQUEST slotRequest;
+    BOOLEAN hasItems;
 
-    slotRequest = NULL;
+    hasItems = FALSE;
     WdfSpinLockAcquire(Runtime->SubmitQueueLock);
     if (!IsListEmpty(&Runtime->SubmitQueue)) {
-        entry = RemoveHeadList(&Runtime->SubmitQueue);
-        slotRequest = CONTAINING_RECORD(entry, CTRL_ASYNC_SLOT_REQUEST, SubmitLink);
-        InitializeListHead(&slotRequest->SubmitLink);
+        PLIST_ENTRY first;
+        PLIST_ENTRY last;
+
+        first = Runtime->SubmitQueue.Flink;
+        last = Runtime->SubmitQueue.Blink;
+
+        LocalList->Flink = first;
+        LocalList->Blink = last;
+        first->Blink = LocalList;
+        last->Flink = LocalList;
+
+        InitializeListHead(&Runtime->SubmitQueue);
+        hasItems = TRUE;
     }
     WdfSpinLockRelease(Runtime->SubmitQueueLock);
-    return slotRequest;
+    return hasItems;
 }
 
 static
@@ -228,15 +238,23 @@ ControlTransportRuntimeFlushSubmitQueue(
     _In_ NTSTATUS Status
 )
 {
-    PCTRL_ASYNC_SLOT_REQUEST slotRequest;
-
     for (;;) {
-        slotRequest = ControlTransportRuntimeDequeueSubmitRequest(Runtime);
-        if (slotRequest == NULL) {
+        LIST_ENTRY localList;
+
+        InitializeListHead(&localList);
+        if (!ControlTransportRuntimeTakeSubmitQueue(Runtime, &localList)) {
             break;
         }
 
-        ControlTransportFailSlotRequest(slotRequest, Status);
+        while (!IsListEmpty(&localList)) {
+            PLIST_ENTRY entry;
+            PCTRL_ASYNC_SLOT_REQUEST slotRequest;
+
+            entry = RemoveHeadList(&localList);
+            slotRequest = CONTAINING_RECORD(entry, CTRL_ASYNC_SLOT_REQUEST, SubmitLink);
+            InitializeListHead(&slotRequest->SubmitLink);
+            ControlTransportFailSlotRequest(slotRequest, Status);
+        }
     }
 }
 
@@ -254,25 +272,34 @@ ControlTransportRuntimeSubmitWorker(
     }
 
     for (;;) {
-        PCTRL_ASYNC_SLOT_REQUEST slotRequest;
+        LIST_ENTRY localList;
 
         if (InterlockedCompareExchange(&runtime->State, 0, 0) != CtrlTransportRuntimeRunning) {
             ControlTransportRuntimeFlushSubmitQueue(runtime, STATUS_DELETE_PENDING);
             break;
         }
 
-        slotRequest = ControlTransportRuntimeDequeueSubmitRequest(runtime);
-        if (slotRequest == NULL) {
+        InitializeListHead(&localList);
+        if (!ControlTransportRuntimeTakeSubmitQueue(runtime, &localList)) {
             (VOID)KeWaitForSingleObject(&runtime->SubmitEvent, Executive, KernelMode, FALSE, NULL);
             continue;
         }
 
-        if (InterlockedCompareExchange(&runtime->State, 0, 0) != CtrlTransportRuntimeRunning) {
-            ControlTransportFailSlotRequest(slotRequest, STATUS_DELETE_PENDING);
-            continue;
-        }
+        while (!IsListEmpty(&localList)) {
+            PLIST_ENTRY entry;
+            PCTRL_ASYNC_SLOT_REQUEST slotRequest;
 
-        ControlTransportDispatchSlotRequest(slotRequest);
+            entry = RemoveHeadList(&localList);
+            slotRequest = CONTAINING_RECORD(entry, CTRL_ASYNC_SLOT_REQUEST, SubmitLink);
+            InitializeListHead(&slotRequest->SubmitLink);
+
+            if (InterlockedCompareExchange(&runtime->State, 0, 0) != CtrlTransportRuntimeRunning) {
+                ControlTransportFailSlotRequest(slotRequest, STATUS_DELETE_PENDING);
+                continue;
+            }
+
+            ControlTransportDispatchSlotRequest(slotRequest);
+        }
     }
 
     PsTerminateSystemThread(STATUS_SUCCESS);

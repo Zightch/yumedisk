@@ -30,6 +30,7 @@ Source:
 - Step 3 done: pooled IRPs are reused with `IoReuseIrp`; hot-path per-slot `IoAllocateIrp/IoFreeIrp` is removed. Per-slot work item submission is still intentionally left in place for the next isolated step.
 - Step 4 done: `POST_*_SLOT` now enqueues prepared slot objects to a session-owned submit queue. A long-lived runtime worker drains the queue and calls `IoCallDriver` outside locks; per-slot `IoAllocateWorkItem/IoQueueWorkItem/IoFreeWorkItem` is removed.
 - Step 5 done: `POST_READ_SLOT/POST_WRITE_SLOT` now use slot-specific atomic admission. The hot path no longer enters `SessionLock`; it takes `InFlightRequestCount + PendingSlotCount` refs, rechecks active session state and transport pointers, then releases both refs from slot completion. Cleanup/watchdog still publish closing under `SessionLock`, wake the transport runtime, drain in-flight work, stop the runtime, then drain pending slots before closing the miniport handle.
+- Step 6 done: the KMDF submit worker now batch-takes the shared submit queue into a local list under one short spin-lock hold, then dispatches slots with `IoCallDriver` outside the lock. Runtime shutdown uses the same batch-take path to fail queued-but-not-dispatched slots.
 
 ## Pending Substeps
 
