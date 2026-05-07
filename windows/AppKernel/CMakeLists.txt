@@ -7,6 +7,7 @@ add_library(
     SHARED
     src/appkernel.c
     src/common/ak_memory.c
+    src/common/ak_status.c
     src/disk/ak_disk.c
     src/event/ak_event.c
     src/protocol/ak_protocol.c
@@ -39,6 +40,12 @@ set_target_properties(
     C_STANDARD 11
     C_STANDARD_REQUIRED ON
     C_EXTENSIONS OFF
+)
+
+target_link_libraries(
+    AppKernel
+    PRIVATE
+    setupapi
 )
 
 if (MSVC)

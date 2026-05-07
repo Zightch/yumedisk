@@ -112,7 +112,7 @@
 
 状态：
 
-- 当前唯一下一步。
+- 已完成。
 
 目标：
 
@@ -129,7 +129,28 @@
 - 生命周期状态只在 session 内维护，不向宿主复制一份镜像状态。
 - `LogFn` 能覆盖 session open/close/heartbeat 的关键路径。
 
+当前实现收口：
+
+- `AkOpen` 已经完成：
+  - `KMDF control device` 打开
+  - `QUERY_INFO`
+  - `SessionId` 获取
+  - 初次 heartbeat
+  - session-owned heartbeat 线程启动
+- `AkClose` 已经完成：
+  - stop event 置位
+  - heartbeat 线程退出等待
+  - `REMOVE_ALL_DISKS + SESSION_CLOSE_FLAG`
+  - control handle / thread handle / stop event 释放
+- `AkQuerySessionState` / `AkQuerySessionStats` 已可返回真实 session 状态和计数
+- `AkRemoveAllDisks` 已接入真实短命令路径
+- `MSVC` / `MinGW` 双工具链编译已重新通过
+
 ### Step 3. 实现 session 级事件队列
+
+状态：
+
+- 当前唯一下一步。
 
 目标：
 
