@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/ak_internal.h"
+#include "event/ak_event.h"
 
 AK_STATUS AkSessionOpen(
     const AK_OPEN_PARAMS* params,

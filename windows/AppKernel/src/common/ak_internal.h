@@ -9,6 +9,12 @@
 
 typedef struct AK_EVENT_QUEUE {
     UINT32 InitialCapacity;
+    AK_EVENT* Items;
+    UINT32 Capacity;
+    UINT32 Head;
+    UINT32 Count;
+    BOOLEAN SessionBrokenQueued;
+    HANDLE WaitEvent;
 } AK_EVENT_QUEUE;
 
 struct AK_SESSION {

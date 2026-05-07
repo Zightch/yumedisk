@@ -226,6 +226,13 @@ typedef struct AK_EVENT {
 - 事件队列默认实现为 session-owned growable FIFO；`InitialEventQueueCapacity` 只是初始容量，不是硬上限。
 - 如果因为资源耗尽无法继续保留事件，`AppKernel` 必须把 session 置为 `Broken`，拒绝继续接收新工作。
 
+当前已落地口径：
+
+- 事件队列由 `AppKernel session` 独占持有，不向宿主复制镜像状态。
+- 当前已经打通 `AkWaitEvent` / `AkPollEvent` 和 session-owned growable FIFO。
+- `AkEventSessionBroken` 已经具备一次性注入能力，用于承接 heartbeat / transport / event queue 失效。
+- `AkWaitEvent` 只负责取一个事件，不驱动额外状态机推进；状态流转仍由 session / disk runtime 产生端负责。
+
 ## 5. 对外接口
 
 ## 5.1 打开参数

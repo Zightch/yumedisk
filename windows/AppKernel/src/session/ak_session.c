@@ -62,12 +62,23 @@ static void AkSessionSetBroken(
     AK_SESSION* session,
     AK_STATUS status)
 {
+    AK_STATUS queue_status;
+
     AcquireSRWLockExclusive(&session->Lock);
     session->State.Lifecycle = AkStateBroken;
     session->State.TransportReady = FALSE;
     session->State.HeartbeatRunning = FALSE;
     session->State.LastError = status;
     ReleaseSRWLockExclusive(&session->Lock);
+
+    queue_status = AkEventQueuePushSessionBroken(session, status);
+    if (queue_status != AK_STATUS_SUCCESS) {
+        AkSessionLog(
+            session,
+            3,
+            "AkSessionSetBroken: enqueue broken event failed status=0x%08lX",
+            (unsigned long)queue_status);
+    }
 }
 
 static void AkSessionSnapshotTransport(
@@ -186,6 +197,8 @@ static void AkSessionDestroy(
         session->StopEvent = NULL;
     }
 
+    AkEventQueueDestroy(session);
+
     if ((session->ControlFile != NULL) && (session->ControlFile != INVALID_HANDLE_VALUE)) {
         CloseHandle(session->ControlFile);
         session->ControlFile = NULL;
@@ -251,6 +264,14 @@ AK_STATUS AkSessionOpen(
     (void)memset(&session->Stats, 0, sizeof(session->Stats));
 
     AkSessionLog(session, 1, "AkOpen: begin");
+
+    status = AkEventQueueInitialize(session);
+    if (status != AK_STATUS_SUCCESS) {
+        AkSessionRecordCommandFailure(session, status);
+        AkSessionLog(session, 3, "AkOpen: init event queue failed status=0x%08lX", (unsigned long)status);
+        AkSessionDestroy(session);
+        return status;
+    }
 
     status = AkProtocolOpenControlDevice(&session->ControlFile);
     if (status != AK_STATUS_SUCCESS) {

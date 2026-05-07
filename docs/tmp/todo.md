@@ -150,7 +150,7 @@
 
 状态：
 
-- 当前唯一下一步。
+- 已完成。
 
 目标：
 
@@ -169,7 +169,19 @@
 - 如果事件无法保留，session 进入 `Broken`，而不是静默丢事件。
 - 宿主不需要再额外维护一套写完成回调链。
 
+当前实现收口：
+
+- `AkWaitEvent` / `AkPollEvent` 已经接入真实 session 级事件 FIFO。
+- 事件队列已按 `InitialEventQueueCapacity` 初始化，并支持 growable 扩容。
+- wait primitive 已经落地；`AkWaitEvent` 超时返回 `AK_STATUS_TIMEOUT`，`AkPollEvent` 无事件返回 `AK_STATUS_NO_MORE_ENTRIES`。
+- `SessionBroken` 已经具备一次性事件注入路径。
+- 事件保留失败时会把 session 置为 `Broken`，不静默丢弃。
+
 ### Step 4. 实现协议基础层
+
+状态：
+
+- 当前唯一下一步。
 
 目标：
 
