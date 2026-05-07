@@ -387,6 +387,7 @@ LONG AkQueryDiskStats(
   - 二进制版本
   - 协议版本
   - 行为契约版本
+- 兼容性只通过 `VersionBe` 相等判定，不再额外引入 `Features`、`ProtocolVersion` 或其他能力位准入。
 
 `AkOpen` 的固定准入顺序必须是：
 

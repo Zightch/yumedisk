@@ -149,15 +149,6 @@ static AK_STATUS AkSessionValidateComponentVersions(
         return AK_STATUS_NOT_SUPPORTED;
     }
 
-    if ((scsi_info->Features & YumeDiskFeatureAppOwnedQueue) == 0u) {
-        AkSessionLog(
-            session,
-            3,
-            "AkOpen: adapter missing app-owned-queue feature flags=0x%08lX",
-            (unsigned long)scsi_info->Features);
-        return AK_STATUS_NOT_SUPPORTED;
-    }
-
     return AK_STATUS_SUCCESS;
 }
 
@@ -444,11 +435,10 @@ AK_STATUS AkSessionOpen(
     AkSessionLog(
         session,
         1,
-        "AkOpen: ready session=%llu kmdf=0x%08lX scsi=0x%08lX features=0x%08lX heartbeat_ms=%lu",
+        "AkOpen: ready session=%llu kmdf=0x%08lX scsi=0x%08lX heartbeat_ms=%lu",
         (unsigned long long)session_id,
         (unsigned long)session->KmdfInfo.VersionBe,
         (unsigned long)session->ScsiInfo.VersionBe,
-        (unsigned long)session->ScsiInfo.Features,
         (unsigned long)session->OpenParams.HeartbeatIntervalMs);
 
     *out_session = session;

@@ -18,7 +18,6 @@ DiskHandleQueryScsiInfo(
     RtlZeroMemory(info, sizeof(*info));
     info->VersionBe = YUMEDISK_COMPONENT_VERSION_BE;
     info->MaxTargets = YUMEDISK_USABLE_TARGET_COUNT;
-    info->Features = YumeDiskFeatureDynamicDisk | YumeDiskFeatureAppOwnedQueue;
     RtlCopyMemory(info->AdapterSignature, YUMEDISK_MINIPORT_SIGNATURE, sizeof(info->AdapterSignature));
     RtlCopyMemory(info->ServiceName, L"YumeDiskSCSI", sizeof(L"YumeDiskSCSI"));
 

@@ -46,11 +46,6 @@ typedef enum _YUMEDISK_COMMAND {
     YumeDiskCommandQueryDebugState = 26
 } YUMEDISK_COMMAND;
 
-typedef enum _YUMEDISK_FEATURE_FLAGS {
-    YumeDiskFeatureDynamicDisk = 0x00000002u,
-    YumeDiskFeatureAppOwnedQueue = 0x00000008u
-} YUMEDISK_FEATURE_FLAGS;
-
 typedef enum _YUMEDISK_SLOT_TYPE {
     YumeDiskSlotTypeInvalid = 0,
     YumeDiskSlotTypeRead = 1,
@@ -90,7 +85,6 @@ typedef struct _YUMEDISK_KMDF_INFO {
 typedef struct _YUMEDISK_SCSI_INFO {
     ULONG VersionBe;
     ULONG MaxTargets;
-    ULONG Features;
     ULONG Reserved;
     CHAR AdapterSignature[8];
     WCHAR ServiceName[16];
