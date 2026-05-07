@@ -4,6 +4,7 @@
 #include <cfgmgr32.h>
 #include <devguid.h>
 #include <json/json.h>
+#include <newdev.h>
 #include <setupapi.h>
 
 #include <algorithm>
@@ -34,6 +35,14 @@ struct PackageState {
     bool alreadyPresent;
     std::wstring publishedInf;
 };
+
+enum class RunMode {
+    Install,
+    Uninstall
+};
+
+using DiUninstallDeviceFn = BOOL(WINAPI*)(HWND, HDEVINFO, PSP_DEVINFO_DATA, DWORD, PBOOL);
+using DiUninstallDriverWFn = BOOL(WINAPI*)(HWND, LPCWSTR, DWORD, PBOOL);
 
 static const DeviceSpec kDeviceSpecs[] = {
     {
@@ -321,13 +330,37 @@ static std::vector<DeviceInstance> EnumerateDevicesByHardwareId(const DeviceSpec
     return devices;
 }
 
-static bool RemoveDeviceByInstanceId(const std::wstring& instanceId, std::wstring* errorMessage) {
+static bool UninstallDeviceByInstanceId(
+    const std::wstring& instanceId,
+    bool* needReboot,
+    std::wstring* errorMessage
+) {
+    HMODULE newdevModule = LoadLibraryW(L"newdev.dll");
+    if (newdevModule == nullptr) {
+        if (errorMessage != nullptr) {
+            const DWORD error = GetLastError();
+            *errorMessage = GetLastErrorMessage(error);
+        }
+        return false;
+    }
+
+    const auto uninstallDevice =
+        reinterpret_cast<DiUninstallDeviceFn>(GetProcAddress(newdevModule, "DiUninstallDevice"));
+    if (uninstallDevice == nullptr) {
+        if (errorMessage != nullptr) {
+            *errorMessage = L"DiUninstallDevice not available in newdev.dll";
+        }
+        FreeLibrary(newdevModule);
+        return false;
+    }
+
     HDEVINFO info = SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES);
     if (info == INVALID_HANDLE_VALUE) {
         if (errorMessage != nullptr) {
             const DWORD error = GetLastError();
             *errorMessage = GetLastErrorMessage(error);
         }
+        FreeLibrary(newdevModule);
         return false;
     }
 
@@ -352,20 +385,26 @@ static bool RemoveDeviceByInstanceId(const std::wstring& instanceId, std::wstrin
             continue;
         }
 
-        if (!SetupDiRemoveDevice(info, &devInfoData)) {
+        BOOL localNeedReboot = FALSE;
+        if (!uninstallDevice(nullptr, info, &devInfoData, 0, &localNeedReboot)) {
             if (errorMessage != nullptr) {
                 const DWORD error = GetLastError();
                 *errorMessage = GetLastErrorMessage(error);
             }
             SetupDiDestroyDeviceInfoList(info);
+            FreeLibrary(newdevModule);
             return false;
         }
 
+        if (needReboot != nullptr && localNeedReboot != FALSE) {
+            *needReboot = true;
+        }
         removed = true;
         break;
     }
 
     SetupDiDestroyDeviceInfoList(info);
+    FreeLibrary(newdevModule);
     if (!removed && errorMessage != nullptr) {
         *errorMessage = L"device instance not found";
     }
@@ -654,8 +693,9 @@ static bool EnsureUniqueDevice(const DeviceSpec& spec) {
             continue;
         }
 
+        bool needReboot = false;
         std::wstring errorMessage;
-        if (!RemoveDeviceByInstanceId(devices[index].instanceId, &errorMessage)) {
+        if (!UninstallDeviceByInstanceId(devices[index].instanceId, &needReboot, &errorMessage)) {
             WriteErrorDeviceEvent(
                 "device_remove_failed",
                 spec.name,
@@ -671,8 +711,150 @@ static bool EnsureUniqueDevice(const DeviceSpec& spec) {
             "device_removed",
             spec.name,
             JsonObject({
-                {"instance_id", JsonText(devices[index].instanceId)}
+                {"instance_id", JsonText(devices[index].instanceId)},
+                {"need_reboot", Json::Value(needReboot)}
             }));
+    }
+
+    return ok;
+}
+
+static bool RemoveAllDevices(const DeviceSpec& spec) {
+    const std::vector<DeviceInstance> devices = EnumerateDevicesByHardwareId(spec);
+    bool ok = true;
+
+    for (const DeviceInstance& device : devices) {
+        bool needReboot = false;
+        std::wstring errorMessage;
+        if (!UninstallDeviceByInstanceId(device.instanceId, &needReboot, &errorMessage)) {
+            WriteErrorDeviceEvent(
+                "device_remove_failed",
+                spec.name,
+                JsonObject({
+                    {"instance_id", JsonText(device.instanceId)},
+                    {"error", JsonText(errorMessage)}
+                }));
+            ok = false;
+            continue;
+        }
+
+        WriteInfoDeviceEvent(
+            "device_removed",
+            spec.name,
+            JsonObject({
+                {"instance_id", JsonText(device.instanceId)},
+                {"need_reboot", Json::Value(needReboot)}
+            }));
+    }
+
+    if (devices.empty()) {
+        WriteInfoDeviceEvent(
+            "device_absent",
+            spec.name,
+            JsonObject({
+                {"instance_count", JsonSize(0)}
+            }));
+    }
+
+    return ok;
+}
+
+static bool UninstallDriverPackage(const DeviceSpec& spec, const fs::path& infPath) {
+    HMODULE newdevModule = LoadLibraryW(L"newdev.dll");
+    if (newdevModule == nullptr) {
+        const DWORD error = GetLastError();
+        WriteErrorDeviceEvent(
+            "package_uninstall_failed",
+            spec.name,
+            JsonObject({
+                {"source_inf", JsonText(infPath.native())},
+                {"error_code", JsonUint(error)},
+                {"error", JsonText(GetLastErrorMessage(error))}
+            }));
+        return false;
+    }
+
+    const auto uninstallDriver =
+        reinterpret_cast<DiUninstallDriverWFn>(GetProcAddress(newdevModule, "DiUninstallDriverW"));
+    if (uninstallDriver == nullptr) {
+        const DWORD error = GetLastError();
+        WriteErrorDeviceEvent(
+            "package_uninstall_failed",
+            spec.name,
+            JsonObject({
+                {"source_inf", JsonText(infPath.native())},
+                {"error_code", JsonUint(error)},
+                {"error", JsonText("DiUninstallDriverW not available in newdev.dll")}
+            }));
+        FreeLibrary(newdevModule);
+        return false;
+    }
+
+    BOOL needReboot = FALSE;
+    if (!uninstallDriver(nullptr, infPath.c_str(), 0, &needReboot)) {
+        const DWORD error = GetLastError();
+        WriteErrorDeviceEvent(
+            "package_uninstall_failed",
+            spec.name,
+            JsonObject({
+                {"source_inf", JsonText(infPath.native())},
+                {"error_code", JsonUint(error)},
+                {"error", JsonText(GetLastErrorMessage(error))}
+            }));
+        FreeLibrary(newdevModule);
+        return false;
+    }
+
+    WriteInfoDeviceEvent(
+        "package_uninstalled",
+        spec.name,
+        JsonObject({
+            {"source_inf", JsonText(infPath.native())},
+            {"need_reboot", Json::Value(needReboot != FALSE)}
+        }));
+    FreeLibrary(newdevModule);
+    return true;
+}
+
+static bool RunInstall(const fs::path& packageRoot) {
+    bool ok = true;
+    for (const DeviceSpec& spec : kDeviceSpecs) {
+        fs::path infPath;
+        if (!TryFindSingleInfPath(spec, packageRoot, &infPath)) {
+            ok = false;
+            continue;
+        }
+
+        PackageState packageState{};
+        if (!EnsureDriverPackage(spec, infPath, &packageState)) {
+            ok = false;
+            continue;
+        }
+
+        if (!EnsureUniqueDevice(spec)) {
+            ok = false;
+        }
+    }
+
+    return ok;
+}
+
+static bool RunUninstall(const fs::path& packageRoot) {
+    bool ok = true;
+    for (const DeviceSpec& spec : kDeviceSpecs) {
+        if (!RemoveAllDevices(spec)) {
+            ok = false;
+        }
+
+        fs::path infPath;
+        if (!TryFindSingleInfPath(spec, packageRoot, &infPath)) {
+            ok = false;
+            continue;
+        }
+
+        if (!UninstallDriverPackage(spec, infPath)) {
+            ok = false;
+        }
     }
 
     return ok;
@@ -682,15 +864,37 @@ static void PrintUsage() {
     WriteInfoEvent(
         "usage",
         JsonObject({
-            {"syntax", JsonText("devtidy [--package-root <path>]")}
+            {"syntax", JsonText("devtidy [install|uninstall] [--package-root <path>]")}
         }));
 }
 
 int wmain(int argc, wchar_t** argv) {
     fs::path packageRoot;
+    RunMode mode = RunMode::Install;
+    bool modeSeen = false;
 
     for (int index = 1; index < argc; ++index) {
         const std::wstring arg = argv[index];
+        if (arg == L"install") {
+            if (modeSeen) {
+                PrintUsage();
+                return 1;
+            }
+
+            mode = RunMode::Install;
+            modeSeen = true;
+            continue;
+        }
+        if (arg == L"uninstall") {
+            if (modeSeen) {
+                PrintUsage();
+                return 1;
+            }
+
+            mode = RunMode::Uninstall;
+            modeSeen = true;
+            continue;
+        }
         if (arg == L"--package-root") {
             if (index + 1 >= argc) {
                 PrintUsage();
@@ -729,24 +933,8 @@ int wmain(int argc, wchar_t** argv) {
             {"package_root", JsonText(packageRoot.native())}
         }));
 
-    bool ok = true;
-    for (const DeviceSpec& spec : kDeviceSpecs) {
-        fs::path infPath;
-        if (!TryFindSingleInfPath(spec, packageRoot, &infPath)) {
-            ok = false;
-            continue;
-        }
-
-        PackageState packageState{};
-        if (!EnsureDriverPackage(spec, infPath, &packageState)) {
-            ok = false;
-            continue;
-        }
-
-        if (!EnsureUniqueDevice(spec)) {
-            ok = false;
-        }
-    }
+    const bool ok =
+        (mode == RunMode::Install) ? RunInstall(packageRoot) : RunUninstall(packageRoot);
 
     WriteInfoEvent(
         "summary",
