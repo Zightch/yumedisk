@@ -34,44 +34,6 @@ static const GUID ControlStoragePortGuid = {
     0x2accfe60, 0xc130, 0x11d2, { 0xb0, 0x82, 0x00, 0xa0, 0xc9, 0x1e, 0xfb, 0x8b }
 };
 
-#define CTRL_SLOT_TRACE_LIMIT 160
-
-static volatile LONG g_ControlSlotTraceCount = 0;
-
-static
-BOOLEAN
-ControlShouldTraceSlot(
-    _In_ UINT32 SlotType,
-    _In_ NTSTATUS Status
-)
-{
-    if (!NT_SUCCESS(Status)) {
-        return TRUE;
-    }
-
-    if (SlotType != YumeDiskSlotTypeWrite) {
-        return FALSE;
-    }
-
-    return InterlockedIncrement(&g_ControlSlotTraceCount) <= CTRL_SLOT_TRACE_LIMIT;
-}
-
-static
-const char*
-ControlSlotTypeName(
-    _In_ UINT32 SlotType
-)
-{
-    switch (SlotType) {
-    case YumeDiskSlotTypeRead:
-        return "read";
-    case YumeDiskSlotTypeWrite:
-        return "write";
-    default:
-        return "invalid";
-    }
-}
-
 static
 PYUMEDISK_MESSAGE
 ControlGetMiniportMessage(
@@ -172,23 +134,6 @@ ControlCompleteAsyncSlotRequest(
         }
     }
 
-    if (ControlShouldTraceSlot(AsyncRequest->SlotType, status)) {
-        DbgPrint(
-            "YumeDiskKMDF slot complete request=%p async=%p irp=%p target=%lu slot=%I64u type=%s ioStatus=%08X final=%08X info=%Iu completeInfo=%Iu direct=%p directBytes=%Iu\n",
-            AsyncRequest->Request,
-            AsyncRequest,
-            AsyncRequest->Irp,
-            AsyncRequest->TargetId,
-            (unsigned __int64)AsyncRequest->SlotId,
-            ControlSlotTypeName(AsyncRequest->SlotType),
-            (unsigned long)IoStatus,
-            (unsigned long)status,
-            Information,
-            completionInformation,
-            AsyncRequest->DirectBuffer,
-            AsyncRequest->DirectBufferSize);
-    }
-
     WdfRequestCompleteWithInformation(AsyncRequest->Request, status, completionInformation);
     ControlSessionReleaseSlot(AsyncRequest->SessionContext);
     return status;
@@ -214,18 +159,6 @@ ControlSubmitSlotCompletionRoutine(
         asyncRequest->CompletionStatus = Irp->IoStatus.Status;
         asyncRequest->CompletionInformation = Irp->IoStatus.Information;
         ownerState = InterlockedCompareExchange(&asyncRequest->CompletionState, 2, 0);
-        if (ControlShouldTraceSlot(asyncRequest->SlotType, Irp->IoStatus.Status)) {
-            DbgPrint(
-                "YumeDiskKMDF slot completion routine async=%p irp=%p target=%lu slot=%I64u type=%s status=%08X info=%Iu owner=%ld\n",
-                asyncRequest,
-                Irp,
-                asyncRequest->TargetId,
-                (unsigned __int64)asyncRequest->SlotId,
-                ControlSlotTypeName(asyncRequest->SlotType),
-                (unsigned long)Irp->IoStatus.Status,
-                Irp->IoStatus.Information,
-                ownerState);
-        }
         if (ownerState == 1) {
             (VOID)ControlCompleteAsyncSlotRequest(
                 asyncRequest,
@@ -254,21 +187,6 @@ ControlTransportDispatchSlotRequest(
 
     status = IoCallDriver(asyncRequest->SessionContext->MiniportDeviceObject, asyncRequest->Irp);
     ownerState = InterlockedCompareExchange(&asyncRequest->CompletionState, 1, 0);
-    if (ControlShouldTraceSlot(asyncRequest->SlotType, status)) {
-        DbgPrint(
-            "YumeDiskKMDF slot dispatch async=%p irp=%p target=%lu slot=%I64u type=%s ioCall=%08X owner=%ld irpStatus=%08X info=%Iu device=%p file=%p\n",
-            asyncRequest,
-            asyncRequest->Irp,
-            asyncRequest->TargetId,
-            (unsigned __int64)asyncRequest->SlotId,
-            ControlSlotTypeName(asyncRequest->SlotType),
-            (unsigned long)status,
-            ownerState,
-            (unsigned long)asyncRequest->Irp->IoStatus.Status,
-            asyncRequest->Irp->IoStatus.Information,
-            asyncRequest->SessionContext->MiniportDeviceObject,
-            asyncRequest->SessionContext->MiniportFileObject);
-    }
     if (ownerState == 2) {
         (VOID)ControlCompleteAsyncSlotRequest(
             asyncRequest,
@@ -305,15 +223,6 @@ ControlTransportFailSlotRequest(
     if (SlotRequest == NULL) {
         return;
     }
-
-    DbgPrint(
-        "YumeDiskKMDF slot fail async=%p irp=%p target=%lu slot=%I64u type=%s status=%08X\n",
-        SlotRequest,
-        SlotRequest->Irp,
-        SlotRequest->TargetId,
-        (unsigned __int64)SlotRequest->SlotId,
-        ControlSlotTypeName(SlotRequest->SlotType),
-        (unsigned long)Status);
 
     (VOID)ControlCompleteAsyncSlotRequest(SlotRequest, Status, 0);
     ControlTransportRuntimeReleaseSlotRequest(SlotRequest);
@@ -700,14 +609,6 @@ ControlProxySubmitSlotAsync(
         ioctlBufferSize,
         &asyncRequest);
     if (!NT_SUCCESS(status)) {
-        DbgPrint(
-            "YumeDiskKMDF slot acquire failed target=%lu slot=%I64u type=%s status=%08X stack=%d bytes=%lu\n",
-            TargetId,
-            (unsigned __int64)SlotId,
-            ControlSlotTypeName(SlotType),
-            (unsigned long)status,
-            Context->MiniportDeviceObject->StackSize,
-            ioctlBufferSize);
         return status;
     }
 
@@ -782,29 +683,8 @@ ControlProxySubmitSlotAsync(
 
     status = ControlTransportRuntimeSubmitSlotRequest(asyncRequest);
     if (!NT_SUCCESS(status)) {
-        DbgPrint(
-            "YumeDiskKMDF slot enqueue failed async=%p irp=%p target=%lu slot=%I64u type=%s status=%08X\n",
-            asyncRequest,
-            asyncRequest->Irp,
-            TargetId,
-            (unsigned __int64)SlotId,
-            ControlSlotTypeName(SlotType),
-            (unsigned long)status);
         ControlTransportRuntimeReleaseSlotRequest(asyncRequest);
         return status;
-    }
-
-    if (ControlShouldTraceSlot(SlotType, STATUS_SUCCESS)) {
-        DbgPrint(
-            "YumeDiskKMDF slot enqueue async=%p irp=%p request=%p target=%lu slot=%I64u type=%s direct=%p directBytes=%Iu\n",
-            asyncRequest,
-            asyncRequest->Irp,
-            Request,
-            TargetId,
-            (unsigned __int64)SlotId,
-            ControlSlotTypeName(SlotType),
-            DirectBuffer,
-            DirectBufferSize);
     }
 
     return STATUS_PENDING;
