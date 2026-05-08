@@ -65,12 +65,11 @@
 | `usage` | `info` | `syntax` |
 | `package_root` | `info` | `package_root` |
 | `package_root_not_found` | `error` | `error`, `hint` |
-| `certificate_mode` | `info` | `mode`, `package_count`, `certificate_count` |
+| `certificate_mode` | `info` | `mode`, `package_count`, `certificate_count`, `package_dirs_with_certificate`, `package_dirs_without_certificate` |
 | `certificate_installed` | `info` | `certificate_path`, `subject`, `thumbprint`, `root_store_added`, `trusted_publisher_store_added` |
 | `certificate_present` | `info` | `certificate_path`, `subject`, `thumbprint`, `root_store_added`, `trusted_publisher_store_added` |
 | `certificate_removed` | `info` | `certificate_path`, `subject`, `thumbprint`, `root_store_removed`, `trusted_publisher_store_removed` |
 | `certificate_absent` | `info` | `certificate_path`, `subject`, `thumbprint` |
-| `certificate_mode_mismatch` | `error` | `package_dirs_with_certificate`, `package_dirs_without_certificate` |
 | `certificate_install_failed` | `error` | `certificate_path`, `subject`, `thumbprint`, `store`, `error` |
 | `certificate_remove_failed` | `error` | `certificate_path`, `subject`, `thumbprint`, `store`, `error` |
 | `summary` | `info` | `ok` |
@@ -117,25 +116,28 @@
 devtidy.exe install
 ```
 
-若两个驱动包目录都包含单个 `.cer`，`devtidy` 进入 `self_signed` 模式：
+`devtidy` 会对两个驱动包目录分别检查 `.cer`：
 
-- 把证书安装到 `LocalMachine\Root`
-- 把证书安装到 `LocalMachine\TrustedPublisher`
-- 再继续驱动包与设备实例收敛
+- 某个包带单个 `.cer`：该包按 `self_signed` 处理，参与证书安装/移除
+- 某个包不带 `.cer`：该包按 `release` 处理，跳过证书安装/移除
+- 如果两个包一个带证书、一个不带证书，则整体 `mode` 为 `mixed`
 
-若两个驱动包目录都不包含 `.cer`，`devtidy` 进入 `release` 模式：
+证书安装/移除仍然会按 thumbprint 去重，因此即便两个包里放的是同一张 `.cer`，实际也只会处理一次。
 
-- 跳过证书安装/移除
-- 直接继续驱动包与设备实例收敛
+`install` 的执行顺序固定为三段：
 
-若两个包目录的 `.cer` 布局不一致，例如一个有证书、一个没有证书，则直接报错并停止。
+1. 先完成证书安装。
+2. 再完成两个驱动包的检查与入库。
+3. 最后统一完成两个设备实例的创建、绑定和去重收敛。
 
 ```json
 {"data":{"package_root":"C:\\work\\devtidy-bundle"},"device":null,"event":"package_root","level":"info","schema":"v1"}
-{"data":{"certificate_count":1,"mode":"self_signed","package_count":2},"device":null,"event":"certificate_mode","level":"info","schema":"v1"}
+{"data":{"certificate_count":1,"mode":"mixed","package_count":2,"package_dirs_with_certificate":["YumeDiskSCSI"],"package_dirs_without_certificate":["YumeDiskKMDF"]},"device":null,"event":"certificate_mode","level":"info","schema":"v1"}
 {"data":{"certificate_path":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskRoot.cer","root_store_added":true,"subject":"YumeDisk Driver Root","thumbprint":"0123456789ABCDEF0123456789ABCDEF01234567","trusted_publisher_store_added":true},"device":null,"event":"certificate_installed","level":"info","schema":"v1"}
 {"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskSCSI.inf"},"device":"YumeDiskSCSI","event":"package_present","level":"info","schema":"v1"}
+{"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskKMDF\\YumeDiskKMDF.inf"},"device":"YumeDiskKMDF","event":"package_present","level":"info","schema":"v1"}
 {"data":{"instance_id":"ROOT\\YUMEDISKSCSI\\0000","instance_count":2,"duplicate_count":1},"device":"YumeDiskSCSI","event":"device_kept","level":"info","schema":"v1"}
+{"data":{"instance_id":"ROOT\\YUMEDISKKMDF\\0000","instance_count":1,"duplicate_count":0},"device":"YumeDiskKMDF","event":"device_kept","level":"info","schema":"v1"}
 {"data":{"instance_id":"ROOT\\YUMEDISKSCSI\\0001","need_reboot":false},"device":"YumeDiskSCSI","event":"device_removed","level":"info","schema":"v1"}
 {"data":{"ok":true},"device":null,"event":"summary","level":"info","schema":"v1"}
 ```
@@ -158,7 +160,7 @@ devtidy.exe uninstall --package-root C:\work\devtidy-bundle
 
 ```json
 {"data":{"package_root":"C:\\work\\devtidy-bundle"},"device":null,"event":"package_root","level":"info","schema":"v1"}
-{"data":{"certificate_count":1,"mode":"self_signed","package_count":2},"device":null,"event":"certificate_mode","level":"info","schema":"v1"}
+{"data":{"certificate_count":1,"mode":"mixed","package_count":2,"package_dirs_with_certificate":["YumeDiskSCSI"],"package_dirs_without_certificate":["YumeDiskKMDF"]},"device":null,"event":"certificate_mode","level":"info","schema":"v1"}
 {"data":{"instance_id":"ROOT\\YUMEDISKSCSI\\0000","need_reboot":false},"device":"YumeDiskSCSI","event":"device_removed","level":"info","schema":"v1"}
 {"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskSCSI.inf","need_reboot":false},"device":"YumeDiskSCSI","event":"package_uninstalled","level":"info","schema":"v1"}
 {"data":{"instance_id":"ROOT\\YUMEDISKKMDF\\0000","need_reboot":false},"device":"YumeDiskKMDF","event":"device_removed","level":"info","schema":"v1"}

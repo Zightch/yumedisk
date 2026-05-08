@@ -48,7 +48,8 @@ struct CertificateSpec {
 
 enum class CertificateMode {
     SelfSigned,
-    Release
+    Release,
+    Mixed
 };
 
 enum class RunMode {
@@ -771,16 +772,6 @@ static bool CollectPackageCertificates(
         return false;
     }
 
-    if (packagesWithCertificates != 0 && packagesWithoutCertificates != 0) {
-        WriteErrorEvent(
-            "certificate_mode_mismatch",
-            JsonObject({
-                {"package_dirs_with_certificate", JsonTextArray(packageDirsWithCertificates)},
-                {"package_dirs_without_certificate", JsonTextArray(packageDirsWithoutCertificates)}
-            }));
-        return false;
-    }
-
     if (packagesWithCertificates == 0) {
         *mode = CertificateMode::Release;
         WriteInfoEvent(
@@ -788,18 +779,25 @@ static bool CollectPackageCertificates(
             JsonObject({
                 {"mode", JsonText("release")},
                 {"package_count", JsonSize(ARRAYSIZE(kDeviceSpecs))},
-                {"certificate_count", JsonSize(0)}
+                {"certificate_count", JsonSize(0)},
+                {"package_dirs_with_certificate", JsonTextArray(packageDirsWithCertificates)},
+                {"package_dirs_without_certificate", JsonTextArray(packageDirsWithoutCertificates)}
             }));
         return true;
     }
 
-    *mode = CertificateMode::SelfSigned;
+    *mode = (packagesWithoutCertificates == 0)
+        ? CertificateMode::SelfSigned
+        : CertificateMode::Mixed;
     WriteInfoEvent(
         "certificate_mode",
         JsonObject({
-            {"mode", JsonText("self_signed")},
+            {"mode", JsonText(
+                (*mode == CertificateMode::SelfSigned) ? "self_signed" : "mixed")},
             {"package_count", JsonSize(ARRAYSIZE(kDeviceSpecs))},
-            {"certificate_count", JsonSize(certificates->size())}
+            {"certificate_count", JsonSize(certificates->size())},
+            {"package_dirs_with_certificate", JsonTextArray(packageDirsWithCertificates)},
+            {"package_dirs_without_certificate", JsonTextArray(packageDirsWithoutCertificates)}
         }));
     return !certificates->empty();
 }
@@ -1416,25 +1414,35 @@ static bool RunInstall(const fs::path& packageRoot) {
     if (!CollectPackageCertificates(packageRoot, &certificateMode, &certificates)) {
         return false;
     }
-    if (certificateMode == CertificateMode::SelfSigned && !InstallCertificates(certificates)) {
+    if (certificateMode != CertificateMode::Release && !InstallCertificates(certificates)) {
         return false;
     }
 
     bool ok = true;
+    std::vector<fs::path> infPaths;
+    infPaths.reserve(ARRAYSIZE(kDeviceSpecs));
+
     for (const DeviceSpec& spec : kDeviceSpecs) {
         fs::path infPath;
         if (!TryFindSingleInfPath(spec, packageRoot, &infPath)) {
             ok = false;
+            infPaths.push_back(fs::path());
             continue;
         }
+        infPaths.push_back(infPath);
 
         PackageState packageState{};
         if (!EnsureDriverPackage(spec, infPath, &packageState)) {
             ok = false;
+        }
+    }
+
+    for (size_t index = 0; index < ARRAYSIZE(kDeviceSpecs); ++index) {
+        if (infPaths[index].empty()) {
             continue;
         }
 
-        if (!EnsureUniqueDevice(spec, infPath)) {
+        if (!EnsureUniqueDevice(kDeviceSpecs[index], infPaths[index])) {
             ok = false;
         }
     }
@@ -1471,7 +1479,7 @@ static bool RunUninstall(const fs::path& packageRoot) {
     }
 
     if (haveCertificateLayout &&
-        certificateMode == CertificateMode::SelfSigned &&
+        certificateMode != CertificateMode::Release &&
         !RemoveCertificates(certificates)) {
         ok = false;
     }
