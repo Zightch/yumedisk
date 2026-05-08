@@ -156,14 +156,20 @@ devtidy.exe uninstall
 devtidy.exe uninstall --package-root C:\work\devtidy-bundle
 ```
 
+`uninstall` 的执行顺序固定为三段：
+
+1. 先删除两个设备对应的全部设备实例。
+2. 再卸载两个驱动包。
+3. 最后把对应目录下的 `.cer` 从 `LocalMachine\Root` 和 `LocalMachine\TrustedPublisher` 移除。
+
 示例输出：
 
 ```json
 {"data":{"package_root":"C:\\work\\devtidy-bundle"},"device":null,"event":"package_root","level":"info","schema":"v1"}
 {"data":{"certificate_count":1,"mode":"mixed","package_count":2,"package_dirs_with_certificate":["YumeDiskSCSI"],"package_dirs_without_certificate":["YumeDiskKMDF"]},"device":null,"event":"certificate_mode","level":"info","schema":"v1"}
 {"data":{"instance_id":"ROOT\\YUMEDISKSCSI\\0000","need_reboot":false},"device":"YumeDiskSCSI","event":"device_removed","level":"info","schema":"v1"}
-{"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskSCSI.inf","need_reboot":false},"device":"YumeDiskSCSI","event":"package_uninstalled","level":"info","schema":"v1"}
 {"data":{"instance_id":"ROOT\\YUMEDISKKMDF\\0000","need_reboot":false},"device":"YumeDiskKMDF","event":"device_removed","level":"info","schema":"v1"}
+{"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskSCSI.inf","need_reboot":false},"device":"YumeDiskSCSI","event":"package_uninstalled","level":"info","schema":"v1"}
 {"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskKMDF\\YumeDiskKMDF.inf","need_reboot":false},"device":"YumeDiskKMDF","event":"package_uninstalled","level":"info","schema":"v1"}
 {"data":{"certificate_path":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskRoot.cer","root_store_removed":true,"subject":"YumeDisk Driver Root","thumbprint":"0123456789ABCDEF0123456789ABCDEF01234567","trusted_publisher_store_removed":true},"device":null,"event":"certificate_removed","level":"info","schema":"v1"}
 {"data":{"ok":true},"device":null,"event":"summary","level":"info","schema":"v1"}

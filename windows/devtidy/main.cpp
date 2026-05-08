@@ -1466,14 +1466,26 @@ static bool RunUninstall(const fs::path& packageRoot) {
         if (!RemoveAllDevices(spec)) {
             ok = false;
         }
+    }
 
+    std::vector<fs::path> infPaths;
+    infPaths.reserve(ARRAYSIZE(kDeviceSpecs));
+    for (const DeviceSpec& spec : kDeviceSpecs) {
         fs::path infPath;
         if (!TryFindSingleInfPath(spec, packageRoot, &infPath)) {
             ok = false;
+            infPaths.push_back(fs::path());
+            continue;
+        }
+        infPaths.push_back(infPath);
+    }
+
+    for (size_t index = 0; index < ARRAYSIZE(kDeviceSpecs); ++index) {
+        if (infPaths[index].empty()) {
             continue;
         }
 
-        if (!UninstallDriverPackage(spec, infPath)) {
+        if (!UninstallDriverPackage(kDeviceSpecs[index], infPaths[index])) {
             ok = false;
         }
     }
