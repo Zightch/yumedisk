@@ -9,23 +9,26 @@ class Widget;
 QT_END_NAMESPACE
 
 class QAction;
+class ClientBackend;
 class QCloseEvent;
 class QMenu;
 class QSystemTrayIcon;
 
 class Widget : public QWidget {
 public:
-    explicit Widget(QWidget* parent = nullptr);
+    explicit Widget(ClientBackend* backend, QWidget* parent = nullptr);
     ~Widget() override;
 
 protected:
     void closeEvent(QCloseEvent* event) override;
 
 private:
+    void initializeShellUi();
     void showFromTray();
     void initializeTray();
 
     Ui::Widget* ui;
+    ClientBackend* backend = nullptr;
     QSystemTrayIcon* trayIcon = nullptr;
     QMenu* trayMenu = nullptr;
     QAction* openAction = nullptr;

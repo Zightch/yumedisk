@@ -1,12 +1,16 @@
 #include <QApplication>
 
-#include "widget.h"
+#include "client_backend.h"
+#include "widget/widget.h"
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     QApplication::setQuitOnLastWindowClosed(false);
-    Widget widget;
+    QApplication::setApplicationName("client");
+    QApplication::setApplicationDisplayName("Client");
 
-    widget.show();
+    ClientBackend backend;
+    Widget window(&backend);
+    window.show();
     return QApplication::exec();
 }

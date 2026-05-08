@@ -25,14 +25,20 @@ set(CMAKE_AUTORCC ON)
 
 qt_standard_project_setup()
 
-include_directories(./)
-
 qt_add_executable(
         client
         main.cpp
-        widget.cpp
-        widget.h
-        widget.ui
+        client_backend.cpp
+        client_backend.h
+        widget/widget.cpp
+        widget/widget.h
+        widget/widget.ui
+)
+
+target_include_directories(
+        client
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(
