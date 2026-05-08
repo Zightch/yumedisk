@@ -22,7 +22,12 @@ add_subdirectory(
 
 add_executable(
     devtidy
+    certificate_store.cpp
+    common.cpp
+    device_ops.cpp
     main.cpp
+    package.cpp
+    workflow.cpp
 )
 
 target_link_libraries(
