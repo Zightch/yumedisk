@@ -139,6 +139,7 @@
     <ClInclude Include="transport\runtime.h" />
     <ClInclude Include="transport\transport.h" />
   </ItemGroup>
+  <Import Project="..\..\shared\YumeDriverSelfSign.targets" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

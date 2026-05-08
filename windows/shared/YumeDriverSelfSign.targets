@@ -1,0 +1,23 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <SkipPackageVerification Condition="'$(SkipPackageVerification)' == ''">true</SkipPackageVerification>
+    <YumeDriverSigningSubjectName Condition="'$(YumeDriverSigningSubjectName)' == ''">CN=YumeDisk Driver Test Root</YumeDriverSigningSubjectName>
+    <YumeDriverSigningCertFileName Condition="'$(YumeDriverSigningCertFileName)' == ''">YumeDiskRoot.cer</YumeDriverSigningCertFileName>
+    <YumeDriverSigningScript Condition="'$(YumeDriverSigningScript)' == ''">$(MSBuildThisFileDirectory)YumeDriverSelfSign.ps1</YumeDriverSigningScript>
+    <YumeDriverCertificateOutputPath Condition="'$(YumeDriverCertificateOutputPath)' == ''">$(OutDir)$(YumeDriverSigningCertFileName)</YumeDriverCertificateOutputPath>
+  </PropertyGroup>
+
+  <Target
+    Name="YumeSignDriverBinary"
+    AfterTargets="DriverTestSign;DriverProductionSign"
+    Condition="'$(ConfigurationType)' == 'Driver' and Exists('$(TargetPath)') and Exists('$(YumeDriverSigningScript)')">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(YumeDriverSigningScript)&quot; -Action SignBinary -SubjectName &quot;$(YumeDriverSigningSubjectName)&quot; -CertificateFileName &quot;$(YumeDriverSigningCertFileName)&quot; -FilePath &quot;$(TargetPath)&quot; -ExportCerPath &quot;$(YumeDriverCertificateOutputPath)&quot;" />
+  </Target>
+
+  <Target
+    Name="YumeFinalizeDriverPackage"
+    AfterTargets="PackageTestSign;PackageProductionSign"
+    Condition="'$(ConfigurationType)' == 'Driver' and Exists('$(PackageDir)') and Exists('$(YumeDriverSigningScript)')">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(YumeDriverSigningScript)&quot; -Action FinalizePackage -SubjectName &quot;$(YumeDriverSigningSubjectName)&quot; -CertificateFileName &quot;$(YumeDriverSigningCertFileName)&quot; -FilePath &quot;$(TargetPath)&quot; -PackageDir &quot;$(PackageDir).&quot; -ExportCerPath &quot;$(YumeDriverCertificateOutputPath)&quot;" />
+  </Target>
+</Project>

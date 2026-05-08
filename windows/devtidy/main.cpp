@@ -6,11 +6,14 @@
 #include <newdev.h>
 #include <json/json.h>
 #include <setupapi.h>
+#include <wincrypt.h>
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -34,6 +37,13 @@ struct DeviceInstance {
 struct PackageState {
     bool alreadyPresent;
     std::wstring publishedInf;
+};
+
+struct CertificateSpec {
+    fs::path path;
+    std::vector<BYTE> encoded;
+    std::wstring subject;
+    std::wstring thumbprint;
 };
 
 enum class RunMode {
@@ -263,6 +273,19 @@ static bool MultiSzContains(const std::vector<wchar_t>& buffer, const std::wstri
     return false;
 }
 
+static std::wstring BytesToHex(const BYTE* data, size_t length) {
+    static const wchar_t digits[] = L"0123456789ABCDEF";
+
+    std::wstring value;
+    value.reserve(length * 2);
+    for (size_t index = 0; index < length; ++index) {
+        value.push_back(digits[(data[index] >> 4) & 0x0F]);
+        value.push_back(digits[data[index] & 0x0F]);
+    }
+
+    return value;
+}
+
 static std::vector<DeviceInstance> EnumerateDevicesByHardwareId(const DeviceSpec& spec) {
     std::vector<DeviceInstance> devices;
     HDEVINFO info = SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES);
@@ -446,10 +469,14 @@ static size_t ChoosePrimaryDeviceIndex(const std::vector<DeviceInstance>& device
     return bestIndex;
 }
 
-static bool TryFindSingleInfPath(
+static bool TryFindSinglePackageFile(
     const DeviceSpec& spec,
     const fs::path& packageRoot,
-    fs::path* infPath
+    const std::wstring& extension,
+    const char* notFoundEvent,
+    const char* multipleFoundEvent,
+    const char* fileKind,
+    fs::path* filePath
 ) {
     const fs::path packageDir = packageRoot / spec.packageDirName;
     std::error_code ec;
@@ -464,7 +491,7 @@ static bool TryFindSingleInfPath(
         return false;
     }
 
-    std::vector<fs::path> infFiles;
+    std::vector<fs::path> files;
     for (const fs::directory_entry& entry : fs::directory_iterator(packageDir, ec)) {
         if (ec) {
             break;
@@ -472,8 +499,8 @@ static bool TryFindSingleInfPath(
         if (!entry.is_regular_file()) {
             continue;
         }
-        if (EqualInsensitive(entry.path().extension().native(), L".inf")) {
-            infFiles.push_back(entry.path());
+        if (EqualInsensitive(entry.path().extension().native(), extension)) {
+            files.push_back(entry.path());
         }
     }
 
@@ -488,34 +515,474 @@ static bool TryFindSingleInfPath(
         return false;
     }
 
-    std::sort(infFiles.begin(), infFiles.end());
-    if (infFiles.empty()) {
+    std::sort(files.begin(), files.end());
+    if (files.empty()) {
         WriteErrorDeviceEvent(
-            "inf_not_found",
+            notFoundEvent,
             spec.name,
             JsonObject({
                 {"package_dir", JsonText(packageDir.native())}
             }));
         return false;
     }
-    if (infFiles.size() > 1) {
+    if (files.size() > 1) {
         Json::Value found(Json::arrayValue);
-        for (const fs::path& candidate : infFiles) {
+        for (const fs::path& candidate : files) {
             found.append(WideToUtf8(candidate.filename().native()));
         }
 
         WriteErrorDeviceEvent(
-            "multiple_inf_found",
+            multipleFoundEvent,
             spec.name,
             JsonObject({
                 {"package_dir", JsonText(packageDir.native())},
-                {"files", found}
+                {"files", found},
+                {"kind", JsonText(fileKind)}
             }));
         return false;
     }
 
-    *infPath = infFiles.front();
+    *filePath = files.front();
     return true;
+}
+
+static bool TryFindSingleInfPath(
+    const DeviceSpec& spec,
+    const fs::path& packageRoot,
+    fs::path* infPath
+) {
+    return TryFindSinglePackageFile(
+        spec,
+        packageRoot,
+        L".inf",
+        "inf_not_found",
+        "multiple_inf_found",
+        "inf",
+        infPath);
+}
+
+static bool TryFindSingleCertificatePath(
+    const DeviceSpec& spec,
+    const fs::path& packageRoot,
+    fs::path* certificatePath
+) {
+    return TryFindSinglePackageFile(
+        spec,
+        packageRoot,
+        L".cer",
+        "certificate_not_found",
+        "multiple_certificate_found",
+        "certificate",
+        certificatePath);
+}
+
+static bool ReadFileBinary(
+    const fs::path& path,
+    std::vector<BYTE>* encoded,
+    std::wstring* errorMessage
+) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        if (errorMessage != nullptr) {
+            *errorMessage = L"unable to open file";
+        }
+        return false;
+    }
+
+    input.seekg(0, std::ios::end);
+    const std::streamoff size = input.tellg();
+    if (size <= 0) {
+        if (errorMessage != nullptr) {
+            *errorMessage = L"certificate file is empty";
+        }
+        return false;
+    }
+
+    input.seekg(0, std::ios::beg);
+    encoded->resize(static_cast<size_t>(size));
+    input.read(reinterpret_cast<char*>(encoded->data()), static_cast<std::streamsize>(size));
+    if (!input) {
+        if (errorMessage != nullptr) {
+            *errorMessage = L"unable to read file";
+        }
+        return false;
+    }
+
+    return true;
+}
+
+static bool LoadCertificateSpec(
+    const fs::path& path,
+    CertificateSpec* spec,
+    std::wstring* errorMessage
+) {
+    std::vector<BYTE> encoded;
+    if (!ReadFileBinary(path, &encoded, errorMessage)) {
+        return false;
+    }
+
+    PCCERT_CONTEXT context = CertCreateCertificateContext(
+        X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+        encoded.data(),
+        static_cast<DWORD>(encoded.size()));
+    if (context == nullptr) {
+        if (errorMessage != nullptr) {
+            const DWORD error = GetLastError();
+            *errorMessage = GetLastErrorMessage(error);
+        }
+        return false;
+    }
+
+    DWORD hashSize = 0;
+    if (!CertGetCertificateContextProperty(context, CERT_HASH_PROP_ID, nullptr, &hashSize) ||
+        hashSize == 0) {
+        if (errorMessage != nullptr) {
+            const DWORD error = GetLastError();
+            *errorMessage = GetLastErrorMessage(error);
+        }
+        CertFreeCertificateContext(context);
+        return false;
+    }
+
+    std::vector<BYTE> hash(hashSize);
+    if (!CertGetCertificateContextProperty(context, CERT_HASH_PROP_ID, hash.data(), &hashSize)) {
+        if (errorMessage != nullptr) {
+            const DWORD error = GetLastError();
+            *errorMessage = GetLastErrorMessage(error);
+        }
+        CertFreeCertificateContext(context);
+        return false;
+    }
+
+    const DWORD subjectLength = CertGetNameStringW(
+        context,
+        CERT_NAME_SIMPLE_DISPLAY_TYPE,
+        0,
+        nullptr,
+        nullptr,
+        0);
+    std::wstring subject;
+    if (subjectLength > 1) {
+        subject.resize(subjectLength, L'\0');
+        CertGetNameStringW(
+            context,
+            CERT_NAME_SIMPLE_DISPLAY_TYPE,
+            0,
+            nullptr,
+            subject.data(),
+            subjectLength);
+        subject.resize(subjectLength - 1);
+    }
+
+    spec->path = path;
+    spec->encoded = std::move(encoded);
+    spec->subject = subject;
+    spec->thumbprint = BytesToHex(hash.data(), hash.size());
+
+    CertFreeCertificateContext(context);
+    return true;
+}
+
+static bool CollectPackageCertificates(
+    const fs::path& packageRoot,
+    std::vector<CertificateSpec>* certificates
+) {
+    bool ok = true;
+
+    for (const DeviceSpec& spec : kDeviceSpecs) {
+        fs::path certificatePath;
+        if (!TryFindSingleCertificatePath(spec, packageRoot, &certificatePath)) {
+            ok = false;
+            continue;
+        }
+
+        CertificateSpec certificate;
+        std::wstring errorMessage;
+        if (!LoadCertificateSpec(certificatePath, &certificate, &errorMessage)) {
+            WriteErrorDeviceEvent(
+                "certificate_load_failed",
+                spec.name,
+                JsonObject({
+                    {"certificate_path", JsonText(certificatePath.native())},
+                    {"error", JsonText(errorMessage)}
+                }));
+            ok = false;
+            continue;
+        }
+
+        const auto duplicate = std::find_if(
+            certificates->begin(),
+            certificates->end(),
+            [&](const CertificateSpec& existing) {
+                return EqualInsensitive(existing.thumbprint, certificate.thumbprint);
+            });
+        if (duplicate == certificates->end()) {
+            certificates->push_back(std::move(certificate));
+        }
+    }
+
+    return ok && !certificates->empty();
+}
+
+static std::unique_ptr<const CERT_CONTEXT, decltype(&CertFreeCertificateContext)>
+CreateCertificateContext(const CertificateSpec& spec) {
+    PCCERT_CONTEXT context = CertCreateCertificateContext(
+        X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+        spec.encoded.data(),
+        static_cast<DWORD>(spec.encoded.size()));
+    return std::unique_ptr<const CERT_CONTEXT, decltype(&CertFreeCertificateContext)>(
+        context,
+        CertFreeCertificateContext);
+}
+
+static HCERTSTORE OpenLocalMachineStore(const wchar_t* storeName) {
+    return CertOpenStore(
+        CERT_STORE_PROV_SYSTEM_W,
+        0,
+        0,
+        CERT_SYSTEM_STORE_LOCAL_MACHINE,
+        storeName);
+}
+
+static bool StoreContainsCertificate(HCERTSTORE store, PCCERT_CONTEXT certificate) {
+    PCCERT_CONTEXT existing = CertFindCertificateInStore(
+        store,
+        X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+        0,
+        CERT_FIND_EXISTING,
+        certificate,
+        nullptr);
+    if (existing != nullptr) {
+        CertFreeCertificateContext(existing);
+        return true;
+    }
+
+    return false;
+}
+
+static bool EnsureCertificateInStore(
+    const CertificateSpec& spec,
+    const wchar_t* storeName,
+    bool* added,
+    std::wstring* errorMessage
+) {
+    std::unique_ptr<const CERT_CONTEXT, decltype(&CertFreeCertificateContext)> context =
+        CreateCertificateContext(spec);
+    if (!context) {
+        if (errorMessage != nullptr) {
+            const DWORD error = GetLastError();
+            *errorMessage = GetLastErrorMessage(error);
+        }
+        return false;
+    }
+
+    HCERTSTORE store = OpenLocalMachineStore(storeName);
+    if (store == nullptr) {
+        if (errorMessage != nullptr) {
+            const DWORD error = GetLastError();
+            *errorMessage = GetLastErrorMessage(error);
+        }
+        return false;
+    }
+
+    const bool alreadyPresent = StoreContainsCertificate(store, context.get());
+    if (!alreadyPresent) {
+        if (!CertAddCertificateContextToStore(
+                store,
+                context.get(),
+                CERT_STORE_ADD_REPLACE_EXISTING,
+                nullptr)) {
+            if (errorMessage != nullptr) {
+                const DWORD error = GetLastError();
+                *errorMessage = GetLastErrorMessage(error);
+            }
+            CertCloseStore(store, 0);
+            return false;
+        }
+    }
+
+    if (added != nullptr) {
+        *added = !alreadyPresent;
+    }
+
+    CertCloseStore(store, 0);
+    return true;
+}
+
+static bool RemoveCertificateFromStore(
+    const CertificateSpec& spec,
+    const wchar_t* storeName,
+    bool* removed,
+    std::wstring* errorMessage
+) {
+    std::unique_ptr<const CERT_CONTEXT, decltype(&CertFreeCertificateContext)> context =
+        CreateCertificateContext(spec);
+    if (!context) {
+        if (errorMessage != nullptr) {
+            const DWORD error = GetLastError();
+            *errorMessage = GetLastErrorMessage(error);
+        }
+        return false;
+    }
+
+    HCERTSTORE store = OpenLocalMachineStore(storeName);
+    if (store == nullptr) {
+        if (errorMessage != nullptr) {
+            const DWORD error = GetLastError();
+            *errorMessage = GetLastErrorMessage(error);
+        }
+        return false;
+    }
+
+    bool anyRemoved = false;
+    for (;;) {
+        PCCERT_CONTEXT existing = CertFindCertificateInStore(
+            store,
+            X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+            0,
+            CERT_FIND_EXISTING,
+            context.get(),
+            nullptr);
+        if (existing == nullptr) {
+            break;
+        }
+
+        if (!CertDeleteCertificateFromStore(existing)) {
+            if (errorMessage != nullptr) {
+                const DWORD error = GetLastError();
+                *errorMessage = GetLastErrorMessage(error);
+            }
+            CertCloseStore(store, 0);
+            return false;
+        }
+
+        anyRemoved = true;
+    }
+
+    if (removed != nullptr) {
+        *removed = anyRemoved;
+    }
+
+    CertCloseStore(store, 0);
+    return true;
+}
+
+static bool InstallCertificates(const std::vector<CertificateSpec>& certificates) {
+    bool ok = true;
+
+    for (const CertificateSpec& certificate : certificates) {
+        bool rootAdded = false;
+        bool publisherAdded = false;
+        std::wstring rootError;
+        std::wstring publisherError;
+
+        if (!EnsureCertificateInStore(certificate, L"ROOT", &rootAdded, &rootError)) {
+            WriteErrorEvent(
+                "certificate_install_failed",
+                JsonObject({
+                    {"certificate_path", JsonText(certificate.path.native())},
+                    {"subject", JsonText(certificate.subject)},
+                    {"thumbprint", JsonText(certificate.thumbprint)},
+                    {"store", JsonText("Root")},
+                    {"error", JsonText(rootError)}
+                }));
+            ok = false;
+            continue;
+        }
+
+        if (!EnsureCertificateInStore(
+                certificate,
+                L"TrustedPublisher",
+                &publisherAdded,
+                &publisherError)) {
+            WriteErrorEvent(
+                "certificate_install_failed",
+                JsonObject({
+                    {"certificate_path", JsonText(certificate.path.native())},
+                    {"subject", JsonText(certificate.subject)},
+                    {"thumbprint", JsonText(certificate.thumbprint)},
+                    {"store", JsonText("TrustedPublisher")},
+                    {"error", JsonText(publisherError)}
+                }));
+            ok = false;
+            continue;
+        }
+
+        WriteInfoEvent(
+            (rootAdded || publisherAdded) ? "certificate_installed" : "certificate_present",
+            JsonObject({
+                {"certificate_path", JsonText(certificate.path.native())},
+                {"subject", JsonText(certificate.subject)},
+                {"thumbprint", JsonText(certificate.thumbprint)},
+                {"root_store_added", Json::Value(rootAdded)},
+                {"trusted_publisher_store_added", Json::Value(publisherAdded)}
+            }));
+    }
+
+    return ok;
+}
+
+static bool RemoveCertificates(const std::vector<CertificateSpec>& certificates) {
+    bool ok = true;
+
+    for (const CertificateSpec& certificate : certificates) {
+        bool rootRemoved = false;
+        bool publisherRemoved = false;
+        std::wstring rootError;
+        std::wstring publisherError;
+
+        if (!RemoveCertificateFromStore(certificate, L"ROOT", &rootRemoved, &rootError)) {
+            WriteErrorEvent(
+                "certificate_remove_failed",
+                JsonObject({
+                    {"certificate_path", JsonText(certificate.path.native())},
+                    {"subject", JsonText(certificate.subject)},
+                    {"thumbprint", JsonText(certificate.thumbprint)},
+                    {"store", JsonText("Root")},
+                    {"error", JsonText(rootError)}
+                }));
+            ok = false;
+        }
+
+        if (!RemoveCertificateFromStore(
+                certificate,
+                L"TrustedPublisher",
+                &publisherRemoved,
+                &publisherError)) {
+            WriteErrorEvent(
+                "certificate_remove_failed",
+                JsonObject({
+                    {"certificate_path", JsonText(certificate.path.native())},
+                    {"subject", JsonText(certificate.subject)},
+                    {"thumbprint", JsonText(certificate.thumbprint)},
+                    {"store", JsonText("TrustedPublisher")},
+                    {"error", JsonText(publisherError)}
+                }));
+            ok = false;
+        }
+
+        if (!rootRemoved && !publisherRemoved) {
+            WriteInfoEvent(
+                "certificate_absent",
+                JsonObject({
+                    {"certificate_path", JsonText(certificate.path.native())},
+                    {"subject", JsonText(certificate.subject)},
+                    {"thumbprint", JsonText(certificate.thumbprint)}
+                }));
+        } else {
+            WriteInfoEvent(
+                "certificate_removed",
+                JsonObject({
+                    {"certificate_path", JsonText(certificate.path.native())},
+                    {"subject", JsonText(certificate.subject)},
+                    {"thumbprint", JsonText(certificate.thumbprint)},
+                    {"root_store_removed", Json::Value(rootRemoved)},
+                    {"trusted_publisher_store_removed", Json::Value(publisherRemoved)}
+                }));
+        }
+    }
+
+    return ok;
 }
 
 static bool EnsureDriverPackage(const DeviceSpec& spec, const fs::path& infPath, PackageState* state) {
@@ -864,6 +1331,14 @@ static bool UninstallDriverPackage(const DeviceSpec& spec, const fs::path& infPa
 }
 
 static bool RunInstall(const fs::path& packageRoot) {
+    std::vector<CertificateSpec> certificates;
+    if (!CollectPackageCertificates(packageRoot, &certificates)) {
+        return false;
+    }
+    if (!InstallCertificates(certificates)) {
+        return false;
+    }
+
     bool ok = true;
     for (const DeviceSpec& spec : kDeviceSpecs) {
         fs::path infPath;
@@ -887,7 +1362,13 @@ static bool RunInstall(const fs::path& packageRoot) {
 }
 
 static bool RunUninstall(const fs::path& packageRoot) {
+    std::vector<CertificateSpec> certificates;
+    const bool haveCertificates = CollectPackageCertificates(packageRoot, &certificates);
     bool ok = true;
+    if (!haveCertificates) {
+        ok = false;
+    }
+
     for (const DeviceSpec& spec : kDeviceSpecs) {
         if (!RemoveAllDevices(spec)) {
             ok = false;
@@ -902,6 +1383,10 @@ static bool RunUninstall(const fs::path& packageRoot) {
         if (!UninstallDriverPackage(spec, infPath)) {
             ok = false;
         }
+    }
+
+    if (haveCertificates && !RemoveCertificates(certificates)) {
+        ok = false;
     }
 
     return ok;

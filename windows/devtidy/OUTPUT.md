@@ -37,6 +37,15 @@
 | `source_inf` | string | 包目录中的源 `.inf` 路径 |
 | `published_inf` | string | 被系统成功接纳后的发布 `.inf` 名称或路径 |
 | `files` | array<string> | 扫描到的多个 `.inf` 文件名 |
+| `kind` | string | 当前扫描冲突的文件类型，例如 `inf` 或 `certificate` |
+| `certificate_path` | string | 驱动包内的根信任证书 `.cer` 路径 |
+| `subject` | string | 证书主题显示名 |
+| `thumbprint` | string | 证书 SHA-1 指纹 |
+| `store` | string | 证书存储区名称，例如 `Root` 或 `TrustedPublisher` |
+| `root_store_added` | bool | 本次是否向 `LocalMachine\\Root` 新增证书 |
+| `trusted_publisher_store_added` | bool | 本次是否向 `LocalMachine\\TrustedPublisher` 新增证书 |
+| `root_store_removed` | bool | 本次是否从 `LocalMachine\\Root` 删除证书 |
+| `trusted_publisher_store_removed` | bool | 本次是否从 `LocalMachine\\TrustedPublisher` 删除证书 |
 | `instance_id` | string | 设备实例 ID |
 | `instance_count` | uint | 当前检测到的同硬件 ID 设备总数 |
 | `duplicate_count` | uint | 重复设备数量，等于 `instance_count - 1` |
@@ -56,6 +65,12 @@
 | `usage` | `info` | `syntax` |
 | `package_root` | `info` | `package_root` |
 | `package_root_not_found` | `error` | `error`, `hint` |
+| `certificate_installed` | `info` | `certificate_path`, `subject`, `thumbprint`, `root_store_added`, `trusted_publisher_store_added` |
+| `certificate_present` | `info` | `certificate_path`, `subject`, `thumbprint`, `root_store_added`, `trusted_publisher_store_added` |
+| `certificate_removed` | `info` | `certificate_path`, `subject`, `thumbprint`, `root_store_removed`, `trusted_publisher_store_removed` |
+| `certificate_absent` | `info` | `certificate_path`, `subject`, `thumbprint` |
+| `certificate_install_failed` | `error` | `certificate_path`, `subject`, `thumbprint`, `store`, `error` |
+| `certificate_remove_failed` | `error` | `certificate_path`, `subject`, `thumbprint`, `store`, `error` |
 | `summary` | `info` | `ok` |
 
 ### 包扫描与驱动包事件
@@ -65,7 +80,10 @@
 | `package_dir_not_found` | `error` | 必填 | `package_dir` |
 | `package_dir_scan_failed` | `error` | 必填 | `package_dir`, `error` |
 | `inf_not_found` | `error` | 必填 | `package_dir` |
-| `multiple_inf_found` | `error` | 必填 | `package_dir`, `files` |
+| `multiple_inf_found` | `error` | 必填 | `package_dir`, `files`, `kind` |
+| `certificate_not_found` | `error` | 必填 | `package_dir` |
+| `multiple_certificate_found` | `error` | 必填 | `package_dir`, `files`, `kind` |
+| `certificate_load_failed` | `error` | 必填 | `certificate_path`, `error` |
 | `package_present` | `info` | 必填 | `source_inf` |
 | `package_staged` | `info` | 必填 | `published_inf` |
 | `package_uninstalled` | `info` | 必填 | `source_inf`, `need_reboot` |
@@ -100,6 +118,7 @@ devtidy.exe install
 
 ```json
 {"data":{"package_root":"C:\\work\\devtidy-bundle"},"device":null,"event":"package_root","level":"info","schema":"v1"}
+{"data":{"certificate_path":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskRoot.cer","root_store_added":true,"subject":"YumeDisk Driver Test Root","thumbprint":"0123456789ABCDEF0123456789ABCDEF01234567","trusted_publisher_store_added":true},"device":null,"event":"certificate_installed","level":"info","schema":"v1"}
 {"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskSCSI.inf"},"device":"YumeDiskSCSI","event":"package_present","level":"info","schema":"v1"}
 {"data":{"instance_id":"ROOT\\YUMEDISKSCSI\\0000","instance_count":2,"duplicate_count":1},"device":"YumeDiskSCSI","event":"device_kept","level":"info","schema":"v1"}
 {"data":{"instance_id":"ROOT\\YUMEDISKSCSI\\0001","need_reboot":false},"device":"YumeDiskSCSI","event":"device_removed","level":"info","schema":"v1"}
@@ -128,6 +147,7 @@ devtidy.exe uninstall --package-root C:\work\devtidy-bundle
 {"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskSCSI.inf","need_reboot":false},"device":"YumeDiskSCSI","event":"package_uninstalled","level":"info","schema":"v1"}
 {"data":{"instance_id":"ROOT\\YUMEDISKKMDF\\0000","need_reboot":false},"device":"YumeDiskKMDF","event":"device_removed","level":"info","schema":"v1"}
 {"data":{"source_inf":"C:\\work\\devtidy-bundle\\YumeDiskKMDF\\YumeDiskKMDF.inf","need_reboot":false},"device":"YumeDiskKMDF","event":"package_uninstalled","level":"info","schema":"v1"}
+{"data":{"certificate_path":"C:\\work\\devtidy-bundle\\YumeDiskSCSI\\YumeDiskRoot.cer","root_store_removed":true,"subject":"YumeDisk Driver Test Root","thumbprint":"0123456789ABCDEF0123456789ABCDEF01234567","trusted_publisher_store_removed":true},"device":null,"event":"certificate_removed","level":"info","schema":"v1"}
 {"data":{"ok":true},"device":null,"event":"summary","level":"info","schema":"v1"}
 ```
 

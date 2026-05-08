@@ -28,6 +28,7 @@ add_executable(
 target_link_libraries(
     devtidy
     PRIVATE
+    crypt32
     jsoncpp_static
     newdev
     setupapi
