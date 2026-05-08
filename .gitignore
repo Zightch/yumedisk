@@ -17,3 +17,5 @@ jsoncpp/
 !docs/tmp/
 docs/tmp/*
 !docs/tmp/todo.md
+
+**/env.cmake
