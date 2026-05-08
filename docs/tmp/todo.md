@@ -65,31 +65,7 @@
 
 ## 4. 子步骤
 
-### Step 1. 接入最小后端宿主
-
-目标：
-
-- 从 `windows/TestApp/src` 收进客户端当前真正需要的宿主能力：
-  - `types`
-  - `config`
-  - `media`
-  - `runtime`
-- 接入宿主侧共享扫描静态库，承接：
-  - `visible_path`
-  - `PhysicalDriveX`
-  - 设备身份匹配
-- 保留 `BackendContext + ManagedDisk` 主线，不额外抽象新壳。
-- 删掉 `RunCommandLoop`，保留 `RunEventLoop` 和宿主核心运行语义。
-- 打通 `AkOpen -> 事件线程 -> RemoveAllManagedDisks -> AkClose` 生命周期。
-
-完成定义：
-
-- 客户端后端已经成为真正的 `AppKernel` 宿主。
-- 可见盘枚举能力仍在宿主层，但不再散落在各个宿主工程里重复维护。
-- `CLI` 命令循环不再是运行前提。
-- 显式退出时能完成最小资源收口。
-
-### Step 2. 暴露 GUI 可调用后端接口
+### Step 1. 暴露 GUI 可调用后端接口
 
 目标：
 
@@ -110,7 +86,7 @@
 - 后端能力已经具备稳定调用面。
 - 客户端状态真相仍只在后端。
 
-### Step 3. 完成最小 UI 闭环
+### Step 2. 完成最小 UI 闭环
 
 目标：
 
@@ -135,7 +111,7 @@
 - 用户无需命令行即可完成核心操作。
 - `UI` 已经成为最小可用桌面入口，而不是示例窗口。
 
-### Step 4. 完成最小闭环验收
+### Step 3. 完成最小闭环验收
 
 目标：
 
@@ -173,4 +149,4 @@
 
 当前唯一下一步：
 
-- 从 `windows/TestApp/src` 向 `windows/client/backend/` 收进最小宿主后端主线：先落 `types / config / media / runtime` 所需代码和 `AkOpen -> 事件线程 -> RemoveAllManagedDisks -> AkClose` 生命周期，不接着做 GUI 交互封装，也不扩额外层级。
+- 把 `windows/client/backend/` 当前已接入的宿主能力整理成 `UI` 可直接调用的方法面：先落 `QuerySessionState / SnapshotManagedDisks / CreateManagedDisk / RemoveManagedDisk / RemoveAllManagedDisks / QueryBackendStats / QueryDebugSnapshot` 与统一日志读取入口，不接着改主窗口交互，不扩额外层级。

@@ -1,28 +1,43 @@
 #include "backend.h"
 
-#include <appkernel.h>
+#include "runtime.h"
 
-#include <QLatin1Char>
+#include <QString>
 
 namespace {
 
-QString FormatVersionBe(unsigned int versionBe) {
-    return QStringLiteral("0x%1")
-        .arg(versionBe, 8, 16, QLatin1Char('0'))
-        .toUpper();
+QString fromWide(
+    const std::wstring& text)
+{
+    return QString::fromWCharArray(text.c_str(), (int)text.size());
 }
 
 }  // namespace
 
+Backend::Backend()
+    : context(std::make_unique<clientbackend::BackendContext>())
+{
+    (void)clientbackend::openBackendContext(context.get());
+}
+
+Backend::~Backend()
+{
+    clientbackend::closeBackendContext(context.get());
+}
+
 QString Backend::sessionStateText() const {
-    return QStringLiteral("未接入宿主后端");
+    return fromWide(clientbackend::querySessionStateText(context.get()));
 }
 
 QStringList Backend::initialLogLines() const {
-    return {
-        QStringLiteral("[shell] client window ready"),
-        QStringLiteral("[shell] AppKernel SDK ready, version %1")
-            .arg(FormatVersionBe(AK_VERSION_BE)),
-        QStringLiteral("[shell] waiting for minimal backend host integration"),
-    };
+    QStringList lines;
+
+    for (const auto& line : clientbackend::snapshotLogLines(context.get())) {
+        lines.push_back(fromWide(line));
+    }
+
+    if (lines.isEmpty()) {
+        lines.push_back(QStringLiteral("[backend] no logs"));
+    }
+    return lines;
 }

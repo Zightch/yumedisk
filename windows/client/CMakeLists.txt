@@ -28,8 +28,15 @@ qt_standard_project_setup()
 qt_add_executable(
         client
         main.cpp
+        backend/config.cpp
+        backend/config.h
         backend/backend.cpp
         backend/backend.h
+        backend/media.cpp
+        backend/media.h
+        backend/runtime.cpp
+        backend/runtime.h
+        backend/types.h
         widget/widget.cpp
         widget/widget.h
         widget/widget.ui
@@ -48,6 +55,14 @@ target_link_libraries(
         scan
         Qt::Core
         Qt::Widgets
+)
+
+add_custom_command(
+        TARGET client
+        POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:AppKernel>
+        $<TARGET_FILE_DIR:client>
 )
 
 set_target_properties(client PROPERTIES WIN32_EXECUTABLE TRUE)
