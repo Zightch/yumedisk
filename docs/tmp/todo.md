@@ -190,4 +190,4 @@
 
 当前唯一下一步：
 
-- 先收紧 `windows/client` 工程骨架：去掉示例 `Widget` 命名，拆出清晰的入口、UI 和后端承接位置，为下一步接入最小宿主后端做准备。
+- 先收紧 `windows/client` 工程骨架：去掉示例 `Widget` 命名，并按 `tests/README.md` 约定补上稳定的主窗口与关键控件 `accessibleName` 承接位，为下一步接入最小宿主后端做准备。
