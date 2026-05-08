@@ -1,7 +1,7 @@
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <SkipPackageVerification Condition="'$(SkipPackageVerification)' == ''">true</SkipPackageVerification>
-    <YumeDriverSigningSubjectName Condition="'$(YumeDriverSigningSubjectName)' == ''">CN=YumeDisk Driver Test Root</YumeDriverSigningSubjectName>
+    <YumeDriverSigningSubjectName Condition="'$(YumeDriverSigningSubjectName)' == ''">CN=YumeDisk Driver Root</YumeDriverSigningSubjectName>
     <YumeDriverSigningCertFileName Condition="'$(YumeDriverSigningCertFileName)' == ''">YumeDiskRoot.cer</YumeDriverSigningCertFileName>
     <YumeDriverSigningScript Condition="'$(YumeDriverSigningScript)' == ''">$(MSBuildThisFileDirectory)YumeDriverSelfSign.ps1</YumeDriverSigningScript>
     <YumeDriverCertificateOutputPath Condition="'$(YumeDriverCertificateOutputPath)' == ''">$(OutDir)$(YumeDriverSigningCertFileName)</YumeDriverCertificateOutputPath>

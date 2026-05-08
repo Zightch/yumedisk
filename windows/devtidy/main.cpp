@@ -46,6 +46,11 @@ struct CertificateSpec {
     std::wstring thumbprint;
 };
 
+enum class CertificateMode {
+    SelfSigned,
+    Release
+};
+
 enum class RunMode {
     Install,
     Uninstall
@@ -122,6 +127,15 @@ static Json::Value JsonText(const std::wstring& value) {
 
 static Json::Value JsonText(const wchar_t* value) {
     return Json::Value(WideToUtf8(value));
+}
+
+static Json::Value JsonTextArray(const std::vector<std::wstring>& values) {
+    Json::Value array(Json::arrayValue);
+    for (const std::wstring& value : values) {
+        array.append(WideToUtf8(value));
+    }
+
+    return array;
 }
 
 static Json::Value JsonUint(DWORD value) {
@@ -476,6 +490,8 @@ static bool TryFindSinglePackageFile(
     const char* notFoundEvent,
     const char* multipleFoundEvent,
     const char* fileKind,
+    bool allowMissing,
+    bool* found,
     fs::path* filePath
 ) {
     const fs::path packageDir = packageRoot / spec.packageDirName;
@@ -517,6 +533,13 @@ static bool TryFindSinglePackageFile(
 
     std::sort(files.begin(), files.end());
     if (files.empty()) {
+        if (found != nullptr) {
+            *found = false;
+        }
+        if (allowMissing) {
+            return true;
+        }
+
         WriteErrorDeviceEvent(
             notFoundEvent,
             spec.name,
@@ -542,6 +565,9 @@ static bool TryFindSinglePackageFile(
         return false;
     }
 
+    if (found != nullptr) {
+        *found = true;
+    }
     *filePath = files.front();
     return true;
 }
@@ -558,12 +584,15 @@ static bool TryFindSingleInfPath(
         "inf_not_found",
         "multiple_inf_found",
         "inf",
+        false,
+        nullptr,
         infPath);
 }
 
-static bool TryFindSingleCertificatePath(
+static bool TryFindOptionalSingleCertificatePath(
     const DeviceSpec& spec,
     const fs::path& packageRoot,
+    bool* found,
     fs::path* certificatePath
 ) {
     return TryFindSinglePackageFile(
@@ -573,6 +602,8 @@ static bool TryFindSingleCertificatePath(
         "certificate_not_found",
         "multiple_certificate_found",
         "certificate",
+        true,
+        found,
         certificatePath);
 }
 
@@ -685,16 +716,31 @@ static bool LoadCertificateSpec(
 
 static bool CollectPackageCertificates(
     const fs::path& packageRoot,
+    CertificateMode* mode,
     std::vector<CertificateSpec>* certificates
 ) {
     bool ok = true;
+    size_t packagesWithCertificates = 0;
+    size_t packagesWithoutCertificates = 0;
+    std::vector<std::wstring> packageDirsWithCertificates;
+    std::vector<std::wstring> packageDirsWithoutCertificates;
+    certificates->clear();
 
     for (const DeviceSpec& spec : kDeviceSpecs) {
         fs::path certificatePath;
-        if (!TryFindSingleCertificatePath(spec, packageRoot, &certificatePath)) {
+        bool found = false;
+        if (!TryFindOptionalSingleCertificatePath(spec, packageRoot, &found, &certificatePath)) {
             ok = false;
             continue;
         }
+        if (!found) {
+            ++packagesWithoutCertificates;
+            packageDirsWithoutCertificates.push_back(spec.packageDirName);
+            continue;
+        }
+
+        ++packagesWithCertificates;
+        packageDirsWithCertificates.push_back(spec.packageDirName);
 
         CertificateSpec certificate;
         std::wstring errorMessage;
@@ -721,7 +767,41 @@ static bool CollectPackageCertificates(
         }
     }
 
-    return ok && !certificates->empty();
+    if (!ok) {
+        return false;
+    }
+
+    if (packagesWithCertificates != 0 && packagesWithoutCertificates != 0) {
+        WriteErrorEvent(
+            "certificate_mode_mismatch",
+            JsonObject({
+                {"package_dirs_with_certificate", JsonTextArray(packageDirsWithCertificates)},
+                {"package_dirs_without_certificate", JsonTextArray(packageDirsWithoutCertificates)}
+            }));
+        return false;
+    }
+
+    if (packagesWithCertificates == 0) {
+        *mode = CertificateMode::Release;
+        WriteInfoEvent(
+            "certificate_mode",
+            JsonObject({
+                {"mode", JsonText("release")},
+                {"package_count", JsonSize(ARRAYSIZE(kDeviceSpecs))},
+                {"certificate_count", JsonSize(0)}
+            }));
+        return true;
+    }
+
+    *mode = CertificateMode::SelfSigned;
+    WriteInfoEvent(
+        "certificate_mode",
+        JsonObject({
+            {"mode", JsonText("self_signed")},
+            {"package_count", JsonSize(ARRAYSIZE(kDeviceSpecs))},
+            {"certificate_count", JsonSize(certificates->size())}
+        }));
+    return !certificates->empty();
 }
 
 static std::unique_ptr<const CERT_CONTEXT, decltype(&CertFreeCertificateContext)>
@@ -1331,11 +1411,12 @@ static bool UninstallDriverPackage(const DeviceSpec& spec, const fs::path& infPa
 }
 
 static bool RunInstall(const fs::path& packageRoot) {
+    CertificateMode certificateMode = CertificateMode::Release;
     std::vector<CertificateSpec> certificates;
-    if (!CollectPackageCertificates(packageRoot, &certificates)) {
+    if (!CollectPackageCertificates(packageRoot, &certificateMode, &certificates)) {
         return false;
     }
-    if (!InstallCertificates(certificates)) {
+    if (certificateMode == CertificateMode::SelfSigned && !InstallCertificates(certificates)) {
         return false;
     }
 
@@ -1362,10 +1443,14 @@ static bool RunInstall(const fs::path& packageRoot) {
 }
 
 static bool RunUninstall(const fs::path& packageRoot) {
+    CertificateMode certificateMode = CertificateMode::Release;
     std::vector<CertificateSpec> certificates;
-    const bool haveCertificates = CollectPackageCertificates(packageRoot, &certificates);
+    const bool haveCertificateLayout = CollectPackageCertificates(
+        packageRoot,
+        &certificateMode,
+        &certificates);
     bool ok = true;
-    if (!haveCertificates) {
+    if (!haveCertificateLayout) {
         ok = false;
     }
 
@@ -1385,7 +1470,9 @@ static bool RunUninstall(const fs::path& packageRoot) {
         }
     }
 
-    if (haveCertificates && !RemoveCertificates(certificates)) {
+    if (haveCertificateLayout &&
+        certificateMode == CertificateMode::SelfSigned &&
+        !RemoveCertificates(certificates)) {
         ok = false;
     }
 
