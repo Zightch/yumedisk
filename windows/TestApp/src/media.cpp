@@ -1,5 +1,7 @@
 #include "media.h"
 
+#include <WinIoCtl.h>
+
 #include <algorithm>
 #include <cstring>
 #include <exception>

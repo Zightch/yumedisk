@@ -1,489 +1,193 @@
-# AppKernel 重建 Todo
+# YumeDisk Client 最小闭环 Todo
 
-本文档用于收束 `windows/AppKernel` 子项目的实现步骤。当前任务不是在 `RWTestApp` 现有数据面上继续打补丁，而是按照 [开发原则](../development-principles.md) 直接重建唯一正确实现。
-
-同时，当前 `todo` 既要保留完整执行细节，也要明确当前阶段、固定边界和当前唯一下一步，避免为了“收口”把关键约束删掉。
+本文档只保留当前轮未完成执行项。历史完成事实与验收结果请归档到 [../progress/README.md](../progress/README.md) 对应日期文件。
 
 ## 1. 执行口径
 
-本轮工作必须同时满足以下原则：
+本轮工作固定遵守以下口径：
 
-- `极简核心原则`：先打通 `AppKernel -> KMDF -> SCSI` 的最小可编译闭环，再补充宿主接入和调试能力。
-- `激进更新原则`：不保留“`RWTestApp` 旧数据面”和“`AppKernel` 新数据面”长期双轨；新路径能承接后，旧路径直接删除。
-- `单一真实来源原则`：`KMDF session`、per-disk runtime、slot/ACK/event 状态只能归 `AppKernel` 持有；介质、暂存层和 overlay 读视图只能归业务宿主持有。
-- `边界闸口原则`：参数校验、协议校验、生命周期校验全部收在 `AppKernel` 边界入口，内部 worker 不重复散落兜底。
-- `结构重构与层次依赖原则`：按“公开 API / session / disk runtime / protocol transport / event finalize”分层，不允许继续把线程、介质、CLI、设备收敛揉进一个文件。
-- `删除优先原则`：凡是已经和 `AppKernel` 正式方案冲突的旧数据面结构，后续切换时直接删除，不保留兼容桥。
-- `测试覆盖原则`：每一步至少保证编译通过；接入宿主后再按真实风险补并发、取消、关闭、late ACK、QD 压测验证。
-- `文档跟随实现原则`：实现边界一旦变化，同步回写正式文档和 `progress`，不保留历史草案描述。
+- `极简核心原则`：当前任务本质上只是把 `TestApp` 从 `CLI` 升级为 `UI` 客户端，不额外引入不必要结构。
+- `激进更新原则`：客户端新路径一旦能承接，就直接删除 `Widget` 示例壳和旧 `CLI` 交互壳，不保留双轨。
+- `单一真实来源原则`：session 状态只归后端宿主持有，单盘状态只归 `ManagedDisk` 持有，`UI` 不维护第二份真状态。
+- `边界闸口原则`：参数校验、建盘参数组合、退出流程和 `AppKernel` 生命周期都收在唯一入口，不散落到控件回调里。
+- `文档跟随实现原则`：每完成一个子步骤，先归档到 `docs/progress/*.md`，再重写当前 `todo`。
 
-## 2. 当前目标
+当前路线固定为：
+
+1. 先以功能目标为核心收口；
+2. 再整理 `AppKernel` 接入调用面；
+3. 最后补 `UI` 完整度和交互体验。
+
+## 2. 当前总目标
 
 当前唯一总目标：
 
-- 落成 `windows/AppKernel` 纯 `C` DLL 子项目。
-- 让 `AppKernel` 成为唯一用户态数据面内核。
-- 为后续把 `RWTestApp` 收缩成“宿主控制层 + 介质层”做好结构承接。
-- 从第一天起保证 `MSVC` / `MinGW` 两种工具链兼容。
-- 同步产出 `AppKernel SDK` 文档。
+- 完成 `windows/client` 的客户端最小闭环。
 
-当前明确不做：
+这里的“最小闭环”固定指：
 
-- 不做 `C/C++` 双实现。
-- 不做旧接口兼容层。
-- 不做业务层抽象扩展点。
-- 不在 `RWTestApp` 旧数据面上继续叠功能。
+- 用户不再依赖 `CLI`；
+- 客户端能作为本地桌面程序常驻运行；
+- 客户端能完成最小核心操作：
+  - 查看 `AppKernel session` 状态；
+  - 创建磁盘；
+  - 删除磁盘；
+  - 查看当前受管磁盘列表；
+  - 查看关键日志；
+  - 显式退出并完成删盘、关 session 收口。
 
-## 3. 当前阶段与固定边界
+## 3. 当前轮边界
 
-### 3.1 当前阶段
+本轮实现边界固定如下：
 
-当前已经完成的基础：
+- 基于现有 `windows/client` Qt Widgets 空壳推进，不另起新工程。
+- 底层继续复用当前真实链路：
+  - `AppKernel`
+  - `YumeDiskKMDF`
+  - `YumeDiskSCSI`
+  - 宿主侧 `read_bytes / stage_write / commit / reject`
+- 当前后端继续只保留两个核心对象：
+  - `BackendContext`
+  - `ManagedDisk`
+- 可见盘枚举继续留在宿主控制层，不下沉到 `AppKernel`。
+- 为避免 `TestApp` 和 `client` 各自复制扫描逻辑，设备可见性扫描收敛为宿主侧共享静态库。
+- 当前不引入：
+  - `YumeAgent`
+  - 本地 `IPC`
+  - 独立后台服务进程
+  - 额外 `runtime/store/viewmodel` 层级树
+- `UI` 只负责操作面和展示面，不直接碰 `AK_SESSION`、`AK_DISK`。
+- 当前本地介质支持范围不退化，至少承接：
+  - 稠密内存盘
+  - 稀疏内存盘
+  - `raw` 文件盘
+- 当前不改正式文档，只推进 `docs/tmp/todo.md` 和 `docs/progress/*.md`。
 
-- `Step 1` 的 DLL 工程骨架已经落地。
-- `include/appkernel.h` 已经固定 `AK_*` / `Ak*` 的公开 `C ABI` 边界。
-- `src/common`、`src/session`、`src/disk`、`src/protocol`、`src/event` 已经建好分层骨架。
-- `MSVC` / `MinGW` 双工具链的 DLL 编译已经实际通过。
+## 4. 子步骤
 
-当前还没有完成的真实能力：
-
-- 还没有真正打开 `KMDF control device`。
-- 还没有真正拿到 `SessionId`。
-- 还没有 heartbeat 线程。
-- 还没有真实事件队列。
-- 还没有真实协议 transport。
-- 还没有真实 per-disk runtime。
-
-### 3.2 固定边界
-
-以下边界在本轮实现中固定，不允许回退：
-
-- `AppKernel` 必须继承当前 `RWTestApp` 已验证通过的多盘并发模型，不回退到旧的单盘 `Q` 队列模型。
-- 多盘模型的含义是：
-  - 每个盘有自己独立的 runtime。
-  - 每个盘有自己独立的 `read workers`、`write workers`、`write ACK flush worker`。
-  - 每个盘有自己独立的 slot 深度、pending 状态、统计和生命周期。
-  - 多盘之间应是完全并发，而不是共享一套“全局单盘调度核心”后再在外面挂多个盘。
-- 不允许回退成旧模型的任何变体：
-  - 不允许回退成“单盘 + 全局 `Q` 读 / `Q` 写队列”的数据面核心。
-  - 不允许回退成“多盘只是复用同一套单盘调度器轮流跑”的伪多盘结构。
-  - 不允许为了暂时压 `CPU` 或回避并发问题，把多盘模型拆回单盘中心模型。
-- 当前写路径边界继续保持：
-  - `POST_WRITE_SLOT`
-  - `stage_write`
-  - `WRITE_ACK_BATCH`
-  - `AkEventWriteFinalCommitted / AkEventWriteFinalRejected`
-- 当前取消边界继续保持：
-  - 系统侧取消只追到 `SCSI`。
-  - `AppKernel` 不新增一条全链路取消协议。
-  - 业务宿主只根据最终事件决定 `commit` 或 `discard`。
-
-## 4. 分步 Todo
-
-### Step 1. 建立 AppKernel 子项目骨架
-
-状态：
-
-- 已完成。
+### Step 1. 收紧客户端工程骨架
 
 目标：
 
-- 新建 `windows/AppKernel` 的 `CMakeLists.txt`。
-- 建立公开头文件 `include/appkernel.h`。
-- 固定 DLL 导出边界和 `C ABI`。
-- 固定 `MSVC` / `MinGW` 兼容的导出宏、调用约定和类型口径。
-- 建立内部目录分层：
-  - `src/common`
-  - `src/session`
-  - `src/disk`
-  - `src/protocol`
-  - `src/event`
-- 先把 opaque handle、公共结构、状态结构、统计结构、错误返回口径固定下来。
+- 把 `windows/client` 从 `Widget` 示例工程收紧成最小客户端骨架。
+- 去掉示例命名，形成清晰的入口、`UI` 层和后端层。
+- 让 `CMake` 能先同时链接：
+  - `Qt Widgets`
+  - `AppKernel`
+- `scan` 共享静态库已完成接线；这一步只处理客户端工程骨架本身。
 
 完成定义：
 
-- `AppKernel` 能以 DLL 方式参与编译。
-- 公开 API 名称、前缀、结构体边界全部收束为 `AK_*` / `Ak*`。
-- 不引入第二套 `C++` 包装导出层。
-- 公开头和导出符号在 `MSVC` / `MinGW` 下都成立。
-- 不把宿主介质结构、CLI 结构、SetupAPI 设备收敛逻辑带进 `AppKernel`。
+- 客户端工程不再停留在默认示例壳。
+- 工程结构已经能承接真实后端宿主代码。
+- 编译依赖方向收口正确，不再需要后续大搬家。
 
-### Step 2. 实现 session 层最小闭环
-
-状态：
-
-- 已完成。
+### Step 2. 接入最小后端宿主
 
 目标：
 
-- 落 `AkOpen` / `AkClose` / `AkQuerySessionState` / `AkQuerySessionStats`。
-- 把 `OpenFirstDeviceInterface`、`QuerySessionId`、`SendHeartbeat` 这一组 `KMDF session` 能力抽到 `AppKernel`。
-- 建立 session-owned heartbeat 线程、stop event、基础日志入口。
-- 固定 `session open -> query info -> query session id -> heartbeat ready` 的启动顺序。
-- 固定 `close -> stop heartbeat -> close handles -> release session object` 的关闭顺序。
+- 从 `windows/TestApp/src` 收进客户端当前真正需要的宿主能力：
+  - `types`
+  - `config`
+  - `media`
+  - `runtime`
+- 接入宿主侧共享扫描静态库，承接：
+  - `visible_path`
+  - `PhysicalDriveX`
+  - 设备身份匹配
+- 保留 `BackendContext + ManagedDisk` 主线，不额外抽象新壳。
+- 删掉 `RunCommandLoop`，保留 `RunEventLoop` 和宿主核心运行语义。
+- 打通 `AkOpen -> 事件线程 -> RemoveAllManagedDisks -> AkClose` 生命周期。
 
 完成定义：
 
-- `AkOpen` 后可以得到有效 `SessionId`。
-- `AkClose` 返回后不再有 session 级后台线程存活。
-- 生命周期状态只在 session 内维护，不向宿主复制一份镜像状态。
-- `LogFn` 能覆盖 session open/close/heartbeat 的关键路径。
+- 客户端后端已经成为真正的 `AppKernel` 宿主。
+- 可见盘枚举能力仍在宿主层，但不再散落在各个宿主工程里重复维护。
+- `CLI` 命令循环不再是运行前提。
+- 显式退出时能完成最小资源收口。
 
-当前实现收口：
-
-- `AkOpen` 已经完成：
-  - `KMDF control device` 打开
-  - `QUERY_INFO`
-  - `SessionId` 获取
-  - 初次 heartbeat
-  - session-owned heartbeat 线程启动
-- `AkClose` 已经完成：
-  - stop event 置位
-  - heartbeat 线程退出等待
-  - `REMOVE_ALL_DISKS + SESSION_CLOSE_FLAG`
-  - control handle / thread handle / stop event 释放
-- `AkQuerySessionState` / `AkQuerySessionStats` 已可返回真实 session 状态和计数
-- `AkRemoveAllDisks` 已接入真实短命令路径
-- `MSVC` / `MinGW` 双工具链编译已重新通过
-
-### Step 3. 实现 session 级事件队列
-
-状态：
-
-- 已完成。
+### Step 3. 暴露 GUI 可调用后端接口
 
 目标：
 
-- 落 `AkWaitEvent` / `AkPollEvent`。
-- 建立 growable FIFO 事件队列和 wait primitive。
-- 先支持：
-  - `AkEventDiskOnline`
-  - `AkEventDiskRemoved`
-  - `AkEventSessionBroken`
-  - `AkEventWriteFinalCommitted`
-  - `AkEventWriteFinalRejected`
+- 把当前命令式能力收成 `UI` 可直接调用的方法：
+  - `QuerySessionState`
+  - `SnapshotManagedDisks`
+  - `CreateManagedDisk`
+  - `RemoveManagedDisk`
+  - `RemoveAllManagedDisks`
+  - `QueryBackendStats`
+  - `QueryDebugSnapshot`
+- 收一个统一日志入口给 `UI` 展示。
+- 保证 `UI` 读取状态而不复制状态。
 
 完成定义：
 
-- 事件队列成为写最终裁决和生命周期通知的唯一出口。
-- 如果事件无法保留，session 进入 `Broken`，而不是静默丢事件。
-- 宿主不需要再额外维护一套写完成回调链。
+- `UI` 不需要自己解释 `AppKernel` 细节。
+- 后端能力已经具备稳定调用面。
+- 客户端状态真相仍只在后端。
 
-当前实现收口：
-
-- `AkWaitEvent` / `AkPollEvent` 已经接入真实 session 级事件 FIFO。
-- 事件队列已按 `InitialEventQueueCapacity` 初始化，并支持 growable 扩容。
-- wait primitive 已经落地；`AkWaitEvent` 超时返回 `AK_STATUS_TIMEOUT`，`AkPollEvent` 无事件返回 `AK_STATUS_NO_MORE_ENTRIES`。
-- `SessionBroken` 已经具备一次性事件注入路径。
-- 事件保留失败时会把 session 置为 `Broken`，不静默丢弃。
-
-### Step 4. 实现协议基础层
-
-状态：
-
-- 已完成。
+### Step 4. 完成最小 UI 闭环
 
 目标：
 
-- 把 `DeviceIoControl` / overlapped 发送、完成、同步短命令封装收进 `AppKernel`。
-- 建立 `QUERY_INFO`、`CREATE_DISK`、`REMOVE_DISK`、`REMOVE_ALL_DISKS`、`QUERY_DEBUG_STATE` 的短命令路径。
-- 建立 `POST_READ_SLOT`、`POST_WRITE_SLOT`、`READ_ACK`、`WRITE_ACK_BATCH` 的异步基础设施。
-- 固定同步短命令和异步 slot transport 的内部职责边界，避免后续再混成一锅。
+- 落一个最小主窗口，至少包含：
+  - session 状态区
+  - 磁盘列表
+  - 建盘按钮
+  - 删盘按钮
+  - 日志面板
+- 落一个最小建盘对话框，至少支持：
+  - 容量
+  - 介质模式
+  - 只读开关
+  - `target id`
+- 承接现有托盘常驻行为：
+  - 关主窗口隐藏
+  - 托盘打开主窗口
+  - 托盘退出客户端
 
 完成定义：
 
-- 协议收口只留一套 `AppKernel` 内部实现。
-- 宿主不再自己直通 `DeviceIoControl` 操作这些数据面命令。
-- 后续多盘 runtime 只调 `AppKernel` 内部 transport，不再各盘各自拼 `IOCTL`。
+- 用户无需命令行即可完成核心操作。
+- `UI` 已经成为最小可用桌面入口，而不是示例窗口。
 
-当前实现收口：
-
-- 同步短命令已经统一收进 `protocol` 层：
-  - `QUERY_INFO`
-  - `CREATE_DISK`
-  - `REMOVE_DISK`
-  - `REMOVE_ALL_DISKS`
-  - `QUERY_DEBUG_STATE`
-  - `CANCEL_SLOT`
-- 异步基础设施已经落地：
-  - `AK_PROTOCOL_ASYNC_IO`
-  - `begin / wait / finish / cancel`
-- slot wire-format 组包已经开始统一收口：
-  - `POST_READ_SLOT`
-  - `POST_WRITE_SLOT`
-  - `READ_ACK`
-  - `WRITE_ACK_BATCH`
-- `disk runtime` 下一步只需调用 protocol transport，不再自己拼 `OVERLAPPED + DeviceIoControl + payload`。
-
-### Step 5. 实现 per-disk runtime 骨架
-
-状态：
-
-- 已完成骨架闭环；下一步进入读路径接入。
+### Step 5. 完成最小闭环验收
 
 目标：
 
-- 落 `AkCreateDisk` / `AkRemoveDisk` / `AkQueryDiskState` / `AkQueryDiskStats`。
-- 建立 per-disk runtime、read workers、write workers、ack flush worker。
-- 固定建盘顺序：
-  1. 创建 runtime
-  2. 启动 worker
-  3. 先让 read slot 进入可用
-  4. 再发 `CREATE_DISK`
-- 把当前 `RWTestApp` 已验证通过的多盘模型原样迁入 `AppKernel`：
-  - 按盘持有 runtime
-  - 按盘持有 slot 深度
-  - 按盘持有 read/write/ack worker
-  - 按盘独立统计和生命周期
+- 至少完成一轮最小行为验收：
+  - 启动客户端
+  - 成功打开 `AppKernel session`
+  - 创建磁盘
+  - 列出受管磁盘和可见盘信息
+  - 删除磁盘
+  - 查看日志
+  - 显式退出客户端
+- 确认关闭主窗口不会直接退出进程。
+- 确认显式退出时会先删盘再关 session。
 
 完成定义：
 
-- 结构上彻底避免再回到“有设备无盘”的旧问题。
-- `QueueDepth` 明确按盘解释，不与其他盘共享。
-- 多盘完整并发成立，不回退到旧单盘 `Q` 队列模型。
+- 当前客户端已经形成真实最小闭环。
+- 可以在此基础上再继续做 UI 完善，而不是回头重建主干。
 
-当前实现收口：
+## 5. 验收标准
 
-- `AkCreateDisk` / `AkRemoveDisk` / `AkQueryDiskState` / `AkQueryDiskStats` 已接入真实实现，不再返回 `protocol unavailable`。
-- `session` 已持有 per-disk runtime 注册表，并分配 `DiskRuntimeId` 与按盘 `DiskCount`。
-- `disk runtime` 已具备独立对象边界：
-  - session 归属
-  - per-disk 锁
-  - stop event
-  - read worker 集合
-  - write worker 集合
-  - ack flusher worker
-  - per-disk 生命周期与统计快照
-- 建盘顺序已经按正式方案固定：
-  1. 创建 runtime
-  2. 启动 worker
-  3. 标记 read slot availability ready
-  4. 再发 `CREATE_DISK`
-- 删盘顺序已经形成最小收口：
-  1. 置为 removing
-  2. 停止该盘 worker
-  3. 发送 `REMOVE_DISK`
-  4. 注入 `DiskRemoved` 事件并回收 runtime
-- `AkClose` 已能连带销毁 session 下残留 disk runtime，避免 session 关闭后遗留后台线程或句柄。
-- 当前 worker 仍是占位骨架，只提供生命周期和并发结构；真实 `POST_READ_SLOT` / `POST_WRITE_SLOT` 数据面推进留在后续步骤。
+本轮总目标完成时，必须同时满足：
 
-### Step 6. 实现读路径
+- `windows/client` 已不再是默认 Qt 示例壳。
+- 客户端已真实链接并调用 `AppKernel`。
+- `UI` 可以查看 session、建盘、删盘、看盘、看日志。
+- 现有本地介质主线没有被 UI 化过程削弱。
+- 主窗口关闭仅隐藏到托盘，不直接退出。
+- 显式退出会完成 `RemoveAllManagedDisks -> AkClose` 收口。
+- 文档状态符合工作流：
+  - 已完成事实进入 `docs/progress/*.md`
+  - 当前未完成项只留在 `docs/tmp/todo.md`
 
-状态：
+## 6. 当前唯一下一步
 
-- 已完成最小真实读闭环。
+当前唯一下一步：
 
-目标：
-
-- `POST_READ_SLOT` 完成后，调用宿主 `read_bytes` 取得 overlay 后可见读视图。
-- 随后发 `READ_ACK`。
-- 读错误只影响单个事件，不放大成整盘失败。
-- 读路径继续按盘并发推进，不引入跨盘共享热点队列。
-
-完成定义：
-
-- `AppKernel` 不持有介质数据。
-- `read_bytes` 并发调用成立。
-- late ACK / stale ACK 仍交由 `SCSI` 最终判定。
-
-当前实现收口：
-
-- per-disk read worker 已从占位线程切换为真实 slot engine：
-  - 按 worker 持有独立 read slot context 集合
-  - 按 worker 持有独立 read ack context 集合
-  - worker 内循环推进 `POST_READ_SLOT -> read_bytes -> READ_ACK`
-- `POST_READ_SLOT` 已接入真实协议 transport：
-  - 使用 `protocol` 层统一组包
-  - 使用异步 `OVERLAPPED` wait/finish
-  - `TxId` 由 session 统一分配
-- 读事件校验已在 `AppKernel` 边界收口：
-  - `TargetId`
-  - `EventId`
-  - `DataLength`
-  - `BlockCount * SectorSize`
-- `read_bytes` 仍只处理单个读事件：
-  - 读错误只回写到单个 `READ_ACK`
-  - 不放大成整盘失败
-  - 不引入跨盘共享调度结构
-- 停止/关闭路径已形成最小 drain：
-  - stop 后不再投新 read slot
-  - 活跃 read slot 走 `CANCEL_SLOT`
-  - 活跃 `READ_ACK` 走 `CancelIoEx`
-- 当前仍未完成：
-  - 写路径
-  - 最终写裁决事件
-  - 宿主切换
-  - SDK 文档落地
-
-### Step 7. 实现写路径和最终裁决
-
-目标：
-
-- `POST_WRITE_SLOT` 完成后，调用宿主 `stage_write` 先写暂存层。
-- 然后发 `WRITE_ACK_BATCH`。
-- 在 `AppKernel` 内按 `EventId` 聚合整笔系统写的 finalize 状态。
-- 全部 accepted 才入队 `AkEventWriteFinalCommitted`。
-- 任一 fragment 最终 rejected 就入队 `AkEventWriteFinalRejected`。
-- 写路径也继续保持按盘并发，不引入全局串行 finalize 核心。
-
-完成定义：
-
-- 写路径严格收束为：
-  1. `stage_write`
-  2. `WRITE_ACK_BATCH`
-  3. 最终事件
-- 宿主只根据最终事件决定 `commit` 或 `discard`。
-- 不恢复 piggyback ACK，不增加第二套写完成通知模型。
-
-当前状态：
-
-- 已完成。
-- `AppKernel` 的 per-disk write worker 已从占位线程重建为真实 `POST_WRITE_SLOT` 运行时。
-- per-disk ack flusher 已从占位线程重建为真实 `WRITE_ACK_BATCH` flush worker。
-- 当前真实推进链路已经打通：
-  1. `POST_WRITE_SLOT`
-  2. 写事件校验
-  3. 调用宿主 `stage_write`
-  4. 入队单 fragment `WRITE_ACK_RANGE`
-  5. `WRITE_ACK_BATCH`
-  6. `EventId` 级最终事件
-- `EventId` 聚合规则已在 `AppKernel` 内收口：
-  - 全部 fragment 被 `SCSI` 接受后入队 `AkEventWriteFinalCommitted`
-  - 任一 fragment 被最终拒绝后入队 `AkEventWriteFinalRejected`
-- 取消/late ACK 边界保持不变：
-  - `AppKernel` 不上浮新的全链路取消协议
-  - stale / cancelled / not found 仍由 `SCSI` 在 `WRITE_ACK_BATCH` 返回时最终裁决
-- 为避免晚到 fragment 污染宿主 staging，`AppKernel` 现已缓存最近 finalize 的 `EventId`：
-  - 已 committed/rejected 的旧 `EventId` 再次晚到时，不再重新调用 `stage_write`
-  - 这保证宿主不会把已经提交或已经丢弃的 staged write 又建回来
-- 写错误边界保持不变：
-  - 单个 fragment 失败会让整笔系统写最终 rejected
-  - 不把单次写失败放大成整盘失败
-
-### Step 8. 宿主接入与旧路径删除
-
-目标：
-
-- 把 `RWTestApp` 改成 `AppKernel` 宿主。
-- 宿主只保留：
-  - 驱动安装/收敛
-  - 介质对象
-  - staging journal
-  - overlay read 视图
-  - CLI/压测辅助
-  - 可见盘枚举
-- 删除 `RWTestApp` 里旧的数据面线程、slot runtime、ACK flush、相关镜像统计。
-- 切换时要保证宿主语义不退化：
-  - 多盘并发模型保持不变
-  - 单盘 `Q1/Q2/Q8/Q32` 行为保持可承接
-  - 多盘同时压测的运行方式保持可承接
-
-完成定义：
-
-- `RWTestApp` 不再直接持有 `POST_*_SLOT` / `READ_ACK` / `WRITE_ACK_BATCH` 数据面实现。
-- 新旧双轨不存在。
-- `RWTestApp` 只是宿主，不再是另一套数据面内核。
-
-当前状态：
-
-- 已完成第一阶段主切换。
-- `RWTestApp` 已按 [开发原则](../development-principles.md) 直接删除旧数据面主干，不再保留：
-  - direct `POST_READ_SLOT` worker
-  - direct `POST_WRITE_SLOT` worker
-  - direct `WRITE_ACK_BATCH` flusher
-  - direct session heartbeat / slot cancel / transport 拼装逻辑
-- 当前 `RWTestApp` 已重建为 `AppKernel` 宿主：
-  - 打开 `AK_SESSION`
-  - 创建 `AK_DISK`
-  - 提供 `AK_MEDIA_OPS.read_bytes`
-  - 提供 `AK_MEDIA_OPS.stage_write`
-  - 消费 `AkWaitEvent`
-  - 对 `AkEventWriteFinalCommitted / Rejected` 做宿主侧 `commit / discard`
-- 宿主当前只保留：
-  - 内存介质
-  - staged write 记录
-  - overlay read 视图
-  - 可见盘枚举
-  - CLI
-- `RWTestApp` 的构建已直接链接 `AppKernel`，不再和旧数据面双轨并存。
-
-### Step 9. 编译与验证口径
-
-目标：
-
-- 每完成一个可闭环步骤就保证编译通过。
-- DLL 骨架阶段就至少验证一次 `MSVC` 构建和一次 `MinGW` 构建。
-- 接入宿主后再做最小验证闭环：
-  - `ct`
-  - 系统可见盘
-  - 基础读写
-  - `rm`
-  - `exit`
-- 之后再做高风险验证：
-  - `Q1/Q2/Q8/Q32`
-  - `Ctrl+C`
-  - session close
-  - late ACK
-  - 多盘并发
-  - 多盘同时压测下的吞吐与稳定性
-
-完成定义：
-
-- 当前阶段先以“编译通过 + 结构正确”为 gate。
-- 压测和取消验证放在宿主切换后统一收口。
-- 验证口径必须覆盖“单盘稳定”和“多盘模型未退化”两个维度。
-
-### Step 10. 编写 SDK 文档
-
-目标：
-
-- 在 `windows/AppKernel` 下补正式 `SDK` 文档。
-- 文档至少覆盖：
-  - DLL 交付内容
-  - 头文件与链接方式
-  - `MSVC` / `MinGW` 接入方式
-  - `AK_SESSION` / `AK_DISK` 生命周期
-  - `AK_MEDIA_OPS` 语义
-  - 事件消费模型
-  - 写暂存与最终裁决模型
-  - 状态与统计接口用途区别
-  - 常见错误码和调用约束
-- 给出最小宿主接入示例。
-- 明确写出多盘模型约束，避免后续宿主接入者误以为 `AppKernel` 是单盘核心外包一层多盘外壳。
-
-完成定义：
-
-- 宿主接入不需要回头翻 `AppKernel` 内部源码猜接口。
-- `SDK` 文档与导出头文件、实现、正式设计文档保持一致。
-
-## 5. 删除清单
-
-后续切换 `RWTestApp -> AppKernel` 时，以下旧结构必须进入删除范围：
-
-- `RWTestApp` 内现有 `ManagedDisk` 数据面 runtime。
-- `RWTestApp` 内现有 read/write worker 实现。
-- `RWTestApp` 内现有 write ACK flush worker。
-- `RWTestApp` 内现有 slot/ACK 统计和调试快照镜像状态。
-- 宿主直通 `DeviceIoControl` 的数据面命令路径。
-
-保留项只包括：
-
-- 驱动收敛。
-- 介质与暂存层。
-- overlay 读视图。
-- CLI。
-- 可见盘/`PhysicalDriveX` 枚举。
-
-## 6. 验收标准
-
-本轮 `todo` 收口后的最终验收标准：
-
-- `windows/AppKernel` 独立成型，能够单独参与构建。
-- `windows/AppKernel` 以 DLL + 公开头文件形式交付。
-- `windows/AppKernel` 同时附带可直接用于宿主接入的 `SDK` 文档。
-- `MSVC` / `MinGW` 都能完成构建和链接。
-- `AppKernel` 成为唯一用户态数据面内核。
-- 宿主和 `AppKernel` 的职责边界与正式设计文档一致。
-- 当前 `RWTestApp` 的多盘并发模型被完整迁入 `AppKernel`，而不是回退成旧单盘 `Q` 队列模型。
-- 旧数据面结构在切换完成后被删除，而不是挂着不用。
-- 文档、实现、`progress` 三者描述一致。
+- 先收紧 `windows/client` 工程骨架：去掉示例 `Widget` 命名，拆出清晰的入口、UI 和后端承接位置，为下一步接入最小宿主后端做准备。

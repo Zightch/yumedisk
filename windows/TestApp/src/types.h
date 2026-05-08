@@ -1,8 +1,6 @@
 #pragma once
 
 #include <Windows.h>
-#include <SetupAPI.h>
-#include <WinIoCtl.h>
 
 #include <atomic>
 #include <cstdint>
@@ -16,9 +14,12 @@
 #include <vector>
 
 #include "appkernel.h"
+#include "scan.h"
 #include "yumedisk_proto.h"
 
 namespace testapp {
+
+using yumedisk::scan::DiskIdentity;
 
 constexpr ULONG kDefaultSectorSize = 4096;
 constexpr size_t kDefaultQueueDepth = 32;
@@ -58,14 +59,6 @@ struct CreateDiskRequest {
     uint64_t DiskSizeBytes = 0;
     MediaMode RequestedMode = MediaMode::Auto;
     bool ReadOnly = false;
-};
-
-struct DiskIdentity {
-    std::wstring Path;
-    std::wstring Vendor;
-    std::wstring Product;
-    uint64_t LengthBytes = 0;
-    DWORD DeviceNumber = std::numeric_limits<DWORD>::max();
 };
 
 struct StagedFragment {

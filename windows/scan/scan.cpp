@@ -1,9 +1,13 @@
 #include "scan.h"
 
+#include <SetupAPI.h>
+#include <WinIoCtl.h>
+
 #include <algorithm>
 #include <cwctype>
+#include <vector>
 
-namespace testapp {
+namespace yumedisk::scan {
 
 namespace {
 
@@ -294,4 +298,4 @@ std::wstring MakePhysicalDrivePath(
     return LR"(\\.\PhysicalDrive)" + std::to_wstring(device_number);
 }
 
-} // namespace testapp
+} // namespace yumedisk::scan

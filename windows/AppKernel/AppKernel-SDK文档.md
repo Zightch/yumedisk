@@ -64,6 +64,12 @@
 3. `YumeDiskKMDF`
 4. `YumeDiskSCSI`
 
+补充固定约束：
+
+- `AppKernel` 不承接系统可见盘枚举。
+- `visible_path / PhysicalDriveX` 继续留在宿主控制层。
+- 如果多个宿主都需要这条能力，优先复用宿主侧共享静态库，而不是把该能力下沉到 `AppKernel`。
+
 ## 2. 交付物
 
 `AppKernel SDK` 的交付边界固定为：
@@ -71,6 +77,8 @@
 - `AppKernel.dll`
 - 对应 import library
 - 公开头文件 [include/appkernel.h](./include/appkernel.h)
+- 宿主侧可见盘扫描静态库 `scan`
+- 对应公开头文件 [windows/scan/scan.h](../scan/scan.h)
 - 本文档
 
 公开 ABI 约束固定为：
@@ -87,6 +95,8 @@
 - `MinGW`
 
 仓内最小接入方式可直接参考 [windows/TestApp/CMakeLists.txt](../TestApp/CMakeLists.txt)。
+
+如果宿主需要承接 `visible_path / PhysicalDriveX` 刷新，仓内推荐直接链接 `scan`，不要在每个宿主工程里各自复制一份 `SetupAPI` 枚举实现。
 
 ## 3. 当前版本规则
 
@@ -124,13 +134,14 @@
 宿主的最小接入顺序固定为：
 
 1. 准备日志函数 `AK_LOG_FN`。
-2. 调用 `AkOpen` 打开 session。
-3. 启动一个专门的事件消费线程，持续 `AkWaitEvent` 或 `AkPollEvent`。
-4. 为每个盘准备自己的 `media_ctx` 和 `AK_MEDIA_OPS`。
-5. 调用 `AkCreateDisk` 建盘。
-6. 收到 `AkEventDiskOnline` 后，再做可见盘路径刷新或压测。
-7. 收到 `AkEventWriteFinalCommitted / AkEventWriteFinalRejected` 后，分别做提交或丢弃。
-8. 退出时先 `AkRemoveDisk`，最后 `AkClose`。
+2. 如果需要系统可见盘刷新，接入宿主侧扫描静态库 `scan`。
+3. 调用 `AkOpen` 打开 session。
+4. 启动一个专门的事件消费线程，持续 `AkWaitEvent` 或 `AkPollEvent`。
+5. 为每个盘准备自己的 `media_ctx` 和 `AK_MEDIA_OPS`。
+6. 调用 `AkCreateDisk` 建盘。
+7. 收到 `AkEventDiskOnline` 后，再做可见盘路径刷新或压测。
+8. 收到 `AkEventWriteFinalCommitted / AkEventWriteFinalRejected` 后，分别做提交或丢弃。
+9. 退出时先 `AkRemoveDisk`，最后 `AkClose`。
 
 不要把事件消费做成“有空再看”的附属逻辑。对写路径来说，最终事件是正确性链路的一部分。
 
@@ -1016,6 +1027,31 @@ for (;;) {
 - [windows/TestApp/src/main.cpp](../TestApp/src/main.cpp)
 - [windows/TestApp/src/runtime.cpp](../TestApp/src/runtime.cpp)
 - [windows/TestApp/src/media.cpp](../TestApp/src/media.cpp)
+- [windows/scan/scan.h](../scan/scan.h)
+- [windows/scan/scan.cpp](../scan/scan.cpp)
+
+宿主侧可见盘扫描推荐调用面：
+
+```cpp
+#include "scan.h"
+
+using yumedisk::scan::DiskIdentity;
+using yumedisk::scan::EnumerateVisibleYumeDisks;
+using yumedisk::scan::MakePhysicalDrivePath;
+```
+
+`scan` 静态库的职责固定为：
+
+- 枚举 `GUID_DEVINTERFACE_DISK`
+- 读取系统当前可见盘的 `Vendor / Product / DeviceNumber / LengthBytes`
+- 为宿主提供 `visible_path / PhysicalDriveX` 绑定所需的最小信息
+
+`scan` 静态库不负责：
+
+- `AppKernel` session 生命周期
+- 盘 runtime 生命周期
+- 写最终裁决
+- staged write 管理
 
 ## 14. 宿主接入检查清单
 

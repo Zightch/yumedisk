@@ -11,13 +11,17 @@ add_subdirectory(
     ${CMAKE_CURRENT_BINARY_DIR}/AppKernel
 )
 
+add_subdirectory(
+    ../scan
+    ${CMAKE_CURRENT_BINARY_DIR}/scan
+)
+
 add_executable(
     TestApp
     src/main.cpp
     src/config.cpp
     src/media.cpp
     src/runtime.cpp
-    src/scan.cpp
 )
 
 target_compile_definitions(
@@ -37,7 +41,7 @@ target_link_libraries(
     TestApp
     PRIVATE
     AppKernel
-    setupapi
+    scan
 )
 
 if (MINGW)

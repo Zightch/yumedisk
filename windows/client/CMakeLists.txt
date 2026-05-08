@@ -3,6 +3,16 @@ include(env.cmake OPTIONAL)
 
 project(client LANGUAGES CXX)
 
+add_subdirectory(
+        ../AppKernel
+        ${CMAKE_CURRENT_BINARY_DIR}/AppKernel
+)
+
+add_subdirectory(
+        ../scan
+        ${CMAKE_CURRENT_BINARY_DIR}/scan
+)
+
 find_package(Qt6 6 REQUIRED COMPONENTS Core Widgets)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -28,6 +38,8 @@ qt_add_executable(
 target_link_libraries(
         client
         PRIVATE
+        AppKernel
+        scan
         Qt::Core
         Qt::Widgets
 )

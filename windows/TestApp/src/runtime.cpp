@@ -11,6 +11,9 @@
 
 namespace testapp {
 
+using yumedisk::scan::EnumerateVisibleYumeDisks;
+using yumedisk::scan::MakePhysicalDrivePath;
+
 namespace {
 
 const AK_MEDIA_OPS kMediaOps = {
