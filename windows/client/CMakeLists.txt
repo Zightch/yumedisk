@@ -28,8 +28,8 @@ qt_standard_project_setup()
 qt_add_executable(
         client
         main.cpp
-        client_backend.cpp
-        client_backend.h
+        backend/backend.cpp
+        backend/backend.h
         widget/widget.cpp
         widget/widget.h
         widget/widget.ui

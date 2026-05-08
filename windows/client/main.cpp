@@ -1,6 +1,6 @@
 #include <QApplication>
 
-#include "client_backend.h"
+#include "backend/backend.h"
 #include "widget/widget.h"
 
 int main(int argc, char* argv[]) {
@@ -9,7 +9,7 @@ int main(int argc, char* argv[]) {
     QApplication::setApplicationName("client");
     QApplication::setApplicationDisplayName("Client");
 
-    ClientBackend backend;
+    Backend backend;
     Widget window(&backend);
     window.show();
     return QApplication::exec();

@@ -173,4 +173,4 @@
 
 当前唯一下一步：
 
-- 从 `windows/TestApp/src` 向 `windows/client` 收进最小宿主后端主线：先落 `types / config / media / runtime` 所需代码和 `AkOpen -> 事件线程 -> RemoveAllManagedDisks -> AkClose` 生命周期，不接着做 GUI 交互封装，也不扩额外层级。
+- 从 `windows/TestApp/src` 向 `windows/client/backend/` 收进最小宿主后端主线：先落 `types / config / media / runtime` 所需代码和 `AkOpen -> 事件线程 -> RemoveAllManagedDisks -> AkClose` 生命周期，不接着做 GUI 交互封装，也不扩额外层级。

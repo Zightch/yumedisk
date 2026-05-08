@@ -1,4 +1,4 @@
-#include "client_backend.h"
+#include "backend.h"
 
 #include <appkernel.h>
 
@@ -14,11 +14,11 @@ QString FormatVersionBe(unsigned int versionBe) {
 
 }  // namespace
 
-QString ClientBackend::sessionStateText() const {
+QString Backend::sessionStateText() const {
     return QStringLiteral("未接入宿主后端");
 }
 
-QStringList ClientBackend::initialLogLines() const {
+QStringList Backend::initialLogLines() const {
     return {
         QStringLiteral("[shell] client window ready"),
         QStringLiteral("[shell] AppKernel SDK ready, version %1")

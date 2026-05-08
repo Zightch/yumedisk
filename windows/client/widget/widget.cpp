@@ -1,6 +1,6 @@
 #include "widget.h"
 
-#include "client_backend.h"
+#include "backend/backend.h"
 #include "ui_widget.h"
 
 #include <QAction>
@@ -11,7 +11,7 @@
 #include <QStyle>
 #include <QSystemTrayIcon>
 
-Widget::Widget(ClientBackend* backend, QWidget* parent)
+Widget::Widget(Backend* backend, QWidget* parent)
     : QWidget(parent), ui(new Ui::Widget), backend(backend) {
     ui->setupUi(this);
     initializeShellUi();

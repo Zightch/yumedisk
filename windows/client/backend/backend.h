@@ -3,9 +3,9 @@
 #include <QString>
 #include <QStringList>
 
-class ClientBackend final {
+class Backend final {
 public:
-    ClientBackend() = default;
+    Backend() = default;
 
     QString sessionStateText() const;
     QStringList initialLogLines() const;
