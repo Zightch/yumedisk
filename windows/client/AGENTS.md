@@ -9,7 +9,7 @@
   - 方法名使用 `lowerCamelCase`
   - 成员变量使用 `lowerCamelCase`
   - 局部变量和参数使用 `lowerCamelCase`
-- 不为追求 Qt 传统命名额外保留另一套风格。
+- 这里不是额外定义一套偏离 Qt 的命名规则，而是直接与 Qt 框架既有代码风格对齐。
 
 ## 2. 目录组织规则
 
