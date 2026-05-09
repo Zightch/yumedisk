@@ -10,6 +10,7 @@ QT_END_NAMESPACE
 
 class QAction;
 class Backend;
+struct BackendSnapshot;
 class QCloseEvent;
 class QMenu;
 class QSystemTrayIcon;
@@ -30,9 +31,7 @@ private:
     void initializeTray();
     void quitClient();
     void refreshView();
-    void refreshSessionState();
-    void refreshManagedDisks();
-    void refreshLogLines();
+    void applySnapshot(const BackendSnapshot& snapshot);
     void updateRemoveButtonState();
     void createDisk();
     void removeDisk();

@@ -20,45 +20,6 @@
 #include <QTextCursor>
 #include <QTimer>
 
-namespace {
-
-QString fromWide(
-    const std::wstring& text)
-{
-    return QString::fromWCharArray(text.c_str(), (int)text.size());
-}
-
-QString mediaModeText(
-    clientbackend::MediaMode mode)
-{
-    switch (mode) {
-    case clientbackend::MediaMode::denseMem:
-        return QStringLiteral("denseMem");
-    case clientbackend::MediaMode::sparseMem:
-        return QStringLiteral("sparseMem");
-    case clientbackend::MediaMode::rawFile:
-        return QStringLiteral("rawFile");
-    default:
-        return QStringLiteral("auto");
-    }
-}
-
-QString visiblePathText(
-    const clientbackend::ManagedDiskSnapshot& snapshot)
-{
-    if (!snapshot.visiblePath.empty()) {
-        return fromWide(snapshot.visiblePath);
-    }
-
-    if (!snapshot.physicalDrivePath.empty()) {
-        return fromWide(snapshot.physicalDrivePath);
-    }
-
-    return QStringLiteral("<pending-enumeration>");
-}
-
-} // namespace
-
 Widget::Widget(Backend* backend, QWidget* parent)
     : QWidget(parent), ui(new Ui::Widget), backend(backend) {
     ui->setupUi(this);
@@ -95,19 +56,10 @@ void Widget::initializeShellUi() {
     ui->diskTableWidget->horizontalHeader()->setSectionResizeMode(
         2,
         QHeaderView::ResizeToContents);
-    ui->sessionStateValueLabel->setText(
-        backend != nullptr ? backend->sessionStateText()
-                           : QStringLiteral("未接入宿主后端"));
     ui->createDiskButton->setEnabled(backend != nullptr);
     ui->removeDiskButton->setEnabled(false);
-
-    if (backend != nullptr) {
-        ui->logPlainTextEdit->setPlainText(
-            backend->initialLogLines().join(QLatin1Char('\n')));
-    } else {
-        ui->logPlainTextEdit->setPlainText(
-            QStringLiteral("[shell] backend placeholder missing"));
-    }
+    ui->sessionStateValueLabel->setText(QStringLiteral("未接入宿主后端"));
+    ui->logPlainTextEdit->setPlainText(QStringLiteral("[backend] no logs"));
 }
 
 void Widget::initializeInteractions() {
@@ -189,40 +141,31 @@ void Widget::quitClient() {
 }
 
 void Widget::refreshView() {
-    refreshSessionState();
-    refreshManagedDisks();
-    refreshLogLines();
+    if (backend == nullptr) {
+        return;
+    }
+
+    applySnapshot(backend->snapshot());
 }
 
-void Widget::refreshSessionState() {
-    ui->sessionStateValueLabel->setText(
-        backend != nullptr ? backend->querySessionState()
-                           : QStringLiteral("未接入宿主后端"));
-}
-
-void Widget::refreshManagedDisks() {
+void Widget::applySnapshot(const BackendSnapshot& snapshot) {
     const bool hadCurrentTarget = hasCurrentTarget();
     const unsigned long selectedTargetId =
         hadCurrentTarget ? currentTargetId() : 0;
 
+    ui->sessionStateValueLabel->setText(snapshot.sessionStateText);
     ui->diskTableWidget->setRowCount(0);
-    if (backend == nullptr) {
-        updateRemoveButtonState();
-        return;
-    }
+    for (int rowIndex = 0; rowIndex < (int)snapshot.disks.size(); ++rowIndex) {
+        const auto& disk = snapshot.disks[(size_t)rowIndex];
+        auto* targetIdItem = new QTableWidgetItem(QString::number(disk.targetId));
+        auto* lifecycleItem = new QTableWidgetItem(disk.lifecycleText);
+        auto* mediaItem = new QTableWidgetItem(disk.mediaText);
+        auto* visiblePathItem = new QTableWidgetItem(disk.visiblePathText);
 
-    const auto snapshots = backend->snapshotManagedDisks();
-    for (int rowIndex = 0; rowIndex < (int)snapshots.size(); ++rowIndex) {
-        const auto& snapshot = snapshots[(size_t)rowIndex];
-        auto* targetIdItem = new QTableWidgetItem(QString::number(snapshot.targetId));
-        auto* lifecycleItem = new QTableWidgetItem(fromWide(snapshot.lifecycleText));
-        auto* mediaItem = new QTableWidgetItem(mediaModeText(snapshot.mode));
-        auto* visiblePathItem = new QTableWidgetItem(visiblePathText(snapshot));
-
-        targetIdItem->setData(Qt::UserRole, QVariant::fromValue(snapshot.targetId));
-        lifecycleItem->setData(Qt::UserRole, QVariant::fromValue(snapshot.targetId));
-        mediaItem->setData(Qt::UserRole, QVariant::fromValue(snapshot.targetId));
-        visiblePathItem->setData(Qt::UserRole, QVariant::fromValue(snapshot.targetId));
+        targetIdItem->setData(Qt::UserRole, QVariant::fromValue(disk.targetId));
+        lifecycleItem->setData(Qt::UserRole, QVariant::fromValue(disk.targetId));
+        mediaItem->setData(Qt::UserRole, QVariant::fromValue(disk.targetId));
+        visiblePathItem->setData(Qt::UserRole, QVariant::fromValue(disk.targetId));
 
         ui->diskTableWidget->insertRow(rowIndex);
         ui->diskTableWidget->setItem(rowIndex, 0, targetIdItem);
@@ -242,16 +185,9 @@ void Widget::refreshManagedDisks() {
         }
     }
 
-    updateRemoveButtonState();
-}
-
-void Widget::refreshLogLines() {
-    if (backend == nullptr) {
-        return;
-    }
-
-    const QString nextText = backend->logLines().join(QLatin1Char('\n'));
+    const QString nextText = snapshot.logLines.join(QLatin1Char('\n'));
     if (ui->logPlainTextEdit->toPlainText() == nextText) {
+        updateRemoveButtonState();
         return;
     }
 
@@ -259,6 +195,7 @@ void Widget::refreshLogLines() {
     QTextCursor cursor = ui->logPlainTextEdit->textCursor();
     cursor.movePosition(QTextCursor::End);
     ui->logPlainTextEdit->setTextCursor(cursor);
+    updateRemoveButtonState();
 }
 
 void Widget::updateRemoveButtonState() {

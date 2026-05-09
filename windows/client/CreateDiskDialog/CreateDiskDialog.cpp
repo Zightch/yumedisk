@@ -2,32 +2,25 @@
 
 #include "ui_CreateDiskDialog.h"
 
-#include <limits>
-
-#include <QFileInfo>
 #include <QComboBox>
-#include <QMessageBox>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
 
 namespace {
 
-constexpr qulonglong mibBytes = 1024ull * 1024ull;
-constexpr unsigned long maxTargetId = 255;
-
-clientbackend::MediaMode mediaModeFromIndex(
+BackendMediaMode mediaModeFromIndex(
     int index)
 {
     switch (index) {
     case 1:
-        return clientbackend::MediaMode::denseMem;
+        return BackendMediaMode::denseMem;
     case 2:
-        return clientbackend::MediaMode::sparseMem;
+        return BackendMediaMode::sparseMem;
     case 3:
-        return clientbackend::MediaMode::rawFile;
+        return BackendMediaMode::rawFile;
     default:
-        return clientbackend::MediaMode::autoSelect;
+        return BackendMediaMode::autoSelect;
     }
 }
 
@@ -89,104 +82,14 @@ void CreateDiskDialog::refreshModeUi() {
 
 bool CreateDiskDialog::isRawModeSelected() const {
     return mediaModeFromIndex(ui->mediaModeComboBox->currentIndex()) ==
-        clientbackend::MediaMode::rawFile;
-}
-
-bool CreateDiskDialog::tryBuildRequest(
-    BackendCreateDiskRequest* outRequest,
-    QString* outErrorText) const
-{
-    BackendCreateDiskRequest request;
-    bool ok = false;
-    const bool rawModeSelected = isRawModeSelected();
-    const QString capacityText = ui->capacityLineEdit->text().trimmed();
-    const QString targetIdText = ui->targetIdLineEdit->text().trimmed();
-    const qulonglong maxCapacityMiB =
-        std::numeric_limits<qulonglong>::max() / mibBytes;
-    request.requestedMode = mediaModeFromIndex(ui->mediaModeComboBox->currentIndex());
-    request.readOnly = ui->readOnlyCheckBox->isChecked();
-
-    if (rawModeSelected) {
-        const QString rawFileText = ui->rawFileLineEdit->text().trimmed();
-        const QFileInfo rawFileInfo(rawFileText);
-
-        if (rawFileText.isEmpty()) {
-            if (outErrorText != nullptr) {
-                *outErrorText = QStringLiteral("raw 文件路径不能为空");
-            }
-            return false;
-        }
-
-        if (!rawFileInfo.exists() || !rawFileInfo.isFile()) {
-            if (outErrorText != nullptr) {
-                *outErrorText = QStringLiteral("raw 文件必须是已存在的普通文件");
-            }
-            return false;
-        }
-
-        if (rawFileInfo.size() <= 0) {
-            if (outErrorText != nullptr) {
-                *outErrorText = QStringLiteral("raw 文件大小必须大于 0");
-            }
-            return false;
-        }
-
-        request.diskSizeBytes = (qulonglong)rawFileInfo.size();
-        if ((request.diskSizeBytes % clientbackend::defaultSectorSize) != 0) {
-            if (outErrorText != nullptr) {
-                *outErrorText = QStringLiteral("raw 文件大小必须按 4096 字节对齐");
-            }
-            return false;
-        }
-
-        request.rawFilePath = rawFileInfo.absoluteFilePath();
-    } else {
-        const qulonglong capacityMiB = capacityText.toULongLong(&ok);
-
-        if (!ok || capacityMiB == 0) {
-            if (outErrorText != nullptr) {
-                *outErrorText = QStringLiteral("容量必须是大于 0 的 MiB 整数");
-            }
-            return false;
-        }
-
-        if (capacityMiB > maxCapacityMiB) {
-            if (outErrorText != nullptr) {
-                *outErrorText = QStringLiteral("容量超出当前支持范围");
-            }
-            return false;
-        }
-
-        request.diskSizeBytes = capacityMiB * mibBytes;
-    }
-
-    if (!targetIdText.isEmpty()) {
-        const qulonglong parsedTargetId = targetIdText.toULongLong(&ok);
-        if (!ok || parsedTargetId > maxTargetId) {
-            if (outErrorText != nullptr) {
-                *outErrorText = QStringLiteral("target id 必须是 0 到 255 之间的整数");
-            }
-            return false;
-        }
-
-        request.targetId = static_cast<unsigned long>(parsedTargetId);
-    }
-
-    if (outRequest != nullptr) {
-        *outRequest = request;
-    }
-    return true;
+        BackendMediaMode::rawFile;
 }
 
 void CreateDiskDialog::submit() {
-    QString errorText;
-    BackendCreateDiskRequest request;
-
-    if (!tryBuildRequest(&request, &errorText)) {
-        QMessageBox::warning(this, QStringLiteral("创建磁盘"), errorText);
-        return;
-    }
-
-    acceptedRequest = request;
+    acceptedRequest.capacityMiBText = ui->capacityLineEdit->text().trimmed();
+    acceptedRequest.targetIdText = ui->targetIdLineEdit->text().trimmed();
+    acceptedRequest.readOnly = ui->readOnlyCheckBox->isChecked();
+    acceptedRequest.requestedMode = mediaModeFromIndex(ui->mediaModeComboBox->currentIndex());
+    acceptedRequest.rawFilePath = ui->rawFileLineEdit->text().trimmed();
     accept();
 }

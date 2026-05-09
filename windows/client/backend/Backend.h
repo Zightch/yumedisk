@@ -6,18 +6,51 @@
 #include <QString>
 #include <QStringList>
 
-#include "backend/types/types.h"
-
 namespace clientbackend {
 struct BackendContext;
 }
 
+enum class BackendMediaMode {
+    autoSelect,
+    denseMem,
+    sparseMem,
+    rawFile
+};
+
 struct BackendCreateDiskRequest {
-    unsigned long targetId = 255;
-    unsigned long long diskSizeBytes = 0;
+    QString capacityMiBText;
+    QString targetIdText;
     bool readOnly = false;
-    clientbackend::MediaMode requestedMode = clientbackend::MediaMode::autoSelect;
+    BackendMediaMode requestedMode = BackendMediaMode::autoSelect;
     QString rawFilePath;
+};
+
+struct BackendManagedDiskSnapshot {
+    unsigned long targetId = 0;
+    QString lifecycleText;
+    QString mediaText;
+    QString visiblePathText;
+};
+
+struct BackendStatsSnapshot {
+    unsigned long long heartbeatSent = 0;
+    unsigned long long commandFailures = 0;
+    unsigned long long protocolFailures = 0;
+    unsigned long long eventsQueued = 0;
+    unsigned long long eventsDropped = 0;
+    unsigned long long diskCount = 0;
+};
+
+struct BackendSnapshot {
+    QString sessionStateText;
+    QStringList logLines;
+    std::vector<BackendManagedDiskSnapshot> disks;
+};
+
+struct BackendDebugSnapshot {
+    QString sessionStateText;
+    BackendStatsSnapshot stats;
+    std::vector<BackendManagedDiskSnapshot> disks;
 };
 
 class Backend final {
@@ -28,9 +61,7 @@ public:
     Backend(const Backend&) = delete;
     Backend& operator=(const Backend&) = delete;
 
-    QString sessionStateText() const;
-    QStringList initialLogLines() const;
-    QStringList logLines() const;
+    BackendSnapshot snapshot() const;
 
     bool createManagedDisk(
         const BackendCreateDiskRequest& request,
@@ -44,13 +75,11 @@ public:
     bool shutdown(
         QString* outErrorText = nullptr);
 
-    QString querySessionState() const;
-    std::vector<clientbackend::ManagedDiskSnapshot> snapshotManagedDisks() const;
     bool queryBackendStats(
-        clientbackend::BackendStatsSnapshot* outStats,
+        BackendStatsSnapshot* outStats,
         QString* outErrorText = nullptr) const;
     bool queryDebugSnapshot(
-        clientbackend::DebugSnapshot* outSnapshot,
+        BackendDebugSnapshot* outSnapshot,
         QString* outErrorText = nullptr) const;
 
 private:
