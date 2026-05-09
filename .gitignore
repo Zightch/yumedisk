@@ -17,5 +17,6 @@ jsoncpp/
 !docs/tmp/
 docs/tmp/*
 !docs/tmp/todo.md
+!docs/tmp/backend-dll-boundary-draft.md
 
 **/env.cmake
