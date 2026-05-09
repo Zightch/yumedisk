@@ -28,15 +28,15 @@ qt_standard_project_setup()
 qt_add_executable(
         client
         main.cpp
-        backend/config.cpp
-        backend/config.h
         backend/backend.cpp
         backend/backend.h
-        backend/media.cpp
-        backend/media.h
-        backend/runtime.cpp
-        backend/runtime.h
-        backend/types.h
+        backend/config/config.cpp
+        backend/config/config.h
+        backend/media/media.cpp
+        backend/media/media.h
+        backend/runtime/runtime.cpp
+        backend/runtime/runtime.h
+        backend/types/types.h
         widget/widget.cpp
         widget/widget.h
         widget/widget.ui

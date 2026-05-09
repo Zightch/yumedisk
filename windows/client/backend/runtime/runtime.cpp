@@ -1,11 +1,11 @@
-#include "runtime.h"
+#include "backend/runtime/runtime.h"
 
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
 
-#include "config.h"
-#include "media.h"
+#include "backend/config/config.h"
+#include "backend/media/media.h"
 #include "scan.h"
 
 namespace clientbackend {

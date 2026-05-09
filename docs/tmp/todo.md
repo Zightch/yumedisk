@@ -62,6 +62,11 @@
   - 稀疏内存盘
   - `raw` 文件盘
 - 当前不改正式文档，只推进 `docs/tmp/todo.md` 和 `docs/progress/*.md`。
+- `backend` 下没有明显类归属、但有明确功能边界的代码，继续按最小组件子目录收纳，例如：
+  - `config/`
+  - `media/`
+  - `runtime/`
+  - `types/`
 
 ## 4. 子步骤
 

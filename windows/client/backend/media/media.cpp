@@ -1,4 +1,4 @@
-#include "media.h"
+#include "backend/media/media.h"
 
 #include <WinIoCtl.h>
 
@@ -7,7 +7,7 @@
 #include <exception>
 #include <limits>
 
-#include "config.h"
+#include "backend/config/config.h"
 
 namespace clientbackend {
 
