@@ -62,87 +62,65 @@ std::wstring wideFromText(
     return wideFromMultiByte(text, CP_ACP);
 }
 
-void appendLog(
-    BackendContext* context,
-    const std::wstring& text)
-{
-    std::wstring line;
-
-    if (context == nullptr) {
-        return;
-    }
-
-    {
-        std::lock_guard<std::mutex> guard(context->logLock);
-        if (context->logLines.size() >= maxBufferedLogLines) {
-            context->logLines.erase(context->logLines.begin());
-        }
-        context->logLines.push_back(text);
-    }
-
-    line = text + L"\n";
-    OutputDebugStringW(line.c_str());
-}
-
 const wchar_t* readOnlyToText(
     bool readOnly)
 {
     return readOnly ? L"true" : L"false";
 }
 
-std::vector<std::shared_ptr<ManagedDisk>> snapshotManagedDisks(
+std::vector<std::shared_ptr<DiskRuntime>> snapshotDiskRuntimes(
     BackendContext* context)
 {
-    std::vector<std::shared_ptr<ManagedDisk>> disks;
+    std::vector<std::shared_ptr<DiskRuntime>> diskRuntimes;
 
     if (context == nullptr) {
-        return disks;
+        return diskRuntimes;
     }
 
-    std::lock_guard<std::mutex> guard(context->disksLock);
-    disks.reserve(context->disks.size());
-    for (const auto& entry : context->disks) {
-        disks.push_back(entry.second);
+    std::lock_guard<std::mutex> guard(context->diskRuntimesLock);
+    diskRuntimes.reserve(context->diskRuntimes.size());
+    for (const auto& entry : context->diskRuntimes) {
+        diskRuntimes.push_back(entry.second);
     }
 
-    return disks;
+    return diskRuntimes;
 }
 
-std::shared_ptr<ManagedDisk> findManagedDisk(
+std::shared_ptr<DiskRuntime> findDiskRuntime(
     BackendContext* context,
     ULONG targetId)
 {
-    std::lock_guard<std::mutex> guard(context->disksLock);
-    const auto it = context->disks.find(targetId);
-    if (it == context->disks.end()) {
+    std::lock_guard<std::mutex> guard(context->diskRuntimesLock);
+    const auto it = context->diskRuntimes.find(targetId);
+    if (it == context->diskRuntimes.end()) {
         return nullptr;
     }
 
     return it->second;
 }
 
-void insertManagedDisk(
+void insertDiskRuntime(
     BackendContext* context,
-    const std::shared_ptr<ManagedDisk>& disk)
+    const std::shared_ptr<DiskRuntime>& diskRuntime)
 {
-    std::lock_guard<std::mutex> guard(context->disksLock);
-    context->disks[disk->targetId] = disk;
+    std::lock_guard<std::mutex> guard(context->diskRuntimesLock);
+    context->diskRuntimes[diskRuntime->targetId] = diskRuntime;
 }
 
-void eraseManagedDisk(
+void eraseDiskRuntime(
     BackendContext* context,
     ULONG targetId)
 {
-    std::lock_guard<std::mutex> guard(context->disksLock);
-    context->disks.erase(targetId);
+    std::lock_guard<std::mutex> guard(context->diskRuntimesLock);
+    context->diskRuntimes.erase(targetId);
 }
 
-bool managedDiskExists(
+bool diskRuntimeExists(
     BackendContext* context,
     ULONG targetId)
 {
-    std::lock_guard<std::mutex> guard(context->disksLock);
-    return context->disks.find(targetId) != context->disks.end();
+    std::lock_guard<std::mutex> guard(context->diskRuntimesLock);
+    return context->diskRuntimes.find(targetId) != context->diskRuntimes.end();
 }
 
 std::vector<std::wstring> snapshotClaimedDiskPaths(
@@ -151,8 +129,8 @@ std::vector<std::wstring> snapshotClaimedDiskPaths(
 {
     std::vector<std::wstring> paths;
 
-    std::lock_guard<std::mutex> guard(context->disksLock);
-    for (const auto& entry : context->disks) {
+    std::lock_guard<std::mutex> guard(context->diskRuntimesLock);
+    for (const auto& entry : context->diskRuntimes) {
         if (entry.first == excludedTargetId) {
             continue;
         }
@@ -183,13 +161,13 @@ bool containsVisibleDiskPath(
         });
 }
 
-bool tryRefreshManagedDiskIdentity(
+bool tryRefreshDiskRuntimeIdentity(
     BackendContext* context,
-    const std::shared_ptr<ManagedDisk>& disk,
+    const std::shared_ptr<DiskRuntime>& diskRuntime,
     const std::vector<DiskIdentity>* baselineVisibleDisks,
     DWORD timeoutMs)
 {
-    const auto claimedPaths = snapshotClaimedDiskPaths(context, disk->targetId);
+    const auto claimedPaths = snapshotClaimedDiskPaths(context, diskRuntime->targetId);
     const ULONGLONG startTick = GetTickCount64();
 
     for (;;) {
@@ -219,7 +197,7 @@ bool tryRefreshManagedDiskIdentity(
         }
 
         if (selected != nullptr) {
-            disk->identity = *selected;
+            diskRuntime->identity = *selected;
             return true;
         }
 
@@ -276,24 +254,24 @@ std::wstring lifecycleToText(
 
 ManagedDiskSnapshot makeManagedDiskSnapshot(
     BackendContext* context,
-    const std::shared_ptr<ManagedDisk>& disk)
+    const std::shared_ptr<DiskRuntime>& diskRuntime)
 {
     ManagedDiskSnapshot snapshot;
     AK_DISK_STATE diskState{};
     bool haveState;
 
-    snapshot.targetId = disk->targetId;
-    snapshot.diskSizeBytes = disk->diskSizeBytes;
-    snapshot.sectorSize = disk->sectorSize;
-    snapshot.readOnly = disk->readOnly;
-    snapshot.mode = disk->mode;
+    snapshot.targetId = diskRuntime->targetId;
+    snapshot.diskSizeBytes = diskRuntime->diskSizeBytes;
+    snapshot.sectorSize = diskRuntime->sectorSize;
+    snapshot.readOnly = diskRuntime->readOnly;
+    snapshot.mode = diskRuntime->mode;
 
-    (void)tryRefreshManagedDiskIdentity(context, disk, nullptr, 0);
-    snapshot.visiblePath = disk->identity.Path;
-    snapshot.physicalDrivePath = MakePhysicalDrivePath(disk->identity.DeviceNumber);
+    (void)tryRefreshDiskRuntimeIdentity(context, diskRuntime, nullptr, 0);
+    snapshot.visiblePath = diskRuntime->identity.Path;
+    snapshot.physicalDrivePath = MakePhysicalDrivePath(diskRuntime->identity.DeviceNumber);
 
-    haveState = (disk->handle != nullptr) &&
-        (AkQueryDiskState(disk->handle, &diskState) == AK_STATUS_SUCCESS);
+    haveState = (diskRuntime->handle != nullptr) &&
+        (AkQueryDiskState(diskRuntime->handle, &diskState) == AK_STATUS_SUCCESS);
     snapshot.online = haveState && (diskState.Lifecycle == AkStateRunning);
     snapshot.lifecycleText = haveState
         ? lifecycleToText(diskState.Lifecycle)
@@ -306,15 +284,14 @@ void handleAppKernelEvent(
     BackendContext* context,
     const AK_EVENT* eventRecord)
 {
-    std::shared_ptr<ManagedDisk> disk;
+    std::shared_ptr<DiskRuntime> diskRuntime;
 
     if ((context == nullptr) || (eventRecord == nullptr)) {
         return;
     }
 
     if (eventRecord->Type == AkEventSessionBroken) {
-        appendLog(
-            context,
+        context->appendLog(
             L"[backend] session broken, status=" + formatStatusHex(eventRecord->Status));
         context->stop.store(true, std::memory_order_relaxed);
         if (context->stopEvent != nullptr) {
@@ -323,27 +300,26 @@ void handleAppKernelEvent(
         return;
     }
 
-    disk = findManagedDisk(context, eventRecord->TargetId);
-    if (disk == nullptr) {
+    diskRuntime = findDiskRuntime(context, eventRecord->TargetId);
+    if (diskRuntime == nullptr) {
         return;
     }
 
     switch (eventRecord->Type) {
     case AkEventDiskOnline:
-        (void)tryRefreshManagedDiskIdentity(context, disk, nullptr, 0);
+        (void)tryRefreshDiskRuntimeIdentity(context, diskRuntime, nullptr, 0);
         break;
 
     case AkEventWriteFinalCommitted:
-        if (!applyCommittedWrite(disk.get(), eventRecord->EventId)) {
-            appendLog(
-                context,
+        if (!applyCommittedWrite(diskRuntime.get(), eventRecord->EventId)) {
+            context->appendLog(
                 L"[backend] commit write failed, target=" + std::to_wstring(eventRecord->TargetId) +
-                    L", event=" + std::to_wstring(eventRecord->EventId));
+                L", event=" + std::to_wstring(eventRecord->EventId));
         }
         break;
 
     case AkEventWriteFinalRejected:
-        discardStagedWrite(disk.get(), eventRecord->EventId);
+        discardStagedWrite(diskRuntime.get(), eventRecord->EventId);
         break;
 
     case AkEventDiskRemoved:
@@ -364,7 +340,7 @@ void runEventLoop(
             continue;
         }
         if (status != AK_STATUS_SUCCESS) {
-            appendLog(context, L"[backend] event loop failed, status=" + formatStatusHex(status));
+            context->appendLog(L"[backend] event loop failed, status=" + formatStatusHex(status));
             context->stop.store(true, std::memory_order_relaxed);
             if (context->stopEvent != nullptr) {
                 SetEvent(context->stopEvent);
@@ -376,134 +352,134 @@ void runEventLoop(
     }
 }
 
-void discardAllManagedDiskState(
+void discardAllDiskRuntimeState(
     BackendContext* context)
 {
-    const auto disks = snapshotManagedDisks(context);
+    const auto diskRuntimes = snapshotDiskRuntimes(context);
 
-    for (const auto& disk : disks) {
-        if (disk == nullptr) {
+    for (const auto& diskRuntime : diskRuntimes) {
+        if (diskRuntime == nullptr) {
             continue;
         }
 
-        disk->handle = nullptr;
-        cleanupManagedDiskMedia(disk.get());
+        diskRuntime->handle = nullptr;
+        cleanupManagedDiskMedia(diskRuntime.get());
     }
 
     {
-        std::lock_guard<std::mutex> guard(context->disksLock);
-        context->disks.clear();
+        std::lock_guard<std::mutex> guard(context->diskRuntimesLock);
+        context->diskRuntimes.clear();
     }
 }
 
 } // namespace
 
-bool openBackendContext(BackendContext* context) {
+bool openBackendContext(BackendContext* context)
+{
+    return context != nullptr && context->open();
+}
+
+void closeBackendContext(BackendContext* context)
+{
+    if (context != nullptr) {
+        context->close();
+    }
+}
+
+bool BackendContext::open()
+{
     AK_OPEN_PARAMS openParams{};
     AK_SESSION_STATE sessionState{};
     AK_STATUS status;
 
-    if (context == nullptr) {
-        return false;
-    }
+    stop.store(false, std::memory_order_relaxed);
+    openStatus = AK_STATUS_SUCCESS;
+    openWin32Error = ERROR_SUCCESS;
+    openSucceeded = false;
 
-    context->stop.store(false, std::memory_order_relaxed);
-    context->openStatus = AK_STATUS_SUCCESS;
-    context->openWin32Error = ERROR_SUCCESS;
-    context->openSucceeded = false;
-
-    context->stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (context->stopEvent == nullptr) {
-        context->openStatus = AK_STATUS_UNSUCCESSFUL;
-        context->openWin32Error = GetLastError();
-        appendLog(
-            context,
-            L"[backend] create stop event failed, win32=" + std::to_wstring(context->openWin32Error));
+    stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (stopEvent == nullptr) {
+        openStatus = AK_STATUS_UNSUCCESSFUL;
+        openWin32Error = GetLastError();
+        appendLog(L"[backend] create stop event failed, win32=" + std::to_wstring(openWin32Error));
         return false;
     }
 
     openParams.HeartbeatIntervalMs = heartbeatIntervalMs;
     openParams.InitialEventQueueCapacity = initialEventQueueCapacity;
     openParams.LogFn = appKernelLogCallback;
-    openParams.LogCtx = context;
+    openParams.LogCtx = this;
 
-    status = AkOpen(&openParams, &context->session);
+    status = AkOpen(&openParams, &session);
     if (status != AK_STATUS_SUCCESS) {
-        context->openStatus = status;
-        context->openWin32Error = GetLastError();
+        openStatus = status;
+        openWin32Error = GetLastError();
         appendLog(
-            context,
             L"[backend] open session failed, status=" + formatStatusHex(status) +
-                L", win32=" + std::to_wstring(context->openWin32Error));
-        CloseHandle(context->stopEvent);
-        context->stopEvent = nullptr;
+            L", win32=" + std::to_wstring(openWin32Error));
+        CloseHandle(stopEvent);
+        stopEvent = nullptr;
         return false;
     }
 
-    context->openSucceeded = true;
-    if (AkQuerySessionState(context->session, &sessionState) == AK_STATUS_SUCCESS) {
+    openSucceeded = true;
+    if (AkQuerySessionState(session, &sessionState) == AK_STATUS_SUCCESS) {
         appendLog(
-            context,
             L"[backend] session opened, id=" + std::to_wstring(sessionState.SessionId) +
-                L", lifecycle=" + lifecycleToText(sessionState.Lifecycle) +
-                L", transport=" + std::wstring(sessionState.TransportReady ? L"ready" : L"not-ready"));
+            L", lifecycle=" + lifecycleToText(sessionState.Lifecycle) +
+            L", transport=" + std::wstring(sessionState.TransportReady ? L"ready" : L"not-ready"));
         appendLog(
-            context,
             L"[backend] appkernel=" + formatVersionBe(sessionState.AppKernelVersionBe) +
-                L", kmdf=" + formatVersionBe(sessionState.KmdfVersionBe) +
-                L", scsi=" + formatVersionBe(sessionState.ScsiVersionBe));
+            L", kmdf=" + formatVersionBe(sessionState.KmdfVersionBe) +
+            L", scsi=" + formatVersionBe(sessionState.ScsiVersionBe));
     } else {
-        appendLog(context, L"[backend] session opened");
+        appendLog(L"[backend] session opened");
     }
     appendLog(
-        context,
-        L"[backend] config queueDepth=" + std::to_wstring(context->config.queueDepth) +
-            L", writeSlotBytes=" + std::to_wstring(context->config.writeSlotBytes) +
-            L", sectorSize=" + std::to_wstring(context->config.sectorSize));
+        L"[backend] config queueDepth=" + std::to_wstring(config.queueDepth) +
+        L", writeSlotBytes=" + std::to_wstring(config.writeSlotBytes) +
+        L", sectorSize=" + std::to_wstring(config.sectorSize));
 
     try {
-        context->eventThread = std::thread(runEventLoop, context);
+        eventThread = std::thread(runEventLoop, this);
     } catch (const std::exception&) {
-        context->openStatus = AK_STATUS_UNSUCCESSFUL;
-        context->openWin32Error = ERROR_NOT_ENOUGH_MEMORY;
-        appendLog(context, L"[backend] start event thread failed");
-        AkClose(context->session);
-        context->session = nullptr;
-        CloseHandle(context->stopEvent);
-        context->stopEvent = nullptr;
-        context->openSucceeded = false;
+        openStatus = AK_STATUS_UNSUCCESSFUL;
+        openWin32Error = ERROR_NOT_ENOUGH_MEMORY;
+        appendLog(L"[backend] start event thread failed");
+        AkClose(session);
+        session = nullptr;
+        CloseHandle(stopEvent);
+        stopEvent = nullptr;
+        openSucceeded = false;
         return false;
     }
 
     return true;
 }
 
-void closeBackendContext(BackendContext* context) {
-    if (context == nullptr) {
-        return;
+void BackendContext::close()
+{
+    (void)removeAllManagedDisks(true);
+
+    stop.store(true, std::memory_order_relaxed);
+    if (stopEvent != nullptr) {
+        SetEvent(stopEvent);
+    }
+    if (eventThread.joinable()) {
+        eventThread.join();
     }
 
-    (void)removeAllManagedDisks(context, true);
-
-    context->stop.store(true, std::memory_order_relaxed);
-    if (context->stopEvent != nullptr) {
-        SetEvent(context->stopEvent);
-    }
-    if (context->eventThread.joinable()) {
-        context->eventThread.join();
+    if (session != nullptr) {
+        appendLog(L"[backend] closing session");
+        AkClose(session);
+        session = nullptr;
     }
 
-    if (context->session != nullptr) {
-        appendLog(context, L"[backend] closing session");
-        AkClose(context->session);
-        context->session = nullptr;
-    }
+    discardAllDiskRuntimeState(this);
 
-    discardAllManagedDiskState(context);
-
-    if (context->stopEvent != nullptr) {
-        CloseHandle(context->stopEvent);
-        context->stopEvent = nullptr;
+    if (stopEvent != nullptr) {
+        CloseHandle(stopEvent);
+        stopEvent = nullptr;
     }
 }
 
@@ -543,26 +519,37 @@ VOID AK_CALL appKernelLogCallback(
 
     context = static_cast<BackendContext*>(logCtx);
     wideText = wideFromText(text);
-    appendLog(
-        context,
+    context->appendLog(
         L"[AppKernel][" + std::to_wstring(level) + L"] " + wideText);
 }
 
-std::wstring querySessionStateText(
-    const BackendContext* context)
+void BackendContext::appendLog(
+    const std::wstring& text)
+{
+    std::wstring line;
+
+    {
+        std::lock_guard<std::mutex> guard(logLock);
+        if (logLines.size() >= maxBufferedLogLines) {
+            logLines.erase(logLines.begin());
+        }
+        logLines.push_back(text);
+    }
+
+    line = text + L"\n";
+    OutputDebugStringW(line.c_str());
+}
+
+std::wstring BackendContext::querySessionStateText() const
 {
     AK_SESSION_STATE sessionState{};
     AK_STATUS status;
     std::wostringstream stream;
 
-    if (context == nullptr) {
-        return L"backend-missing";
-    }
-
-    if (context->session == nullptr) {
-        if (!context->openSucceeded) {
+    if (session == nullptr) {
+        if (!openSucceeded) {
             stream << L"open-failed("
-                   << formatStatusHex(context->openStatus)
+                   << formatStatusHex(openStatus)
                    << L")";
             return stream.str();
         }
@@ -570,7 +557,7 @@ std::wstring querySessionStateText(
         return L"closed";
     }
 
-    status = AkQuerySessionState(context->session, &sessionState);
+    status = AkQuerySessionState(session, &sessionState);
     if (status != AK_STATUS_SUCCESS) {
         return L"query-failed(" + formatStatusHex(status) + L")";
     }
@@ -582,64 +569,52 @@ std::wstring querySessionStateText(
     return stream.str();
 }
 
-std::vector<std::wstring> snapshotLogLines(
-    const BackendContext* context)
+std::vector<std::wstring> BackendContext::snapshotLogLines() const
 {
     std::vector<std::wstring> lines;
 
-    if (context == nullptr) {
-        return lines;
-    }
-
-    std::lock_guard<std::mutex> guard(context->logLock);
-    lines = context->logLines;
+    std::lock_guard<std::mutex> guard(logLock);
+    lines = logLines;
     return lines;
 }
 
-std::vector<ManagedDiskSnapshot> snapshotManagedDisks(
-    const BackendContext* context)
+std::vector<ManagedDiskSnapshot> BackendContext::snapshotManagedDisks() const
 {
     std::vector<ManagedDiskSnapshot> snapshots;
-    BackendContext* mutableContext;
+    auto* mutableContext = const_cast<BackendContext*>(this);
 
-    if (context == nullptr) {
-        return snapshots;
-    }
-
-    mutableContext = const_cast<BackendContext*>(context);
-    for (const auto& disk : snapshotManagedDisks(mutableContext)) {
-        if (disk == nullptr) {
+    for (const auto& diskRuntime : snapshotDiskRuntimes(mutableContext)) {
+        if (diskRuntime == nullptr) {
             continue;
         }
-        snapshots.push_back(makeManagedDiskSnapshot(mutableContext, disk));
+        snapshots.push_back(makeManagedDiskSnapshot(mutableContext, diskRuntime));
     }
 
     return snapshots;
 }
 
-bool queryBackendStats(
-    const BackendContext* context,
+bool BackendContext::queryBackendStats(
     BackendStatsSnapshot* outStats,
-    std::wstring* outErrorText)
+    std::wstring* outErrorText) const
 {
     AK_SESSION_STATS sessionStats{};
     AK_STATUS status;
 
-    if ((context == nullptr) || (outStats == nullptr)) {
+    if (outStats == nullptr) {
         if (outErrorText != nullptr) {
             *outErrorText = L"invalid-parameter";
         }
         return false;
     }
 
-    if (context->session == nullptr) {
+    if (session == nullptr) {
         if (outErrorText != nullptr) {
             *outErrorText = L"session-not-open";
         }
         return false;
     }
 
-    status = AkQuerySessionStats(context->session, &sessionStats);
+    status = AkQuerySessionStats(session, &sessionStats);
     if (status != AK_STATUS_SUCCESS) {
         if (outErrorText != nullptr) {
             *outErrorText = formatStatusHex(status);
@@ -652,40 +627,38 @@ bool queryBackendStats(
     outStats->protocolFailures = sessionStats.ProtocolFailures;
     outStats->eventsQueued = sessionStats.EventsQueued;
     outStats->eventsDropped = sessionStats.EventsDropped;
-    outStats->diskCount = (UINT64)snapshotManagedDisks(context).size();
+    outStats->diskCount = (UINT64)snapshotManagedDisks().size();
     return true;
 }
 
-bool queryDebugSnapshot(
-    const BackendContext* context,
+bool BackendContext::queryDebugSnapshot(
     DebugSnapshot* outSnapshot,
-    std::wstring* outErrorText)
+    std::wstring* outErrorText) const
 {
-    if ((context == nullptr) || (outSnapshot == nullptr)) {
+    if (outSnapshot == nullptr) {
         if (outErrorText != nullptr) {
             *outErrorText = L"invalid-parameter";
         }
         return false;
     }
 
-    outSnapshot->sessionStateText = querySessionStateText(context);
-    outSnapshot->disks = snapshotManagedDisks(context);
-    if (!queryBackendStats(context, &outSnapshot->stats, outErrorText)) {
+    outSnapshot->sessionStateText = querySessionStateText();
+    outSnapshot->disks = snapshotManagedDisks();
+    if (!queryBackendStats(&outSnapshot->stats, outErrorText)) {
         return false;
     }
 
     return true;
 }
 
-ULONG findFirstFreeTarget(
-    BackendContext* context)
+ULONG BackendContext::findFirstFreeTarget()
 {
-    std::lock_guard<std::mutex> guard(context->disksLock);
+    std::lock_guard<std::mutex> guard(diskRuntimesLock);
 
     for (ULONG targetId = YUMEDISK_MIN_TARGET_ID;
          targetId <= YUMEDISK_MAX_USABLE_TARGET_ID;
          ++targetId) {
-        if (context->disks.find(targetId) == context->disks.end()) {
+        if (diskRuntimes.find(targetId) == diskRuntimes.end()) {
             return targetId;
         }
     }
@@ -693,12 +666,11 @@ ULONG findFirstFreeTarget(
     return YUMEDISK_MAX_TARGETS;
 }
 
-bool createManagedDisk(
-    BackendContext* context,
+bool BackendContext::createManagedDisk(
     const CreateDiskRequest& request,
     std::wstring* outErrorText)
 {
-    std::shared_ptr<ManagedDisk> disk;
+    std::shared_ptr<DiskRuntime> diskRuntime;
     AK_DISK_PARAMS params{};
     AK_DISK* handle;
     AK_STATUS status;
@@ -706,7 +678,7 @@ bool createManagedDisk(
     const auto visibleDisksBeforeCreate = EnumerateVisibleYumeDisks();
     ULONG targetId = request.targetId;
 
-    if ((context == nullptr) || (context->session == nullptr)) {
+    if (session == nullptr) {
         if (outErrorText != nullptr) {
             *outErrorText = L"session-not-open";
         }
@@ -714,7 +686,7 @@ bool createManagedDisk(
     }
 
     if (targetId >= YUMEDISK_MAX_TARGETS) {
-        targetId = findFirstFreeTarget(context);
+        targetId = findFirstFreeTarget();
         if (targetId >= YUMEDISK_MAX_TARGETS) {
             if (outErrorText != nullptr) {
                 *outErrorText = L"no-free-target";
@@ -723,187 +695,170 @@ bool createManagedDisk(
         }
     }
 
-    if (managedDiskExists(context, targetId)) {
+    if (diskRuntimeExists(this, targetId)) {
         if (outErrorText != nullptr) {
             *outErrorText = L"target-already-exists";
         }
         return false;
     }
 
-    disk = std::make_shared<ManagedDisk>();
-    disk->backend = context;
-    disk->targetId = targetId;
-    disk->sectorSize = context->config.sectorSize;
-    disk->diskSizeBytes = request.diskSizeBytes;
-    disk->readOnly = request.readOnly;
-    disk->backingFilePath = request.rawFilePath;
-    disk->slotDepth = context->config.queueDepth;
-    disk->readWorkerCount = computeWorkerCount(
-        disk->slotDepth,
+    diskRuntime = std::make_shared<DiskRuntime>();
+    diskRuntime->context = this;
+    diskRuntime->targetId = targetId;
+    diskRuntime->sectorSize = config.sectorSize;
+    diskRuntime->diskSizeBytes = request.diskSizeBytes;
+    diskRuntime->readOnly = request.readOnly;
+    diskRuntime->backingFilePath = request.rawFilePath;
+    diskRuntime->slotDepth = config.queueDepth;
+    diskRuntime->readWorkerCount = computeWorkerCount(
+        diskRuntime->slotDepth,
         readSlotsPerWorkerTarget,
         maxReadWorkersPerDisk);
-    disk->writeWorkerCount = computeWorkerCount(
-        disk->slotDepth,
+    diskRuntime->writeWorkerCount = computeWorkerCount(
+        diskRuntime->slotDepth,
         writeSlotsPerWorkerTarget,
         maxWriteWorkersPerDisk);
 
-    if (!initializeManagedDiskMedia(disk.get(), request.requestedMode, &mediaReason)) {
+    if (!initializeManagedDiskMedia(diskRuntime.get(), request.requestedMode, &mediaReason)) {
         if (outErrorText != nullptr) {
             *outErrorText = mediaReason;
         }
         appendLog(
-            context,
             L"[backend] create failed, target=" + std::to_wstring(targetId) +
-                L", reason=" + mediaReason);
+            L", reason=" + mediaReason);
         return false;
     }
 
-    insertManagedDisk(context, disk);
+    insertDiskRuntime(this, diskRuntime);
 
     params.TargetId = targetId;
-    params.SectorSize = context->config.sectorSize;
-    params.DiskSizeBytes = disk->diskSizeBytes;
-    params.QueueDepth = (UINT32)context->config.queueDepth;
-    params.WriteSlotBytes = (UINT32)context->config.writeSlotBytes;
-    params.ReadWorkerCount = (UINT16)disk->readWorkerCount;
-    params.WriteWorkerCount = (UINT16)disk->writeWorkerCount;
-    params.AckBatchMaxRanges = (UINT32)context->config.queueDepth;
+    params.SectorSize = config.sectorSize;
+    params.DiskSizeBytes = diskRuntime->diskSizeBytes;
+    params.QueueDepth = (UINT32)config.queueDepth;
+    params.WriteSlotBytes = (UINT32)config.writeSlotBytes;
+    params.ReadWorkerCount = (UINT16)diskRuntime->readWorkerCount;
+    params.WriteWorkerCount = (UINT16)diskRuntime->writeWorkerCount;
+    params.AckBatchMaxRanges = (UINT32)config.queueDepth;
     params.ReadOnly = request.readOnly ? 1u : 0u;
 
     handle = nullptr;
-    status = AkCreateDisk(context->session, &params, &mediaOps, disk.get(), &handle);
+    status = AkCreateDisk(session, &params, &mediaOps, diskRuntime.get(), &handle);
     if (status != AK_STATUS_SUCCESS) {
-        eraseManagedDisk(context, targetId);
-        cleanupManagedDiskMedia(disk.get());
+        eraseDiskRuntime(this, targetId);
+        cleanupManagedDiskMedia(diskRuntime.get());
         if (outErrorText != nullptr) {
             *outErrorText = formatStatusHex(status);
         }
         appendLog(
-            context,
             L"[backend] create failed, target=" + std::to_wstring(targetId) +
-                L", status=" + formatStatusHex(status));
+            L", status=" + formatStatusHex(status));
         return false;
     }
 
-    disk->handle = handle;
+    diskRuntime->handle = handle;
     appendLog(
-        context,
         L"[backend] created target=" + std::to_wstring(targetId) +
-            L", diskBytes=" + std::to_wstring(disk->diskSizeBytes) +
-            L", readOnly=" + readOnlyToText(disk->readOnly) +
-            L", media=" + mediaModeToText(disk->mode));
-    if (disk->mode == MediaMode::rawFile) {
-        appendLog(
-            context,
-            L"[backend] rawFile=" + disk->backingFilePath);
+        L", diskBytes=" + std::to_wstring(diskRuntime->diskSizeBytes) +
+        L", readOnly=" + readOnlyToText(diskRuntime->readOnly) +
+        L", media=" + mediaModeToText(diskRuntime->mode));
+    if (diskRuntime->mode == MediaMode::rawFile) {
+        appendLog(L"[backend] rawFile=" + diskRuntime->backingFilePath);
     }
 
-    if (tryRefreshManagedDiskIdentity(context, disk, &visibleDisksBeforeCreate, diskArrivalTimeoutMs)) {
+    if (tryRefreshDiskRuntimeIdentity(this, diskRuntime, &visibleDisksBeforeCreate, diskArrivalTimeoutMs)) {
         appendLog(
-            context,
-            L"[backend] visiblePath=" + disk->identity.Path +
-                L", physicalDrive=" + MakePhysicalDrivePath(disk->identity.DeviceNumber));
+            L"[backend] visiblePath=" + diskRuntime->identity.Path +
+            L", physicalDrive=" + MakePhysicalDrivePath(diskRuntime->identity.DeviceNumber));
     } else {
         appendLog(
-            context,
             L"[backend] visiblePath=<pending-enumeration>, target=" + std::to_wstring(targetId));
     }
 
     return true;
 }
 
-bool removeManagedDisk(
-    BackendContext* context,
+bool BackendContext::removeManagedDisk(
     ULONG targetId,
     std::wstring* outErrorText)
 {
-    const auto disk = findManagedDisk(context, targetId);
+    const auto diskRuntime = findDiskRuntime(this, targetId);
     AK_STATUS status;
 
-    if ((context == nullptr) || (context->session == nullptr)) {
+    if (session == nullptr) {
         if (outErrorText != nullptr) {
             *outErrorText = L"session-not-open";
         }
         return false;
     }
 
-    if (disk == nullptr) {
+    if (diskRuntime == nullptr) {
         if (outErrorText != nullptr) {
             *outErrorText = L"target-not-found";
         }
         return false;
     }
 
-    if (disk->handle == nullptr) {
-        cleanupManagedDiskMedia(disk.get());
-        eraseManagedDisk(context, targetId);
-        appendLog(context, L"[backend] removed target=" + std::to_wstring(targetId));
+    if (diskRuntime->handle == nullptr) {
+        cleanupManagedDiskMedia(diskRuntime.get());
+        eraseDiskRuntime(this, targetId);
+        appendLog(L"[backend] removed target=" + std::to_wstring(targetId));
         return true;
     }
 
-    status = AkRemoveDisk(disk->handle);
+    status = AkRemoveDisk(diskRuntime->handle);
     if (status != AK_STATUS_SUCCESS) {
         if (outErrorText != nullptr) {
             *outErrorText = formatStatusHex(status);
         }
         appendLog(
-            context,
             L"[backend] remove failed, target=" + std::to_wstring(targetId) +
-                L", status=" + formatStatusHex(status));
+            L", status=" + formatStatusHex(status));
         return false;
     }
 
-    disk->handle = nullptr;
-    cleanupManagedDiskMedia(disk.get());
-    eraseManagedDisk(context, targetId);
-    appendLog(context, L"[backend] removed target=" + std::to_wstring(targetId));
+    diskRuntime->handle = nullptr;
+    cleanupManagedDiskMedia(diskRuntime.get());
+    eraseDiskRuntime(this, targetId);
+    appendLog(L"[backend] removed target=" + std::to_wstring(targetId));
     return true;
 }
 
-bool removeAllManagedDisks(
-    BackendContext* context,
-    bool closing)
+bool BackendContext::removeAllManagedDisks(bool closing)
 {
-    const auto disks = snapshotManagedDisks(context);
+    const auto runtimeList = snapshotDiskRuntimes(this);
     std::vector<ULONG> removedTargetIds;
-    bool ok;
+    bool ok = true;
 
-    if (context == nullptr) {
-        return false;
-    }
-
-    ok = true;
-    for (const auto& disk : disks) {
-        if (disk == nullptr) {
+    for (const auto& diskRuntime : runtimeList) {
+        if (diskRuntime == nullptr) {
             continue;
         }
 
-        if ((disk->handle != nullptr) && (context->session != nullptr)) {
-            if (AkRemoveDisk(disk->handle) != AK_STATUS_SUCCESS) {
+        if ((diskRuntime->handle != nullptr) && (session != nullptr)) {
+            if (AkRemoveDisk(diskRuntime->handle) != AK_STATUS_SUCCESS) {
                 appendLog(
-                    context,
-                    L"[backend] remove all failed, target=" + std::to_wstring(disk->targetId));
+                    L"[backend] remove all failed, target=" + std::to_wstring(diskRuntime->targetId));
                 ok = false;
                 if (!closing) {
                     continue;
                 }
             } else {
-                disk->handle = nullptr;
+                diskRuntime->handle = nullptr;
             }
         }
 
-        cleanupManagedDiskMedia(disk.get());
-        removedTargetIds.push_back(disk->targetId);
+        cleanupManagedDiskMedia(diskRuntime.get());
+        removedTargetIds.push_back(diskRuntime->targetId);
     }
 
     {
-        std::lock_guard<std::mutex> guard(context->disksLock);
+        std::lock_guard<std::mutex> guard(diskRuntimesLock);
         for (ULONG targetId : removedTargetIds) {
-            context->disks.erase(targetId);
+            diskRuntimes.erase(targetId);
         }
     }
 
-    appendLog(context, L"[backend] removedAll=true");
+    appendLog(L"[backend] removedAll=true");
     return ok || closing;
 }
 

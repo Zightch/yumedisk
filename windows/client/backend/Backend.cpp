@@ -26,16 +26,16 @@ void assignErrorText(
 Backend::Backend()
     : context(std::make_unique<clientbackend::BackendContext>())
 {
-    (void)clientbackend::openBackendContext(context.get());
+    (void)context->open();
 }
 
 Backend::~Backend()
 {
-    clientbackend::closeBackendContext(context.get());
+    context->close();
 }
 
 QString Backend::sessionStateText() const {
-    return fromWide(clientbackend::querySessionStateText(context.get()));
+    return fromWide(context->querySessionStateText());
 }
 
 QStringList Backend::initialLogLines() const {
@@ -45,7 +45,7 @@ QStringList Backend::initialLogLines() const {
 QStringList Backend::logLines() const {
     QStringList lines;
 
-    for (const auto& line : clientbackend::snapshotLogLines(context.get())) {
+    for (const auto& line : context->snapshotLogLines()) {
         lines.push_back(fromWide(line));
     }
 
@@ -68,7 +68,7 @@ bool Backend::createManagedDisk(
     backendRequest.requestedMode = request.requestedMode;
     backendRequest.rawFilePath = request.rawFilePath.toStdWString();
 
-    if (!clientbackend::createManagedDisk(context.get(), backendRequest, &errorText)) {
+    if (!context->createManagedDisk(backendRequest, &errorText)) {
         assignErrorText(outErrorText, errorText);
         return false;
     }
@@ -82,7 +82,7 @@ bool Backend::removeManagedDisk(
 {
     std::wstring errorText;
 
-    if (!clientbackend::removeManagedDisk(context.get(), targetId, &errorText)) {
+    if (!context->removeManagedDisk(targetId, &errorText)) {
         assignErrorText(outErrorText, errorText);
         return false;
     }
@@ -94,7 +94,7 @@ bool Backend::removeAllManagedDisks(
     bool closing,
     QString* outErrorText)
 {
-    if (!clientbackend::removeAllManagedDisks(context.get(), closing)) {
+    if (!context->removeAllManagedDisks(closing)) {
         if (outErrorText != nullptr) {
             *outErrorText = QStringLiteral("remove-all-failed");
         }
@@ -114,16 +114,16 @@ bool Backend::shutdown(
         return false;
     }
 
-    clientbackend::closeBackendContext(context.get());
+    context->close();
     return true;
 }
 
 QString Backend::querySessionState() const {
-    return fromWide(clientbackend::querySessionStateText(context.get()));
+    return fromWide(context->querySessionStateText());
 }
 
 std::vector<clientbackend::ManagedDiskSnapshot> Backend::snapshotManagedDisks() const {
-    return clientbackend::snapshotManagedDisks(context.get());
+    return context->snapshotManagedDisks();
 }
 
 bool Backend::queryBackendStats(
@@ -132,7 +132,7 @@ bool Backend::queryBackendStats(
 {
     std::wstring errorText;
 
-    if (!clientbackend::queryBackendStats(context.get(), outStats, &errorText)) {
+    if (!context->queryBackendStats(outStats, &errorText)) {
         assignErrorText(outErrorText, errorText);
         return false;
     }
@@ -146,7 +146,7 @@ bool Backend::queryDebugSnapshot(
 {
     std::wstring errorText;
 
-    if (!clientbackend::queryDebugSnapshot(context.get(), outSnapshot, &errorText)) {
+    if (!context->queryDebugSnapshot(outSnapshot, &errorText)) {
         assignErrorText(outErrorText, errorText);
         return false;
     }

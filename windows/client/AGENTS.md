@@ -33,5 +33,5 @@
 ## 3. 当前阶段实现边界
 
 - 当前 `client` 目标是把 `TestApp` 的最小闭环从 `CLI` 升级为 `UI`，不额外引入多余层级。
-- 当前后端继续只保留 `BackendContext` 和 `ManagedDisk` 主线，不新增 `viewmodel/store/runtime facade` 一类扩展壳。
+- 当前后端继续只保留 `BackendContext` 和 `DiskRuntime` 主线，不新增 `viewmodel/store/runtime facade` 一类扩展壳。
 - UI 只做操作面和展示面，不持有第二份业务真状态。

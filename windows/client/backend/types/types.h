@@ -97,25 +97,49 @@ struct StagedWriteRecord {
     std::map<UINT32, StagedFragment> fragments;
 };
 
-struct ManagedDisk;
+struct DiskRuntime;
 
 struct BackendContext {
     AppConfig config;
     AK_SESSION* session = nullptr;
     HANDLE stopEvent = nullptr;
     std::atomic<bool> stop{false};
-    std::mutex disksLock;
-    std::map<ULONG, std::shared_ptr<ManagedDisk>> disks;
+    std::mutex diskRuntimesLock;
+    std::map<ULONG, std::shared_ptr<DiskRuntime>> diskRuntimes;
     mutable std::mutex logLock;
     std::vector<std::wstring> logLines;
     std::thread eventThread;
     AK_STATUS openStatus = AK_STATUS_SUCCESS;
     DWORD openWin32Error = ERROR_SUCCESS;
     bool openSucceeded = false;
+
+    bool open();
+    void close();
+
+    std::wstring querySessionStateText() const;
+    std::vector<std::wstring> snapshotLogLines() const;
+    std::vector<ManagedDiskSnapshot> snapshotManagedDisks() const;
+    bool queryBackendStats(
+        BackendStatsSnapshot* outStats,
+        std::wstring* outErrorText = nullptr) const;
+    bool queryDebugSnapshot(
+        DebugSnapshot* outSnapshot,
+        std::wstring* outErrorText = nullptr) const;
+
+    ULONG findFirstFreeTarget();
+    bool createManagedDisk(
+        const CreateDiskRequest& request,
+        std::wstring* outErrorText = nullptr);
+    bool removeManagedDisk(
+        ULONG targetId,
+        std::wstring* outErrorText = nullptr);
+    bool removeAllManagedDisks(bool closing);
+
+    void appendLog(const std::wstring& text);
 };
 
-struct ManagedDisk {
-    BackendContext* backend = nullptr;
+struct DiskRuntime {
+    BackendContext* context = nullptr;
     AK_DISK* handle = nullptr;
     ULONG targetId = 0;
     ULONG sectorSize = 0;
@@ -134,5 +158,7 @@ struct ManagedDisk {
     std::map<UINT64, StagedWriteRecord> stagedWrites;
     UINT64 nextStageOrdinal = 1;
 };
+
+using ManagedDisk = DiskRuntime;
 
 } // namespace clientbackend

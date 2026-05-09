@@ -19,20 +19,6 @@
 
 ## 3. 当前未完成子步骤
 
-### Step 1. 重建全局控制面骨架
-
-目标：
-
-- 重建 `Backend` 与 `BackendContext` 的唯一控制入口；
-- 重建 `session` 生命周期、事件泵、日志入口和 `map<targetId, DiskRuntime>` 的唯一归属；
-- 重建建盘、删盘、全部删盘、状态查询的统一控制面。
-
-完成定义：
-
-- 全局控制职责不再散落在 `Widget`、临时 `helper` 或其他组件中；
-- `BackendContext` 成为唯一 `session` 与运行时持有者；
-- `UI` 只通过 `Backend` 调用，不直连 `AppKernel` 细节。
-
 ### Step 2. 重建按盘运行时骨架
 
 目标：
@@ -87,4 +73,4 @@
 
 ## 4. 当前唯一下一步
 
-- 先重建全局控制面骨架，把 `Backend / BackendContext / map<targetId, DiskRuntime>` 的唯一归属收紧到一条主线。
+- 先重建按盘运行时骨架，把 `DiskRuntime` 的按盘 metadata、生命周期边界和资源归属从当前过渡结构里单独收紧出来。
