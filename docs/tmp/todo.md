@@ -4,24 +4,7 @@
 
 ## 子步骤
 
-1. 重建 `BackendCore` 工程骨架与编译目标
-   - 新建 `windows/BackendCore/` 项目与 `CMakeLists.txt`
-   - 先建立 DLL 目标名 `BackendCore`
-   - 先接入当前需要的公共依赖：
-     - `AppKernel`
-     - `scan`
-   - 先迁出不依赖 `Qt` 的最小公共目录骨架：
-     - `BackendCore/`
-     - `runtime/`
-     - `StagingStore/`
-     - `types/`
-     - `config/`
-     - `media/Media/`
-   - 当前步只要求：
-     - `BackendCore` 工程独立可编译
-     - 不要求 `client` 已切到新 DLL
-
-2. 重建 `BackendCore` 对外类型与配置面
+1. 重建 `BackendCore` 对外类型与配置面
    - 把当前 `client/backend` 里混杂的 Qt DTO 与核心类型彻底切开
    - 定义只含标准库 / Win32 / `AppKernel` 类型的核心对外结构
    - 固定配置拆分：
@@ -34,7 +17,7 @@
      - 不出现 UI 表单概念
      - 不出现 `requestedMode/rawFilePath/capacityMiBText` 这类宿主输入态字段
 
-3. 重建 `BackendCore` 运行时主线
+2. 重建 `BackendCore` 运行时主线
    - 迁出并收口：
      - `BackendContext`
      - `DiskRuntime`
@@ -52,7 +35,7 @@
      - 让 `BackendCore` 自己独立承接当前 runtime 真状态
      - 不再依赖 `client` 里的 UI 适配层解释运行状态
 
-4. 重建 `BackendCore` 建盘与删盘接口
+3. 重建 `BackendCore` 建盘与删盘接口
    - `BackendCore` 只接收已经收口后的运行参数
    - `Media` 由宿主侧创建后移交给 `BackendCore`
    - `BackendCore` 负责：
@@ -68,7 +51,7 @@
      - `queueDepth`
      不再由 core 隐式替上层决定，改为上层可传、core 校验后落地
 
-5. 重建 `client` 宿主适配层 `backendHost`
+4. 重建 `client` 宿主适配层 `backendHost`
    - 新建 `windows/client/backendHost/`
    - 它只负责：
      - `QString` / 表单输入解析
@@ -84,7 +67,7 @@
      - 自己维护 staging 生命周期
      - 自己接 `AppKernel`
 
-6. 重建 `client` 介质实现归属
+5. 重建 `client` 介质实现归属
    - 把当前具体介质实现留在 `client` 宿主侧
    - 固定归属：
      - `client/media/FileMedia/`
@@ -98,7 +81,7 @@
      - 让 `BackendCore` 只关心“怎么驱动盘”
      - 不关心“宿主用什么本地文件介质实现”
 
-7. 重建 `client` 调用链
+6. 重建 `client` 调用链
    - 把当前 `Widget/CreateDiskDialog -> Backend` 的直连路径
      重建为：
      - `Widget/CreateDiskDialog`
@@ -108,7 +91,7 @@
    - `CreateDiskDialog` 只收集输入，不承接运行时规则
    - 保持当前“UI 与运行时分离”原则，不回退成 UI 直接解释 runtime 细节
 
-8. 重建构建与部署链路
+7. 重建构建与部署链路
    - `client` 改为链接 `BackendCore`
    - `BackendCore` 再链接：
      - `AppKernel`
@@ -120,7 +103,7 @@
      - IDE 构建可运行
      - `cmake-build-debug` 产物可直接启动
 
-9. 重建验收口径
+8. 重建验收口径
    - 先做构建验收：
      - `BackendCore` 独立可编译
      - `client` 链接新链路后可编译
@@ -147,6 +130,7 @@
   - Qt DTO
   - `FileMedia`
   - 具体 `Media` 子类实现
+- 当前 `BackendCore` 工程骨架已独立建好，并已独立编译通过；后续各步都基于该骨架继续收口，不回退到重新混入 `client/backend/`。
 - `client` 继续保留：
   - `Widget`
   - `CreateDiskDialog`
@@ -173,6 +157,6 @@
 
 ## 当前唯一下一步
 
-重建 `BackendCore` 工程骨架与编译目标，先把当前不依赖 `Qt` 的核心目录和 CMake 目标从 `windows/client/backend/` 中独立出来，并让 `BackendCore.dll` 在不接入 `client` 新调用链的前提下先独立编译通过。
+重建 `BackendCore` 对外类型与完整配置面：把当前 `types/config/runtime` 中仍夹带宿主输入态痕迹和默认硬编码的部分收口成纯 core 运行时结构，并完整暴露当前 `AppKernel` 已有 session / disk 配置项，不引入 `QString`、`QFileInfo`、UI DTO 或具体介质实现。
 
 历史完成事实与验收结果请查看 [../progress/README.md](../progress/README.md) 对应日期文件。
