@@ -97,6 +97,38 @@ struct StagedWriteRecord {
     std::map<UINT32, StagedFragment> fragments;
 };
 
+struct DiskMetadata {
+    ULONG targetId = 0;
+    ULONG sectorSize = 0;
+    uint64_t diskSizeBytes = 0;
+    bool readOnly = false;
+    MediaMode mode = MediaMode::autoSelect;
+    std::wstring backingFilePath;
+    DiskIdentity identity{};
+};
+
+struct DiskQueueConfig {
+    size_t slotDepth = 0;
+    size_t readWorkerCount = 0;
+    size_t writeWorkerCount = 0;
+};
+
+struct DiskLifecycleState {
+    AK_DISK* handle = nullptr;
+};
+
+struct DiskMediaState {
+    mutable std::shared_mutex lock;
+    std::mutex backingFileIoLock;
+    std::vector<unsigned char> memory;
+    HANDLE backingFile = INVALID_HANDLE_VALUE;
+};
+
+struct DiskStagingState {
+    std::map<UINT64, StagedWriteRecord> writes;
+    UINT64 nextOrdinal = 1;
+};
+
 struct DiskRuntime;
 
 struct BackendContext {
@@ -140,25 +172,11 @@ struct BackendContext {
 
 struct DiskRuntime {
     BackendContext* context = nullptr;
-    AK_DISK* handle = nullptr;
-    ULONG targetId = 0;
-    ULONG sectorSize = 0;
-    uint64_t diskSizeBytes = 0;
-    bool readOnly = false;
-    size_t slotDepth = 0;
-    size_t readWorkerCount = 0;
-    size_t writeWorkerCount = 0;
-    MediaMode mode = MediaMode::autoSelect;
-    DiskIdentity identity{};
-    mutable std::shared_mutex mediaLock;
-    std::mutex backingFileIoLock;
-    std::vector<unsigned char> denseMedium;
-    HANDLE backingFile = INVALID_HANDLE_VALUE;
-    std::wstring backingFilePath;
-    std::map<UINT64, StagedWriteRecord> stagedWrites;
-    UINT64 nextStageOrdinal = 1;
+    DiskMetadata metadata;
+    DiskQueueConfig queueConfig;
+    DiskLifecycleState lifecycle;
+    DiskMediaState media;
+    DiskStagingState staging;
 };
-
-using ManagedDisk = DiskRuntime;
 
 } // namespace clientbackend

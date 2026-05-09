@@ -104,7 +104,7 @@ void insertDiskRuntime(
     const std::shared_ptr<DiskRuntime>& diskRuntime)
 {
     std::lock_guard<std::mutex> guard(context->diskRuntimesLock);
-    context->diskRuntimes[diskRuntime->targetId] = diskRuntime;
+    context->diskRuntimes[diskRuntime->metadata.targetId] = diskRuntime;
 }
 
 void eraseDiskRuntime(
@@ -134,8 +134,8 @@ std::vector<std::wstring> snapshotClaimedDiskPaths(
         if (entry.first == excludedTargetId) {
             continue;
         }
-        if (!entry.second->identity.Path.empty()) {
-            paths.push_back(entry.second->identity.Path);
+        if (!entry.second->metadata.identity.Path.empty()) {
+            paths.push_back(entry.second->metadata.identity.Path);
         }
     }
 
@@ -167,7 +167,7 @@ bool tryRefreshDiskRuntimeIdentity(
     const std::vector<DiskIdentity>* baselineVisibleDisks,
     DWORD timeoutMs)
 {
-    const auto claimedPaths = snapshotClaimedDiskPaths(context, diskRuntime->targetId);
+    const auto claimedPaths = snapshotClaimedDiskPaths(context, diskRuntime->metadata.targetId);
     const ULONGLONG startTick = GetTickCount64();
 
     for (;;) {
@@ -197,7 +197,7 @@ bool tryRefreshDiskRuntimeIdentity(
         }
 
         if (selected != nullptr) {
-            diskRuntime->identity = *selected;
+            diskRuntime->metadata.identity = *selected;
             return true;
         }
 
@@ -260,18 +260,18 @@ ManagedDiskSnapshot makeManagedDiskSnapshot(
     AK_DISK_STATE diskState{};
     bool haveState;
 
-    snapshot.targetId = diskRuntime->targetId;
-    snapshot.diskSizeBytes = diskRuntime->diskSizeBytes;
-    snapshot.sectorSize = diskRuntime->sectorSize;
-    snapshot.readOnly = diskRuntime->readOnly;
-    snapshot.mode = diskRuntime->mode;
+    snapshot.targetId = diskRuntime->metadata.targetId;
+    snapshot.diskSizeBytes = diskRuntime->metadata.diskSizeBytes;
+    snapshot.sectorSize = diskRuntime->metadata.sectorSize;
+    snapshot.readOnly = diskRuntime->metadata.readOnly;
+    snapshot.mode = diskRuntime->metadata.mode;
 
     (void)tryRefreshDiskRuntimeIdentity(context, diskRuntime, nullptr, 0);
-    snapshot.visiblePath = diskRuntime->identity.Path;
-    snapshot.physicalDrivePath = MakePhysicalDrivePath(diskRuntime->identity.DeviceNumber);
+    snapshot.visiblePath = diskRuntime->metadata.identity.Path;
+    snapshot.physicalDrivePath = MakePhysicalDrivePath(diskRuntime->metadata.identity.DeviceNumber);
 
-    haveState = (diskRuntime->handle != nullptr) &&
-        (AkQueryDiskState(diskRuntime->handle, &diskState) == AK_STATUS_SUCCESS);
+    haveState = (diskRuntime->lifecycle.handle != nullptr) &&
+        (AkQueryDiskState(diskRuntime->lifecycle.handle, &diskState) == AK_STATUS_SUCCESS);
     snapshot.online = haveState && (diskState.Lifecycle == AkStateRunning);
     snapshot.lifecycleText = haveState
         ? lifecycleToText(diskState.Lifecycle)
@@ -362,7 +362,7 @@ void discardAllDiskRuntimeState(
             continue;
         }
 
-        diskRuntime->handle = nullptr;
+        diskRuntime->lifecycle.handle = nullptr;
         cleanupManagedDiskMedia(diskRuntime.get());
     }
 
@@ -704,18 +704,18 @@ bool BackendContext::createManagedDisk(
 
     diskRuntime = std::make_shared<DiskRuntime>();
     diskRuntime->context = this;
-    diskRuntime->targetId = targetId;
-    diskRuntime->sectorSize = config.sectorSize;
-    diskRuntime->diskSizeBytes = request.diskSizeBytes;
-    diskRuntime->readOnly = request.readOnly;
-    diskRuntime->backingFilePath = request.rawFilePath;
-    diskRuntime->slotDepth = config.queueDepth;
-    diskRuntime->readWorkerCount = computeWorkerCount(
-        diskRuntime->slotDepth,
+    diskRuntime->metadata.targetId = targetId;
+    diskRuntime->metadata.sectorSize = config.sectorSize;
+    diskRuntime->metadata.diskSizeBytes = request.diskSizeBytes;
+    diskRuntime->metadata.readOnly = request.readOnly;
+    diskRuntime->metadata.backingFilePath = request.rawFilePath;
+    diskRuntime->queueConfig.slotDepth = config.queueDepth;
+    diskRuntime->queueConfig.readWorkerCount = computeWorkerCount(
+        diskRuntime->queueConfig.slotDepth,
         readSlotsPerWorkerTarget,
         maxReadWorkersPerDisk);
-    diskRuntime->writeWorkerCount = computeWorkerCount(
-        diskRuntime->slotDepth,
+    diskRuntime->queueConfig.writeWorkerCount = computeWorkerCount(
+        diskRuntime->queueConfig.slotDepth,
         writeSlotsPerWorkerTarget,
         maxWriteWorkersPerDisk);
 
@@ -733,11 +733,11 @@ bool BackendContext::createManagedDisk(
 
     params.TargetId = targetId;
     params.SectorSize = config.sectorSize;
-    params.DiskSizeBytes = diskRuntime->diskSizeBytes;
+    params.DiskSizeBytes = diskRuntime->metadata.diskSizeBytes;
     params.QueueDepth = (UINT32)config.queueDepth;
     params.WriteSlotBytes = (UINT32)config.writeSlotBytes;
-    params.ReadWorkerCount = (UINT16)diskRuntime->readWorkerCount;
-    params.WriteWorkerCount = (UINT16)diskRuntime->writeWorkerCount;
+    params.ReadWorkerCount = (UINT16)diskRuntime->queueConfig.readWorkerCount;
+    params.WriteWorkerCount = (UINT16)diskRuntime->queueConfig.writeWorkerCount;
     params.AckBatchMaxRanges = (UINT32)config.queueDepth;
     params.ReadOnly = request.readOnly ? 1u : 0u;
 
@@ -755,20 +755,20 @@ bool BackendContext::createManagedDisk(
         return false;
     }
 
-    diskRuntime->handle = handle;
+    diskRuntime->lifecycle.handle = handle;
     appendLog(
         L"[backend] created target=" + std::to_wstring(targetId) +
-        L", diskBytes=" + std::to_wstring(diskRuntime->diskSizeBytes) +
-        L", readOnly=" + readOnlyToText(diskRuntime->readOnly) +
-        L", media=" + mediaModeToText(diskRuntime->mode));
-    if (diskRuntime->mode == MediaMode::rawFile) {
-        appendLog(L"[backend] rawFile=" + diskRuntime->backingFilePath);
+        L", diskBytes=" + std::to_wstring(diskRuntime->metadata.diskSizeBytes) +
+        L", readOnly=" + readOnlyToText(diskRuntime->metadata.readOnly) +
+        L", media=" + mediaModeToText(diskRuntime->metadata.mode));
+    if (diskRuntime->metadata.mode == MediaMode::rawFile) {
+        appendLog(L"[backend] rawFile=" + diskRuntime->metadata.backingFilePath);
     }
 
     if (tryRefreshDiskRuntimeIdentity(this, diskRuntime, &visibleDisksBeforeCreate, diskArrivalTimeoutMs)) {
         appendLog(
-            L"[backend] visiblePath=" + diskRuntime->identity.Path +
-            L", physicalDrive=" + MakePhysicalDrivePath(diskRuntime->identity.DeviceNumber));
+            L"[backend] visiblePath=" + diskRuntime->metadata.identity.Path +
+            L", physicalDrive=" + MakePhysicalDrivePath(diskRuntime->metadata.identity.DeviceNumber));
     } else {
         appendLog(
             L"[backend] visiblePath=<pending-enumeration>, target=" + std::to_wstring(targetId));
@@ -798,14 +798,14 @@ bool BackendContext::removeManagedDisk(
         return false;
     }
 
-    if (diskRuntime->handle == nullptr) {
+    if (diskRuntime->lifecycle.handle == nullptr) {
         cleanupManagedDiskMedia(diskRuntime.get());
         eraseDiskRuntime(this, targetId);
         appendLog(L"[backend] removed target=" + std::to_wstring(targetId));
         return true;
     }
 
-    status = AkRemoveDisk(diskRuntime->handle);
+    status = AkRemoveDisk(diskRuntime->lifecycle.handle);
     if (status != AK_STATUS_SUCCESS) {
         if (outErrorText != nullptr) {
             *outErrorText = formatStatusHex(status);
@@ -816,7 +816,7 @@ bool BackendContext::removeManagedDisk(
         return false;
     }
 
-    diskRuntime->handle = nullptr;
+    diskRuntime->lifecycle.handle = nullptr;
     cleanupManagedDiskMedia(diskRuntime.get());
     eraseDiskRuntime(this, targetId);
     appendLog(L"[backend] removed target=" + std::to_wstring(targetId));
@@ -834,21 +834,21 @@ bool BackendContext::removeAllManagedDisks(bool closing)
             continue;
         }
 
-        if ((diskRuntime->handle != nullptr) && (session != nullptr)) {
-            if (AkRemoveDisk(diskRuntime->handle) != AK_STATUS_SUCCESS) {
+        if ((diskRuntime->lifecycle.handle != nullptr) && (session != nullptr)) {
+            if (AkRemoveDisk(diskRuntime->lifecycle.handle) != AK_STATUS_SUCCESS) {
                 appendLog(
-                    L"[backend] remove all failed, target=" + std::to_wstring(diskRuntime->targetId));
+                    L"[backend] remove all failed, target=" + std::to_wstring(diskRuntime->metadata.targetId));
                 ok = false;
                 if (!closing) {
                     continue;
                 }
             } else {
-                diskRuntime->handle = nullptr;
+                diskRuntime->lifecycle.handle = nullptr;
             }
         }
 
         cleanupManagedDiskMedia(diskRuntime.get());
-        removedTargetIds.push_back(diskRuntime->targetId);
+        removedTargetIds.push_back(diskRuntime->metadata.targetId);
     }
 
     {

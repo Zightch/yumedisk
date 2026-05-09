@@ -6,14 +6,14 @@
 
 namespace clientbackend {
 
-size_t countStagedFragmentsLocked(const ManagedDisk* disk);
+size_t countStagedFragmentsLocked(const DiskRuntime* diskRuntime);
 
 bool initializeManagedDiskMedia(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     MediaMode requestedMode,
     std::wstring* outReason);
 
-void cleanupManagedDiskMedia(ManagedDisk* disk);
+void cleanupManagedDiskMedia(DiskRuntime* diskRuntime);
 
 AK_STATUS AK_CALL hostReadBytes(
     void* mediaCtx,
@@ -28,11 +28,11 @@ AK_STATUS AK_CALL hostStageWrite(
     UINT32 dataLength);
 
 bool applyCommittedWrite(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     UINT64 eventId);
 
 void discardStagedWrite(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     UINT64 eventId);
 
 } // namespace clientbackend

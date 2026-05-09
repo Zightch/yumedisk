@@ -19,19 +19,6 @@
 
 ## 3. 当前未完成子步骤
 
-### Step 2. 重建按盘运行时骨架
-
-目标：
-
-- 重建 `DiskRuntime`，按盘承接 `metadata / staging / media`；
-- 重建 `N` 盘展开关系与生命周期边界。
-
-完成定义：
-
-- 每个 `target` 各自持有独立 `DiskRuntime`；
-- 单盘状态不再混在全局杂项字段里；
-- 按盘资源可随建盘、删盘完整创建与释放。
-
 ### Step 3. 重建按盘暂存层
 
 目标：
@@ -73,4 +60,4 @@
 
 ## 4. 当前唯一下一步
 
-- 先重建按盘运行时骨架，把 `DiskRuntime` 的按盘 metadata、生命周期边界和资源归属从当前过渡结构里单独收紧出来。
+- 先重建按盘暂存层，把当前 `DiskRuntime` 里的 staged write 状态继续收口成唯一按盘暂存落点，并统一 `stageWrite / commit / reject` 主线。

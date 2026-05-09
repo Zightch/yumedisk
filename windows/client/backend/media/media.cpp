@@ -27,38 +27,38 @@ bool isFileBackedMode(
 }
 
 bool seekBackingFileLocked(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     UINT64 offset)
 {
     LARGE_INTEGER position;
 
-    if ((disk == nullptr) || (disk->backingFile == INVALID_HANDLE_VALUE)) {
+    if ((diskRuntime == nullptr) || (diskRuntime->media.backingFile == INVALID_HANDLE_VALUE)) {
         return false;
     }
 
     position.QuadPart = offset;
-    return SetFilePointerEx(disk->backingFile, position, nullptr, FILE_BEGIN) != FALSE;
+    return SetFilePointerEx(diskRuntime->media.backingFile, position, nullptr, FILE_BEGIN) != FALSE;
 }
 
 bool readBackingFileRangeLocked(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     UINT64 offset,
     void* buffer,
     UINT32 length)
 {
     DWORD bytesRead;
-    std::lock_guard<std::mutex> ioGuard(disk->backingFileIoLock);
+    std::lock_guard<std::mutex> ioGuard(diskRuntime->media.backingFileIoLock);
 
     if (length == 0) {
         return true;
     }
 
-    if (!seekBackingFileLocked(disk, offset)) {
+    if (!seekBackingFileLocked(diskRuntime, offset)) {
         return false;
     }
 
     bytesRead = 0;
-    if (!ReadFile(disk->backingFile, buffer, length, &bytesRead, nullptr)) {
+    if (!ReadFile(diskRuntime->media.backingFile, buffer, length, &bytesRead, nullptr)) {
         return false;
     }
 
@@ -66,24 +66,24 @@ bool readBackingFileRangeLocked(
 }
 
 bool writeBackingFileRangeLocked(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     UINT64 offset,
     const void* buffer,
     UINT32 length)
 {
     DWORD bytesWritten;
-    std::lock_guard<std::mutex> ioGuard(disk->backingFileIoLock);
+    std::lock_guard<std::mutex> ioGuard(diskRuntime->media.backingFileIoLock);
 
     if (length == 0) {
         return true;
     }
 
-    if (!seekBackingFileLocked(disk, offset)) {
+    if (!seekBackingFileLocked(diskRuntime, offset)) {
         return false;
     }
 
     bytesWritten = 0;
-    if (!WriteFile(disk->backingFile, buffer, length, &bytesWritten, nullptr)) {
+    if (!WriteFile(diskRuntime->media.backingFile, buffer, length, &bytesWritten, nullptr)) {
         return false;
     }
 
@@ -91,113 +91,113 @@ bool writeBackingFileRangeLocked(
 }
 
 bool readBackingRangeLocked(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     UINT64 offset,
     void* buffer,
     UINT32 length)
 {
-    if ((disk->mode == MediaMode::denseMem) || (disk->mode == MediaMode::sparseMem)) {
+    if ((diskRuntime->metadata.mode == MediaMode::denseMem) || (diskRuntime->metadata.mode == MediaMode::sparseMem)) {
         (void)memcpy(
             buffer,
-            disk->denseMedium.data() + (size_t)offset,
+            diskRuntime->media.memory.data() + (size_t)offset,
             length);
         return true;
     }
 
-    if (isFileBackedMode(disk->mode)) {
-        return readBackingFileRangeLocked(disk, offset, buffer, length);
+    if (isFileBackedMode(diskRuntime->metadata.mode)) {
+        return readBackingFileRangeLocked(diskRuntime, offset, buffer, length);
     }
 
     return false;
 }
 
 bool writeBackingRangeLocked(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     UINT64 offset,
     const void* buffer,
     UINT32 length)
 {
-    if ((disk->mode == MediaMode::denseMem) || (disk->mode == MediaMode::sparseMem)) {
+    if ((diskRuntime->metadata.mode == MediaMode::denseMem) || (diskRuntime->metadata.mode == MediaMode::sparseMem)) {
         (void)memcpy(
-            disk->denseMedium.data() + (size_t)offset,
+            diskRuntime->media.memory.data() + (size_t)offset,
             buffer,
             length);
         return true;
     }
 
-    if (isFileBackedMode(disk->mode)) {
-        return writeBackingFileRangeLocked(disk, offset, buffer, length);
+    if (isFileBackedMode(diskRuntime->metadata.mode)) {
+        return writeBackingFileRangeLocked(diskRuntime, offset, buffer, length);
     }
 
     return false;
 }
 
 bool initializeDenseMedia(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     std::wstring* outReason)
 {
-    if (disk->diskSizeBytes > maxDenseMediaBytes) {
+    if (diskRuntime->metadata.diskSizeBytes > maxDenseMediaBytes) {
         setFailureReason(outReason, L"dense-limit-exceeded");
         return false;
     }
-    if (disk->diskSizeBytes > (uint64_t)std::numeric_limits<size_t>::max()) {
+    if (diskRuntime->metadata.diskSizeBytes > (uint64_t)std::numeric_limits<size_t>::max()) {
         setFailureReason(outReason, L"dense-size-overflow");
         return false;
     }
 
     try {
-        disk->denseMedium.resize((size_t)disk->diskSizeBytes, 0u);
+        diskRuntime->media.memory.resize((size_t)diskRuntime->metadata.diskSizeBytes, 0u);
     } catch (const std::exception&) {
         setFailureReason(outReason, L"dense-allocation-failed");
         return false;
     }
 
-    disk->backingFile = INVALID_HANDLE_VALUE;
-    disk->backingFilePath.clear();
+    diskRuntime->media.backingFile = INVALID_HANDLE_VALUE;
+    diskRuntime->metadata.backingFilePath.clear();
     return true;
 }
 
 bool initializeSparseMedia(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     std::wstring* outReason)
 {
-    if (disk->diskSizeBytes > (uint64_t)std::numeric_limits<size_t>::max()) {
+    if (diskRuntime->metadata.diskSizeBytes > (uint64_t)std::numeric_limits<size_t>::max()) {
         setFailureReason(outReason, L"sparse-size-overflow");
         return false;
     }
 
     try {
-        disk->denseMedium.resize((size_t)disk->diskSizeBytes, 0u);
+        diskRuntime->media.memory.resize((size_t)diskRuntime->metadata.diskSizeBytes, 0u);
     } catch (const std::exception&) {
         setFailureReason(outReason, L"sparse-allocation-failed");
         return false;
     }
 
-    disk->backingFile = INVALID_HANDLE_VALUE;
-    disk->backingFilePath.clear();
+    diskRuntime->media.backingFile = INVALID_HANDLE_VALUE;
+    diskRuntime->metadata.backingFilePath.clear();
     return true;
 }
 
 bool initializeRawMedia(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     std::wstring* outReason)
 {
     HANDLE fileHandle;
     LARGE_INTEGER fileSize;
     DWORD desiredAccess;
 
-    if (disk->backingFilePath.empty()) {
+    if (diskRuntime->metadata.backingFilePath.empty()) {
         setFailureReason(outReason, L"raw-file-path-required");
         return false;
     }
 
     desiredAccess = GENERIC_READ;
-    if (!disk->readOnly) {
+    if (!diskRuntime->metadata.readOnly) {
         desiredAccess |= GENERIC_WRITE;
     }
 
     fileHandle = CreateFileW(
-        disk->backingFilePath.c_str(),
+        diskRuntime->metadata.backingFilePath.c_str(),
         desiredAccess,
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
@@ -215,48 +215,48 @@ bool initializeRawMedia(
         return false;
     }
 
-    disk->diskSizeBytes = (uint64_t)fileSize.QuadPart;
-    if ((disk->diskSizeBytes % disk->sectorSize) != 0) {
+    diskRuntime->metadata.diskSizeBytes = (uint64_t)fileSize.QuadPart;
+    if ((diskRuntime->metadata.diskSizeBytes % diskRuntime->metadata.sectorSize) != 0) {
         CloseHandle(fileHandle);
         setFailureReason(outReason, L"raw-file-size-not-sector-aligned");
         return false;
     }
 
-    disk->denseMedium.clear();
-    disk->backingFile = fileHandle;
+    diskRuntime->media.memory.clear();
+    diskRuntime->media.backingFile = fileHandle;
     return true;
 }
 
 } // namespace
 
 size_t countStagedFragmentsLocked(
-    const ManagedDisk* disk)
+    const DiskRuntime* diskRuntime)
 {
     size_t count;
 
     count = 0;
-    for (const auto& entry : disk->stagedWrites) {
+    for (const auto& entry : diskRuntime->staging.writes) {
         count += entry.second.fragments.size();
     }
     return count;
 }
 
 bool initializeManagedDiskMedia(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     MediaMode requestedMode,
     std::wstring* outReason)
 {
-    const MediaMode resolvedMode = resolveMediaMode(requestedMode, disk->diskSizeBytes);
+    const MediaMode resolvedMode = resolveMediaMode(requestedMode, diskRuntime->metadata.diskSizeBytes);
 
-    disk->mode = resolvedMode;
+    diskRuntime->metadata.mode = resolvedMode;
     if (resolvedMode == MediaMode::denseMem) {
-        return initializeDenseMedia(disk, outReason);
+        return initializeDenseMedia(diskRuntime, outReason);
     }
     if (resolvedMode == MediaMode::sparseMem) {
-        return initializeSparseMedia(disk, outReason);
+        return initializeSparseMedia(diskRuntime, outReason);
     }
     if (resolvedMode == MediaMode::rawFile) {
-        return initializeRawMedia(disk, outReason);
+        return initializeRawMedia(diskRuntime, outReason);
     }
 
     setFailureReason(outReason, L"unsupported-media-mode");
@@ -264,19 +264,19 @@ bool initializeManagedDiskMedia(
 }
 
 void cleanupManagedDiskMedia(
-    ManagedDisk* disk)
+    DiskRuntime* diskRuntime)
 {
-    std::unique_lock<std::shared_mutex> guard(disk->mediaLock);
+    std::unique_lock<std::shared_mutex> guard(diskRuntime->media.lock);
 
-    disk->stagedWrites.clear();
-    disk->denseMedium.clear();
-    disk->denseMedium.shrink_to_fit();
+    diskRuntime->staging.writes.clear();
+    diskRuntime->media.memory.clear();
+    diskRuntime->media.memory.shrink_to_fit();
 
-    if (disk->backingFile != INVALID_HANDLE_VALUE) {
-        CloseHandle(disk->backingFile);
-        disk->backingFile = INVALID_HANDLE_VALUE;
+    if (diskRuntime->media.backingFile != INVALID_HANDLE_VALUE) {
+        CloseHandle(diskRuntime->media.backingFile);
+        diskRuntime->media.backingFile = INVALID_HANDLE_VALUE;
     }
-    disk->backingFilePath.clear();
+    diskRuntime->metadata.backingFilePath.clear();
 }
 
 AK_STATUS AK_CALL hostReadBytes(
@@ -285,13 +285,13 @@ AK_STATUS AK_CALL hostReadBytes(
     void* outBuffer,
     UINT32* outDataLength)
 {
-    ManagedDisk* disk;
+    DiskRuntime* diskRuntime;
     unsigned char* buffer;
     UINT64 requestBegin;
     UINT64 requestEnd;
 
-    disk = static_cast<ManagedDisk*>(mediaCtx);
-    if ((disk == nullptr) || (op == nullptr) || (outBuffer == nullptr) || (outDataLength == nullptr)) {
+    diskRuntime = static_cast<DiskRuntime*>(mediaCtx);
+    if ((diskRuntime == nullptr) || (op == nullptr) || (outBuffer == nullptr) || (outDataLength == nullptr)) {
         return AK_STATUS_INVALID_PARAMETER;
     }
 
@@ -302,7 +302,7 @@ AK_STATUS AK_CALL hostReadBytes(
 
     requestBegin = op->OffsetBytes;
     requestEnd = requestBegin + (UINT64)op->DataLength;
-    if ((requestEnd < requestBegin) || (requestEnd > disk->diskSizeBytes)) {
+    if ((requestEnd < requestBegin) || (requestEnd > diskRuntime->metadata.diskSizeBytes)) {
         *outDataLength = 0;
         return AK_STATUS_INVALID_PARAMETER;
     }
@@ -318,13 +318,13 @@ AK_STATUS AK_CALL hostReadBytes(
         };
         std::vector<OverlaySlice> overlays;
 
-        std::shared_lock<std::shared_mutex> guard(disk->mediaLock);
-        if (!readBackingRangeLocked(disk, requestBegin, buffer, op->DataLength)) {
+        std::shared_lock<std::shared_mutex> guard(diskRuntime->media.lock);
+        if (!readBackingRangeLocked(diskRuntime, requestBegin, buffer, op->DataLength)) {
             *outDataLength = 0;
             return AK_STATUS_UNSUCCESSFUL;
         }
 
-        for (const auto& stagedEntry : disk->stagedWrites) {
+        for (const auto& stagedEntry : diskRuntime->staging.writes) {
             for (const auto& fragmentEntry : stagedEntry.second.fragments) {
                 const StagedFragment& fragment = fragmentEntry.second;
                 UINT64 fragmentBegin;
@@ -379,12 +379,12 @@ AK_STATUS AK_CALL hostStageWrite(
     const void* dataBuffer,
     UINT32 dataLength)
 {
-    ManagedDisk* disk;
+    DiskRuntime* diskRuntime;
     UINT64 writeBegin;
     UINT64 writeEnd;
 
-    disk = static_cast<ManagedDisk*>(mediaCtx);
-    if ((disk == nullptr) || (op == nullptr)) {
+    diskRuntime = static_cast<DiskRuntime*>(mediaCtx);
+    if ((diskRuntime == nullptr) || (op == nullptr)) {
         return AK_STATUS_INVALID_PARAMETER;
     }
 
@@ -394,13 +394,13 @@ AK_STATUS AK_CALL hostStageWrite(
 
     writeBegin = op->OffsetBytes;
     writeEnd = writeBegin + (UINT64)dataLength;
-    if ((writeEnd < writeBegin) || (writeEnd > disk->diskSizeBytes)) {
+    if ((writeEnd < writeBegin) || (writeEnd > diskRuntime->metadata.diskSizeBytes)) {
         return AK_STATUS_INVALID_PARAMETER;
     }
 
     {
-        std::unique_lock<std::shared_mutex> guard(disk->mediaLock);
-        StagedWriteRecord& record = disk->stagedWrites[op->EventId];
+        std::unique_lock<std::shared_mutex> guard(diskRuntime->media.lock);
+        StagedWriteRecord& record = diskRuntime->staging.writes[op->EventId];
         StagedFragment fragment;
 
         if ((record.totalSeq != 0) && (record.totalSeq != op->TotalSeq)) {
@@ -410,8 +410,8 @@ AK_STATUS AK_CALL hostStageWrite(
         record.totalSeq = op->TotalSeq;
         fragment.seq = op->Seq;
         fragment.diskOffsetBytes = op->OffsetBytes;
-        fragment.ordinal = disk->nextStageOrdinal;
-        disk->nextStageOrdinal += 1;
+        fragment.ordinal = diskRuntime->staging.nextOrdinal;
+        diskRuntime->staging.nextOrdinal += 1;
         fragment.data.resize(dataLength, 0u);
         if ((dataLength != 0) && (dataBuffer != nullptr)) {
             (void)memcpy(fragment.data.data(), dataBuffer, dataLength);
@@ -424,12 +424,12 @@ AK_STATUS AK_CALL hostStageWrite(
 }
 
 bool applyCommittedWrite(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     UINT64 eventId)
 {
-    std::unique_lock<std::shared_mutex> guard(disk->mediaLock);
-    const auto it = disk->stagedWrites.find(eventId);
-    if (it == disk->stagedWrites.end()) {
+    std::unique_lock<std::shared_mutex> guard(diskRuntime->media.lock);
+    const auto it = diskRuntime->staging.writes.find(eventId);
+    if (it == diskRuntime->staging.writes.end()) {
         return true;
     }
 
@@ -437,13 +437,13 @@ bool applyCommittedWrite(
         const StagedFragment& fragment = fragmentEntry.second;
         const UINT64 endOffset = fragment.diskOffsetBytes + (UINT64)fragment.data.size();
 
-        if ((endOffset < fragment.diskOffsetBytes) || (endOffset > disk->diskSizeBytes)) {
+        if ((endOffset < fragment.diskOffsetBytes) || (endOffset > diskRuntime->metadata.diskSizeBytes)) {
             return false;
         }
 
         if (!fragment.data.empty() &&
             !writeBackingRangeLocked(
-                disk,
+                diskRuntime,
                 fragment.diskOffsetBytes,
                 fragment.data.data(),
                 (UINT32)fragment.data.size())) {
@@ -451,16 +451,16 @@ bool applyCommittedWrite(
         }
     }
 
-    disk->stagedWrites.erase(it);
+    diskRuntime->staging.writes.erase(it);
     return true;
 }
 
 void discardStagedWrite(
-    ManagedDisk* disk,
+    DiskRuntime* diskRuntime,
     UINT64 eventId)
 {
-    std::unique_lock<std::shared_mutex> guard(disk->mediaLock);
-    disk->stagedWrites.erase(eventId);
+    std::unique_lock<std::shared_mutex> guard(diskRuntime->media.lock);
+    diskRuntime->staging.writes.erase(eventId);
 }
 
 } // namespace clientbackend
