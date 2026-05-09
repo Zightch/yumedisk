@@ -51,6 +51,10 @@
 - `minimal_loop`
   - 启动后走一轮 `create -> list -> remove -> quit`；
   - 直接验证当前客户端最小闭环。
+- `quit_cleanup`
+  - 创建磁盘后不手动删盘；
+  - 直接显式退出；
+  - 验证可见盘回落和再次启动 session 正常打开。
 - `stop_process`
   - 强制停止目标进程；
   - 只用于调试收尾。
@@ -81,6 +85,7 @@ pwsh -File tests/uia_scenario.ps1 -Scenario minimal_loop -Launch
 ```powershell
 pwsh -File tests/uia_scenario.ps1 -Scenario full_shell -Launch -StopAfter
 pwsh -File tests/uia_scenario.ps1 -Scenario minimal_loop -Launch
+pwsh -File tests/uia_scenario.ps1 -Scenario quit_cleanup -Launch -StopAfter
 ```
 
 默认可执行文件路径：
@@ -196,6 +201,7 @@ pwsh -File tests/uia_test.ps1 -ProcessId <pid> -Action waitwindow -Timeout 10000
 
 - `full_shell`
 - `minimal_loop`
+- `quit_cleanup`
 
 ## 9. 常见问题
 

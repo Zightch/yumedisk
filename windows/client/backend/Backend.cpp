@@ -106,7 +106,15 @@ bool Backend::removeAllManagedDisks(
 bool Backend::shutdown(
     QString* outErrorText)
 {
-    return removeAllManagedDisks(true, outErrorText);
+    if (context == nullptr) {
+        if (outErrorText != nullptr) {
+            *outErrorText = QStringLiteral("backend-missing");
+        }
+        return false;
+    }
+
+    clientbackend::closeBackendContext(context.get());
+    return true;
 }
 
 QString Backend::querySessionState() const {

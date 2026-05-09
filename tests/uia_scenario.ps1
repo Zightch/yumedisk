@@ -54,6 +54,7 @@ YumeDisk Client UIA 场景脚本
   inspect      : 等待主窗口并导出 descendants 控件列表
   close_to_tray: 发送关闭窗口命令，并确认进程仍存活
   minimal_loop : 验证 create -> list -> remove -> quit 最小闭环
+  quit_cleanup : 验证保留磁盘直接退出时会清盘并可再次打开 session
   stop_process : 停止目标进程
   full_shell   : smoke -> inspect -> close_to_tray
 
@@ -71,6 +72,7 @@ if ($List) {
     Write-Host "  inspect"
     Write-Host "  close_to_tray"
     Write-Host "  minimal_loop"
+    Write-Host "  quit_cleanup"
     Write-Host "  stop_process"
     Write-Host "  full_shell"
     exit 0
@@ -206,6 +208,68 @@ function Get-LatestCreatedTargetId {
     }
 
     return [string]$matches[$matches.Count - 1].Groups[1].Value
+}
+
+function Get-VisibleYumeDiskDrives {
+    $drives = Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue |
+        Where-Object {
+            ([string]$_.Model -like "Zightch YumeDisk*") -or
+            ([string]$_.Caption -like "Zightch YumeDisk*")
+        } |
+        Select-Object DeviceID, Model, Caption, Size
+
+    return @($drives)
+}
+
+function Wait-VisibleYumeDiskCount {
+    param(
+        [int]$ExpectedCount,
+        [int]$TimeoutMs = 15000
+    )
+
+    $start = Get-Date
+    while (((Get-Date) - $start).TotalMilliseconds -lt $TimeoutMs) {
+        $drives = Get-VisibleYumeDiskDrives
+        if (@($drives).Count -eq $ExpectedCount) {
+            return [pscustomobject]@{
+                count = @($drives).Count
+                drives = @($drives)
+            }
+        }
+
+        Start-Sleep -Milliseconds 300
+    }
+
+    return $null
+}
+
+function Wait-VisibleYumeDiskCountAtMost {
+    param(
+        [int]$MaxCount,
+        [int]$TimeoutMs = 15000
+    )
+
+    $start = Get-Date
+    while (((Get-Date) - $start).TotalMilliseconds -lt $TimeoutMs) {
+        $drives = Get-VisibleYumeDiskDrives
+        if (@($drives).Count -le $MaxCount) {
+            return [pscustomobject]@{
+                count = @($drives).Count
+                drives = @($drives)
+            }
+        }
+
+        Start-Sleep -Milliseconds 300
+    }
+
+    return $null
+}
+
+function Relaunch-TargetProcess {
+    $resolvedExe = Resolve-ExePath
+    $script:LaunchedProcess = Start-Process -FilePath $resolvedExe -WorkingDirectory (Split-Path -Parent $resolvedExe) -PassThru
+    $script:TargetProcessId = $script:LaunchedProcess.Id
+    return $script:TargetProcessId
 }
 
 function Resolve-TargetProcessId {
@@ -441,6 +505,105 @@ function Test-MinimalLoop {
     return $true
 }
 
+function Test-QuitCleanup {
+    Write-TestStart "保留磁盘直接显式退出"
+
+    $null = Ensure-WindowReady
+    $baselineDrives = Get-VisibleYumeDiskDrives
+    $baselineCount = @($baselineDrives).Count
+    Write-TestInfo "baseline visible disks: $baselineCount"
+
+    $result = Invoke-UiaTest -Action "click" -Name "yumedisk.disk.create_button"
+    if ($result.status -ne "success") {
+        Write-TestFail "打开建盘对话框失败"
+        return $false
+    }
+    Write-TestPass "打开建盘对话框成功"
+
+    $result = Invoke-UiaTest -Action "waitwindow" -LocalWindow "yumedisk.create.dialog" -WindowOnly -LocalTimeout 5000
+    if ($result.status -ne "success") {
+        Write-TestFail "等待建盘对话框失败"
+        return $false
+    }
+    Write-TestPass "建盘对话框已出现"
+
+    $result = Invoke-UiaTest -Action "click" -LocalWindow "yumedisk.create.dialog" -WindowOnly -Name "yumedisk.create.submit_button"
+    if ($result.status -ne "success") {
+        Write-TestFail "提交建盘失败"
+        return $false
+    }
+    Write-TestPass "提交建盘成功"
+
+    $result = Invoke-UiaTest -Action "wait" -Name "yumedisk.log.text" -Condition "contains:created target=" -LocalTimeout 15000
+    if ($result.status -ne "success") {
+        Write-TestFail "等待建盘日志失败"
+        return $false
+    }
+    Write-TestPass "建盘日志已出现"
+
+    $targetId = ""
+    try {
+        $targetId = Get-LatestCreatedTargetId
+    } catch {
+        Write-TestFail $_.Exception.Message
+        return $false
+    }
+    Write-TestInfo "target id: $targetId"
+
+    $drivesAfterCreate = Wait-VisibleYumeDiskCount -ExpectedCount ($baselineCount + 1) -TimeoutMs 15000
+    if ($null -eq $drivesAfterCreate) {
+        Write-TestFail "系统侧未观察到新增 YumeDisk 可见盘"
+        return $false
+    }
+    Write-TestPass "系统侧已观察到新增 YumeDisk 可见盘"
+
+    $result = Invoke-UiaTest -Action "click" -Name "yumedisk.client.quit_button"
+    if ($result.status -ne "success") {
+        Write-TestFail "点击显式退出按钮失败"
+        return $false
+    }
+    Write-TestPass "点击显式退出按钮成功"
+
+    if (-not (Wait-TargetProcessExit -TimeoutMs 10000)) {
+        Write-TestFail "显式退出后进程仍存活"
+        return $false
+    }
+    Write-TestPass "显式退出后进程已退出"
+
+    $drivesAfterQuit = Wait-VisibleYumeDiskCountAtMost -MaxCount $baselineCount -TimeoutMs 15000
+    if ($null -eq $drivesAfterQuit) {
+        Write-TestFail "显式退出后可见盘未回落到基线"
+        return $false
+    }
+    Write-TestPass "显式退出后可见盘已回落到基线"
+
+    $null = Relaunch-TargetProcess
+    Write-TestInfo "重启后 PID: $script:TargetProcessId"
+
+    try {
+        $null = Ensure-WindowReady
+    } catch {
+        Write-TestFail "重启后主窗口未出现"
+        return $false
+    }
+    Write-TestPass "重启后主窗口已出现"
+
+    $result = Invoke-UiaTest -Action "wait" -Name "yumedisk.log.text" -Condition "contains:session opened" -LocalTimeout 10000
+    if ($result.status -ne "success") {
+        Write-TestFail "重启后未观察到 session reopened 日志"
+        return $false
+    }
+    Write-TestPass "重启后已观察到 session reopened 日志"
+
+    $logText = Read-ElementTextValue -ElementName "yumedisk.log.text"
+    if ($logText.Contains("open session failed") -or $logText.Contains("open-failed(")) {
+        Write-TestFail "重启后日志仍出现 session 打开失败"
+        return $false
+    }
+    Write-TestPass "重启后未出现 session 打开失败"
+    return $true
+}
+
 function Stop-TargetProcess {
     Write-TestStart "停止目标进程"
 
@@ -490,6 +653,9 @@ switch ($Scenario.ToLowerInvariant()) {
     }
     "minimal_loop" {
         $overallSuccess = Test-MinimalLoop
+    }
+    "quit_cleanup" {
+        $overallSuccess = Test-QuitCleanup
     }
     "stop_process" {
         $overallSuccess = Stop-TargetProcess
