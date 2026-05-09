@@ -57,7 +57,7 @@ YumeDisk Client UIA 场景脚本
   close_to_tray: 发送关闭窗口命令，并确认进程仍存活
   minimal_loop : 验证 create -> list -> remove -> quit 最小闭环
   quit_cleanup : 验证保留磁盘直接退出时会清盘并可再次打开 session
-  raw_loop     : 验证 raw create -> list -> remove -> quit 最小闭环
+  raw_loop     : 验证 rawFile create -> list -> remove -> quit 最小闭环
   stop_process : 停止目标进程
   full_shell   : smoke -> inspect -> close_to_tray
 
@@ -432,12 +432,12 @@ function Submit-CreateDialog {
     Write-TestPass "建盘日志已出现"
 
     if ($ExpectRawLog) {
-        $result = Invoke-UiaTest -Action "wait" -Name "yumedisk.log.text" -Condition "contains:media=raw" -LocalTimeout 10000
+        $result = Invoke-UiaTest -Action "wait" -Name "yumedisk.log.text" -Condition "contains:media=rawFile" -LocalTimeout 10000
         if ($result.status -ne "success") {
-            Write-TestFail "等待 raw 介质日志失败"
+            Write-TestFail "等待 rawFile 介质日志失败"
             return $false
         }
-        Write-TestPass "raw 介质日志已出现"
+        Write-TestPass "rawFile 介质日志已出现"
     }
 
     return $true
@@ -641,7 +641,7 @@ function Test-MinimalLoop {
         return $false
     }
 
-    $targetId = Assert-DiskRowVisible -ExpectedMediaNames @("dense", "sparse", "auto")
+    $targetId = Assert-DiskRowVisible -ExpectedMediaNames @("denseMem", "sparseMem", "auto")
     if ([string]::IsNullOrWhiteSpace($targetId)) {
         return $false
     }
@@ -650,7 +650,7 @@ function Test-MinimalLoop {
 }
 
 function Test-RawLoop {
-    Write-TestStart "client raw 文件盘最小闭环"
+    Write-TestStart "client rawFile 文件盘最小闭环"
 
     $null = Ensure-WindowReady
 
@@ -667,7 +667,7 @@ function Test-RawLoop {
         return $false
     }
 
-    if (-not (Submit-CreateDialog -MediaMode "raw" -RawPath $rawPath -ExpectRawLog)) {
+    if (-not (Submit-CreateDialog -MediaMode "rawFile" -RawPath $rawPath -ExpectRawLog)) {
         return $false
     }
 
@@ -679,7 +679,7 @@ function Test-RawLoop {
     }
     Write-TestPass "raw 文件路径日志已出现"
 
-    $targetId = Assert-DiskRowVisible -ExpectedMediaNames @("raw")
+    $targetId = Assert-DiskRowVisible -ExpectedMediaNames @("rawFile")
     if ([string]::IsNullOrWhiteSpace($targetId)) {
         return $false
     }

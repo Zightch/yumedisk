@@ -792,7 +792,7 @@ bool createManagedDisk(
             L", diskBytes=" + std::to_wstring(disk->diskSizeBytes) +
             L", readOnly=" + readOnlyToText(disk->readOnly) +
             L", media=" + mediaModeToText(disk->mode));
-    if (disk->mode == MediaMode::raw) {
+    if (disk->mode == MediaMode::rawFile) {
         appendLog(
             context,
             L"[backend] rawFile=" + disk->backingFilePath);

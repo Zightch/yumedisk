@@ -21,11 +21,11 @@ clientbackend::MediaMode mediaModeFromIndex(
 {
     switch (index) {
     case 1:
-        return clientbackend::MediaMode::dense;
+        return clientbackend::MediaMode::denseMem;
     case 2:
-        return clientbackend::MediaMode::sparse;
+        return clientbackend::MediaMode::sparseMem;
     case 3:
-        return clientbackend::MediaMode::raw;
+        return clientbackend::MediaMode::rawFile;
     default:
         return clientbackend::MediaMode::autoSelect;
     }
@@ -89,7 +89,7 @@ void CreateDiskDialog::refreshModeUi() {
 
 bool CreateDiskDialog::isRawModeSelected() const {
     return mediaModeFromIndex(ui->mediaModeComboBox->currentIndex()) ==
-        clientbackend::MediaMode::raw;
+        clientbackend::MediaMode::rawFile;
 }
 
 bool CreateDiskDialog::tryBuildRequest(

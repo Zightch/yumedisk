@@ -39,9 +39,9 @@ inline constexpr size_t maxBufferedLogLines = 256;
 
 enum class MediaMode {
     autoSelect,
-    dense,
-    sparse,
-    raw
+    denseMem,
+    sparseMem,
+    rawFile
 };
 
 struct AppConfig {

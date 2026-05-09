@@ -32,12 +32,12 @@ QString mediaModeText(
     clientbackend::MediaMode mode)
 {
     switch (mode) {
-    case clientbackend::MediaMode::dense:
-        return QStringLiteral("dense");
-    case clientbackend::MediaMode::sparse:
-        return QStringLiteral("sparse");
-    case clientbackend::MediaMode::raw:
-        return QStringLiteral("raw");
+    case clientbackend::MediaMode::denseMem:
+        return QStringLiteral("denseMem");
+    case clientbackend::MediaMode::sparseMem:
+        return QStringLiteral("sparseMem");
+    case clientbackend::MediaMode::rawFile:
+        return QStringLiteral("rawFile");
     default:
         return QStringLiteral("auto");
     }

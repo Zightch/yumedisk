@@ -56,9 +56,9 @@
   - 直接显式退出；
   - 验证可见盘回落和再次启动 session 正常打开。
 - `raw_loop`
-  - 创建 `raw` 文件盘；
+  - 创建 `rawFile` 文件盘；
   - 验证 `create -> list -> remove -> quit`；
-  - 验证 `raw` 介质和 `rawFile` 日志进入固定回归入口。
+  - 验证 `rawFile` 介质和 `rawFile` 日志进入固定回归入口。
 - `stop_process`
   - 强制停止目标进程；
   - 只用于调试收尾。
@@ -200,7 +200,7 @@ pwsh -File tests/uia_test.ps1 -ProcessId <pid> -Action waitwindow -Timeout 10000
 - target id 输入：`yumedisk.create.target_id_input`
 - 建盘确认按钮：`yumedisk.create.submit_button`
 - 建盘取消按钮：`yumedisk.create.cancel_button`
-- `raw` 文件路径输入：`yumedisk.create.raw_file_input`
+- `rawFile` 文件路径输入：`yumedisk.create.raw_file_input`
 - 托盘打开动作：`yumedisk.tray.open_action`
 - 托盘退出动作：`yumedisk.tray.quit_action`
 

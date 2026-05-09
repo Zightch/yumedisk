@@ -70,17 +70,17 @@
        </item>
        <item>
         <property name="text">
-         <string>dense</string>
+         <string>denseMem</string>
         </property>
        </item>
        <item>
         <property name="text">
-         <string>sparse</string>
+         <string>sparseMem</string>
         </property>
        </item>
        <item>
         <property name="text">
-         <string>raw</string>
+         <string>rawFile</string>
         </property>
        </item>
       </widget>
@@ -101,7 +101,7 @@
         <string>yumedisk.create.raw_file_input</string>
        </property>
        <property name="placeholderText">
-        <string>仅 raw 模式使用，填写现有 raw 文件路径</string>
+        <string>仅 rawFile 模式使用，填写现有 raw 文件路径</string>
        </property>
       </widget>
      </item>

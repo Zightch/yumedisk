@@ -1,7 +1,5 @@
 #include "backend/media/media.h"
 
-#include <WinIoCtl.h>
-
 #include <algorithm>
 #include <cstring>
 #include <exception>
@@ -22,55 +20,10 @@ void setFailureReason(
     }
 }
 
-bool ensureSparseBackingDirectory(
-    std::wstring* outDirectory)
-{
-    wchar_t tempPath[MAX_PATH];
-    DWORD length;
-    std::wstring directory;
-
-    length = GetTempPathW(MAX_PATH, tempPath);
-    if ((length == 0) || (length >= MAX_PATH)) {
-        return false;
-    }
-
-    directory.assign(tempPath, length);
-    while (!directory.empty() &&
-           ((directory.back() == L'\\') || (directory.back() == L'/'))) {
-        directory.pop_back();
-    }
-    directory += LR"(\YumeDiskClient)";
-
-    if (!CreateDirectoryW(directory.c_str(), nullptr) &&
-        (GetLastError() != ERROR_ALREADY_EXISTS)) {
-        return false;
-    }
-
-    *outDirectory = directory;
-    return true;
-}
-
-std::wstring buildSparseBackingPath(
-    ULONG targetId)
-{
-    static std::atomic<UINT64> nonce{1};
-    std::wstring directory;
-
-    if (!ensureSparseBackingDirectory(&directory)) {
-        return {};
-    }
-
-    return directory + L"\\target-" +
-           std::to_wstring(targetId) + L"-" +
-           std::to_wstring(GetCurrentProcessId()) + L"-" +
-           std::to_wstring(nonce.fetch_add(1, std::memory_order_relaxed)) +
-           L".bin";
-}
-
 bool isFileBackedMode(
     MediaMode mode)
 {
-    return (mode == MediaMode::sparse) || (mode == MediaMode::raw);
+    return mode == MediaMode::rawFile;
 }
 
 bool seekBackingFileLocked(
@@ -143,7 +96,7 @@ bool readBackingRangeLocked(
     void* buffer,
     UINT32 length)
 {
-    if (disk->mode == MediaMode::dense) {
+    if ((disk->mode == MediaMode::denseMem) || (disk->mode == MediaMode::sparseMem)) {
         (void)memcpy(
             buffer,
             disk->denseMedium.data() + (size_t)offset,
@@ -164,7 +117,7 @@ bool writeBackingRangeLocked(
     const void* buffer,
     UINT32 length)
 {
-    if (disk->mode == MediaMode::dense) {
+    if ((disk->mode == MediaMode::denseMem) || (disk->mode == MediaMode::sparseMem)) {
         (void)memcpy(
             disk->denseMedium.data() + (size_t)offset,
             buffer,
@@ -208,55 +161,20 @@ bool initializeSparseMedia(
     ManagedDisk* disk,
     std::wstring* outReason)
 {
-    DWORD bytesReturned;
-    HANDLE fileHandle;
-    LARGE_INTEGER fileSize;
-    const std::wstring path = buildSparseBackingPath(disk->targetId);
-
-    if (path.empty()) {
-        setFailureReason(outReason, L"sparse-dir-create-failed");
+    if (disk->diskSizeBytes > (uint64_t)std::numeric_limits<size_t>::max()) {
+        setFailureReason(outReason, L"sparse-size-overflow");
         return false;
     }
 
-    fileHandle = CreateFileW(
-        path.c_str(),
-        GENERIC_READ | GENERIC_WRITE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-        nullptr,
-        CREATE_ALWAYS,
-        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
-        nullptr);
-    if (fileHandle == INVALID_HANDLE_VALUE) {
-        setFailureReason(outReason, L"sparse-file-open-failed");
+    try {
+        disk->denseMedium.resize((size_t)disk->diskSizeBytes, 0u);
+    } catch (const std::exception&) {
+        setFailureReason(outReason, L"sparse-allocation-failed");
         return false;
     }
 
-    bytesReturned = 0;
-    if (!DeviceIoControl(
-            fileHandle,
-            FSCTL_SET_SPARSE,
-            nullptr,
-            0,
-            nullptr,
-            0,
-            &bytesReturned,
-            nullptr)) {
-        CloseHandle(fileHandle);
-        setFailureReason(outReason, L"sparse-file-mark-failed");
-        return false;
-    }
-
-    fileSize.QuadPart = (LONGLONG)disk->diskSizeBytes;
-    if (!SetFilePointerEx(fileHandle, fileSize, nullptr, FILE_BEGIN) ||
-        !SetEndOfFile(fileHandle)) {
-        CloseHandle(fileHandle);
-        setFailureReason(outReason, L"sparse-file-size-failed");
-        return false;
-    }
-
-    disk->denseMedium.clear();
-    disk->backingFile = fileHandle;
-    disk->backingFilePath = path;
+    disk->backingFile = INVALID_HANDLE_VALUE;
+    disk->backingFilePath.clear();
     return true;
 }
 
@@ -331,13 +249,13 @@ bool initializeManagedDiskMedia(
     const MediaMode resolvedMode = resolveMediaMode(requestedMode, disk->diskSizeBytes);
 
     disk->mode = resolvedMode;
-    if (resolvedMode == MediaMode::dense) {
+    if (resolvedMode == MediaMode::denseMem) {
         return initializeDenseMedia(disk, outReason);
     }
-    if (resolvedMode == MediaMode::sparse) {
+    if (resolvedMode == MediaMode::sparseMem) {
         return initializeSparseMedia(disk, outReason);
     }
-    if (resolvedMode == MediaMode::raw) {
+    if (resolvedMode == MediaMode::rawFile) {
         return initializeRawMedia(disk, outReason);
     }
 

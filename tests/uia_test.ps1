@@ -18,7 +18,7 @@
 #   ./uia_test.ps1 -ProcessId 12345 -Action list -Scope children
 #   ./uia_test.ps1 -ProcessId 12345 -Name yumedisk.session.state_value -Action read
 #   ./uia_test.ps1 -ProcessId 12345 -Name yumedisk.disk.create_button -Action click
-#   ./uia_test.ps1 -ProcessId 12345 -Name yumedisk.create.media_mode_combo -Action select -Value raw
+#   ./uia_test.ps1 -ProcessId 12345 -Name yumedisk.create.media_mode_combo -Action select -Value rawFile
 
 param(
     [string]$Window = "Client",
