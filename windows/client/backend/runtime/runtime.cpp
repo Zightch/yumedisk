@@ -274,6 +274,34 @@ std::wstring lifecycleToText(
     }
 }
 
+ManagedDiskSnapshot makeManagedDiskSnapshot(
+    BackendContext* context,
+    const std::shared_ptr<ManagedDisk>& disk)
+{
+    ManagedDiskSnapshot snapshot;
+    AK_DISK_STATE diskState{};
+    bool haveState;
+
+    snapshot.targetId = disk->targetId;
+    snapshot.diskSizeBytes = disk->diskSizeBytes;
+    snapshot.sectorSize = disk->sectorSize;
+    snapshot.readOnly = disk->readOnly;
+    snapshot.mode = disk->mode;
+
+    (void)tryRefreshManagedDiskIdentity(context, disk, nullptr, 0);
+    snapshot.visiblePath = disk->identity.Path;
+    snapshot.physicalDrivePath = MakePhysicalDrivePath(disk->identity.DeviceNumber);
+
+    haveState = (disk->handle != nullptr) &&
+        (AkQueryDiskState(disk->handle, &diskState) == AK_STATUS_SUCCESS);
+    snapshot.online = haveState && (diskState.Lifecycle == AkStateRunning);
+    snapshot.lifecycleText = haveState
+        ? lifecycleToText(diskState.Lifecycle)
+        : L"unknown";
+
+    return snapshot;
+}
+
 void handleAppKernelEvent(
     BackendContext* context,
     const AK_EVENT* eventRecord)
@@ -566,6 +594,87 @@ std::vector<std::wstring> snapshotLogLines(
     std::lock_guard<std::mutex> guard(context->logLock);
     lines = context->logLines;
     return lines;
+}
+
+std::vector<ManagedDiskSnapshot> snapshotManagedDisks(
+    const BackendContext* context)
+{
+    std::vector<ManagedDiskSnapshot> snapshots;
+    BackendContext* mutableContext;
+
+    if (context == nullptr) {
+        return snapshots;
+    }
+
+    mutableContext = const_cast<BackendContext*>(context);
+    for (const auto& disk : snapshotManagedDisks(mutableContext)) {
+        if (disk == nullptr) {
+            continue;
+        }
+        snapshots.push_back(makeManagedDiskSnapshot(mutableContext, disk));
+    }
+
+    return snapshots;
+}
+
+bool queryBackendStats(
+    const BackendContext* context,
+    BackendStatsSnapshot* outStats,
+    std::wstring* outErrorText)
+{
+    AK_SESSION_STATS sessionStats{};
+    AK_STATUS status;
+
+    if ((context == nullptr) || (outStats == nullptr)) {
+        if (outErrorText != nullptr) {
+            *outErrorText = L"invalid-parameter";
+        }
+        return false;
+    }
+
+    if (context->session == nullptr) {
+        if (outErrorText != nullptr) {
+            *outErrorText = L"session-not-open";
+        }
+        return false;
+    }
+
+    status = AkQuerySessionStats(context->session, &sessionStats);
+    if (status != AK_STATUS_SUCCESS) {
+        if (outErrorText != nullptr) {
+            *outErrorText = formatStatusHex(status);
+        }
+        return false;
+    }
+
+    outStats->heartbeatSent = sessionStats.HeartbeatSent;
+    outStats->commandFailures = sessionStats.CommandFailures;
+    outStats->protocolFailures = sessionStats.ProtocolFailures;
+    outStats->eventsQueued = sessionStats.EventsQueued;
+    outStats->eventsDropped = sessionStats.EventsDropped;
+    outStats->diskCount = (UINT64)snapshotManagedDisks(context).size();
+    return true;
+}
+
+bool queryDebugSnapshot(
+    const BackendContext* context,
+    DebugSnapshot* outSnapshot,
+    std::wstring* outErrorText)
+{
+    if ((context == nullptr) || (outSnapshot == nullptr)) {
+        if (outErrorText != nullptr) {
+            *outErrorText = L"invalid-parameter";
+        }
+        return false;
+    }
+
+    outSnapshot->sessionStateText = querySessionStateText(context);
+    outSnapshot->disks = snapshotManagedDisks(context);
+    if (!queryBackendStats(context, &outSnapshot->stats, outErrorText)) {
+        return false;
+    }
+
+    return true;
 }
 
 ULONG findFirstFreeTarget(

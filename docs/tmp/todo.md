@@ -70,28 +70,7 @@
 
 ## 4. 子步骤
 
-### Step 1. 暴露 GUI 可调用后端接口
-
-目标：
-
-- 把当前命令式能力收成 `UI` 可直接调用的方法：
-  - `QuerySessionState`
-  - `SnapshotManagedDisks`
-  - `CreateManagedDisk`
-  - `RemoveManagedDisk`
-  - `RemoveAllManagedDisks`
-  - `QueryBackendStats`
-  - `QueryDebugSnapshot`
-- 收一个统一日志入口给 `UI` 展示。
-- 保证 `UI` 读取状态而不复制状态。
-
-完成定义：
-
-- `UI` 不需要自己解释 `AppKernel` 细节。
-- 后端能力已经具备稳定调用面。
-- 客户端状态真相仍只在后端。
-
-### Step 2. 完成最小 UI 闭环
+### Step 1. 完成最小 UI 闭环
 
 目标：
 
@@ -116,7 +95,7 @@
 - 用户无需命令行即可完成核心操作。
 - `UI` 已经成为最小可用桌面入口，而不是示例窗口。
 
-### Step 3. 完成最小闭环验收
+### Step 2. 完成最小闭环验收
 
 目标：
 
@@ -154,4 +133,4 @@
 
 当前唯一下一步：
 
-- 把 `windows/client/backend/` 当前已接入的宿主能力整理成 `UI` 可直接调用的方法面：先落 `QuerySessionState / SnapshotManagedDisks / CreateManagedDisk / RemoveManagedDisk / RemoveAllManagedDisks / QueryBackendStats / QueryDebugSnapshot` 与统一日志读取入口，不接着改主窗口交互，不扩额外层级。
+- 把 `windows/client/widget/` 从当前展示壳推进到最小可用交互面：先接 session 状态刷新、受管磁盘列表刷新、建盘入口、删盘入口和日志刷新，不接着做扩展 UI 美化，也不扩额外层级。

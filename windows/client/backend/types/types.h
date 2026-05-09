@@ -56,6 +56,33 @@ struct CreateDiskRequest {
     bool readOnly = false;
 };
 
+struct ManagedDiskSnapshot {
+    ULONG targetId = 0;
+    uint64_t diskSizeBytes = 0;
+    ULONG sectorSize = 0;
+    bool readOnly = false;
+    MediaMode mode = MediaMode::autoSelect;
+    std::wstring visiblePath;
+    std::wstring physicalDrivePath;
+    std::wstring lifecycleText;
+    bool online = false;
+};
+
+struct BackendStatsSnapshot {
+    UINT64 heartbeatSent = 0;
+    UINT64 commandFailures = 0;
+    UINT64 protocolFailures = 0;
+    UINT64 eventsQueued = 0;
+    UINT64 eventsDropped = 0;
+    UINT64 diskCount = 0;
+};
+
+struct DebugSnapshot {
+    std::wstring sessionStateText;
+    BackendStatsSnapshot stats;
+    std::vector<ManagedDiskSnapshot> disks;
+};
+
 struct StagedFragment {
     UINT32 seq = 0;
     UINT64 diskOffsetBytes = 0;
