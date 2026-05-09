@@ -13,6 +13,7 @@ class Backend;
 class QCloseEvent;
 class QMenu;
 class QSystemTrayIcon;
+class QTimer;
 
 class Widget : public QWidget {
 public:
@@ -24,8 +25,18 @@ protected:
 
 private:
     void initializeShellUi();
+    void initializeInteractions();
     void showFromTray();
     void initializeTray();
+    void refreshView();
+    void refreshSessionState();
+    void refreshManagedDisks();
+    void refreshLogLines();
+    void updateRemoveButtonState();
+    void createDisk();
+    void removeDisk();
+    unsigned long currentTargetId() const;
+    bool hasCurrentTarget() const;
 
     Ui::Widget* ui;
     Backend* backend = nullptr;
@@ -33,4 +44,5 @@ private:
     QMenu* trayMenu = nullptr;
     QAction* openAction = nullptr;
     QAction* quitAction = nullptr;
+    QTimer* refreshTimer = nullptr;
 };

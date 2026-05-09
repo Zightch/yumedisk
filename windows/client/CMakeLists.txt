@@ -27,6 +27,9 @@ qt_standard_project_setup()
 
 qt_add_executable(
         client
+        createDiskDialog/createDiskDialog.cpp
+        createDiskDialog/createDiskDialog.h
+        createDiskDialog/createDiskDialog.ui
         main.cpp
         backend/backend.cpp
         backend/backend.h
