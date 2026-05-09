@@ -19,19 +19,6 @@
 
 ## 3. 当前未完成子步骤
 
-### Step 4. 重建介质抽象主线
-
-目标：
-
-- 重建 `Media / MemoryMedia / FileMedia / RawFileMedia`；
-- 重建 `denseMem / sparseMem / rawFile` 的统一介质主线。
-
-完成定义：
-
-- `denseMem / sparseMem` 统一落到 `MemoryMedia`；
-- `rawFile` 统一落到 `RawFileMedia`；
-- 介质差异不再散落在后端其他组件中。
-
 ### Step 5. 重建 UI 与运行时分离边界
 
 目标：
@@ -47,4 +34,4 @@
 
 ## 4. 当前唯一下一步
 
-- 先重建介质抽象主线，把当前 `denseMem / sparseMem / rawFile` 的读写差异继续从 `runtime / media` 杂糅实现里收口到统一 `Media` 继承主线。
+- 先重建 `Widget / CreateDiskDialog` 对后端的消费边界，把当前 `UI` 收口到“只读快照 + 只发命令”的唯一交互面，确保整改 `UI` 不影响核心运行主线。

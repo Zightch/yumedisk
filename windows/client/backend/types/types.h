@@ -7,12 +7,12 @@
 #include <limits>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <shared_mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "backend/media/Media/Media.h"
 #include "backend/StagingStore/StagingStore.h"
 #include "appkernel.h"
 #include "scan.h"
@@ -108,9 +108,7 @@ struct DiskLifecycleState {
 
 struct DiskMediaState {
     mutable std::shared_mutex lock;
-    std::mutex backingFileIoLock;
-    std::vector<unsigned char> memory;
-    HANDLE backingFile = INVALID_HANDLE_VALUE;
+    std::unique_ptr<Media> instance;
 };
 
 struct DiskRuntime;

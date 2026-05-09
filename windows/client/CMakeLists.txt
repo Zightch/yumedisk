@@ -37,6 +37,13 @@ qt_add_executable(
         backend/Backend.h
         backend/config/config.cpp
         backend/config/config.h
+        backend/media/FileMedia/FileMedia.cpp
+        backend/media/FileMedia/FileMedia.h
+        backend/media/Media/Media.h
+        backend/media/MemoryMedia/MemoryMedia.cpp
+        backend/media/MemoryMedia/MemoryMedia.h
+        backend/media/RawFileMedia/RawFileMedia.cpp
+        backend/media/RawFileMedia/RawFileMedia.h
         backend/media/media.cpp
         backend/media/media.h
         backend/runtime/runtime.cpp

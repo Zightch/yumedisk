@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 #include <shared_mutex>
 
 #include "backend/media/media.h"
