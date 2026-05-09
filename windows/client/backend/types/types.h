@@ -13,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include "backend/StagingStore/StagingStore.h"
 #include "appkernel.h"
 #include "scan.h"
 #include "yumedisk_proto.h"
@@ -85,18 +86,6 @@ struct DebugSnapshot {
     std::vector<ManagedDiskSnapshot> disks;
 };
 
-struct StagedFragment {
-    UINT32 seq = 0;
-    UINT64 diskOffsetBytes = 0;
-    UINT64 ordinal = 0;
-    std::vector<unsigned char> data;
-};
-
-struct StagedWriteRecord {
-    UINT32 totalSeq = 0;
-    std::map<UINT32, StagedFragment> fragments;
-};
-
 struct DiskMetadata {
     ULONG targetId = 0;
     ULONG sectorSize = 0;
@@ -122,11 +111,6 @@ struct DiskMediaState {
     std::mutex backingFileIoLock;
     std::vector<unsigned char> memory;
     HANDLE backingFile = INVALID_HANDLE_VALUE;
-};
-
-struct DiskStagingState {
-    std::map<UINT64, StagedWriteRecord> writes;
-    UINT64 nextOrdinal = 1;
 };
 
 struct DiskRuntime;
@@ -176,7 +160,7 @@ struct DiskRuntime {
     DiskQueueConfig queueConfig;
     DiskLifecycleState lifecycle;
     DiskMediaState media;
-    DiskStagingState staging;
+    StagingStore staging;
 };
 
 } // namespace clientbackend

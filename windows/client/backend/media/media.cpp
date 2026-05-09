@@ -1,6 +1,5 @@
 #include "backend/media/media.h"
 
-#include <algorithm>
 #include <cstring>
 #include <exception>
 #include <limits>
@@ -229,18 +228,6 @@ bool initializeRawMedia(
 
 } // namespace
 
-size_t countStagedFragmentsLocked(
-    const DiskRuntime* diskRuntime)
-{
-    size_t count;
-
-    count = 0;
-    for (const auto& entry : diskRuntime->staging.writes) {
-        count += entry.second.fragments.size();
-    }
-    return count;
-}
-
 bool initializeManagedDiskMedia(
     DiskRuntime* diskRuntime,
     MediaMode requestedMode,
@@ -268,7 +255,7 @@ void cleanupManagedDiskMedia(
 {
     std::unique_lock<std::shared_mutex> guard(diskRuntime->media.lock);
 
-    diskRuntime->staging.writes.clear();
+    diskRuntime->staging.clearLocked();
     diskRuntime->media.memory.clear();
     diskRuntime->media.memory.shrink_to_fit();
 
@@ -277,6 +264,15 @@ void cleanupManagedDiskMedia(
         diskRuntime->media.backingFile = INVALID_HANDLE_VALUE;
     }
     diskRuntime->metadata.backingFilePath.clear();
+}
+
+bool writeMediaRangeLocked(
+    DiskRuntime* diskRuntime,
+    UINT64 offset,
+    const void* buffer,
+    UINT32 length)
+{
+    return writeBackingRangeLocked(diskRuntime, offset, buffer, length);
 }
 
 AK_STATUS AK_CALL hostReadBytes(
@@ -309,64 +305,13 @@ AK_STATUS AK_CALL hostReadBytes(
 
     buffer = static_cast<unsigned char*>(outBuffer);
     {
-        struct OverlaySlice {
-            UINT64 ordinal;
-            size_t destOffset;
-            size_t sourceOffset;
-            size_t length;
-            const unsigned char* data;
-        };
-        std::vector<OverlaySlice> overlays;
-
         std::shared_lock<std::shared_mutex> guard(diskRuntime->media.lock);
         if (!readBackingRangeLocked(diskRuntime, requestBegin, buffer, op->DataLength)) {
             *outDataLength = 0;
             return AK_STATUS_UNSUCCESSFUL;
         }
 
-        for (const auto& stagedEntry : diskRuntime->staging.writes) {
-            for (const auto& fragmentEntry : stagedEntry.second.fragments) {
-                const StagedFragment& fragment = fragmentEntry.second;
-                UINT64 fragmentBegin;
-                UINT64 fragmentEnd;
-                UINT64 overlapBegin;
-                UINT64 overlapEnd;
-                OverlaySlice slice;
-
-                fragmentBegin = fragment.diskOffsetBytes;
-                fragmentEnd = fragmentBegin + (UINT64)fragment.data.size();
-                if ((fragmentEnd <= requestBegin) || (fragmentBegin >= requestEnd)) {
-                    continue;
-                }
-
-                overlapBegin = std::max(fragmentBegin, requestBegin);
-                overlapEnd = std::min(fragmentEnd, requestEnd);
-                if (overlapEnd <= overlapBegin) {
-                    continue;
-                }
-
-                slice.ordinal = fragment.ordinal;
-                slice.destOffset = (size_t)(overlapBegin - requestBegin);
-                slice.sourceOffset = (size_t)(overlapBegin - fragmentBegin);
-                slice.length = (size_t)(overlapEnd - overlapBegin);
-                slice.data = fragment.data.data();
-                overlays.push_back(slice);
-            }
-        }
-
-        std::sort(
-            overlays.begin(),
-            overlays.end(),
-            [](const OverlaySlice& left, const OverlaySlice& right) {
-                return left.ordinal < right.ordinal;
-            });
-
-        for (const auto& slice : overlays) {
-            (void)memcpy(
-                buffer + slice.destOffset,
-                slice.data + slice.sourceOffset,
-                slice.length);
-        }
+        diskRuntime->staging.overlayReadLocked(requestBegin, buffer, op->DataLength);
     }
 
     *outDataLength = op->DataLength;
@@ -380,87 +325,20 @@ AK_STATUS AK_CALL hostStageWrite(
     UINT32 dataLength)
 {
     DiskRuntime* diskRuntime;
-    UINT64 writeBegin;
-    UINT64 writeEnd;
 
     diskRuntime = static_cast<DiskRuntime*>(mediaCtx);
-    if ((diskRuntime == nullptr) || (op == nullptr)) {
-        return AK_STATUS_INVALID_PARAMETER;
-    }
-
-    if (dataLength != op->DataLength) {
-        return AK_STATUS_INVALID_PARAMETER;
-    }
-
-    writeBegin = op->OffsetBytes;
-    writeEnd = writeBegin + (UINT64)dataLength;
-    if ((writeEnd < writeBegin) || (writeEnd > diskRuntime->metadata.diskSizeBytes)) {
+    if (diskRuntime == nullptr) {
         return AK_STATUS_INVALID_PARAMETER;
     }
 
     {
         std::unique_lock<std::shared_mutex> guard(diskRuntime->media.lock);
-        StagedWriteRecord& record = diskRuntime->staging.writes[op->EventId];
-        StagedFragment fragment;
-
-        if ((record.totalSeq != 0) && (record.totalSeq != op->TotalSeq)) {
-            return AK_STATUS_INVALID_PARAMETER;
-        }
-
-        record.totalSeq = op->TotalSeq;
-        fragment.seq = op->Seq;
-        fragment.diskOffsetBytes = op->OffsetBytes;
-        fragment.ordinal = diskRuntime->staging.nextOrdinal;
-        diskRuntime->staging.nextOrdinal += 1;
-        fragment.data.resize(dataLength, 0u);
-        if ((dataLength != 0) && (dataBuffer != nullptr)) {
-            (void)memcpy(fragment.data.data(), dataBuffer, dataLength);
-        }
-
-        record.fragments[op->Seq] = std::move(fragment);
+        return diskRuntime->staging.stageWriteLocked(
+            op,
+            dataBuffer,
+            dataLength,
+            diskRuntime->metadata.diskSizeBytes);
     }
-
-    return AK_STATUS_SUCCESS;
-}
-
-bool applyCommittedWrite(
-    DiskRuntime* diskRuntime,
-    UINT64 eventId)
-{
-    std::unique_lock<std::shared_mutex> guard(diskRuntime->media.lock);
-    const auto it = diskRuntime->staging.writes.find(eventId);
-    if (it == diskRuntime->staging.writes.end()) {
-        return true;
-    }
-
-    for (const auto& fragmentEntry : it->second.fragments) {
-        const StagedFragment& fragment = fragmentEntry.second;
-        const UINT64 endOffset = fragment.diskOffsetBytes + (UINT64)fragment.data.size();
-
-        if ((endOffset < fragment.diskOffsetBytes) || (endOffset > diskRuntime->metadata.diskSizeBytes)) {
-            return false;
-        }
-
-        if (!fragment.data.empty() &&
-            !writeBackingRangeLocked(
-                diskRuntime,
-                fragment.diskOffsetBytes,
-                fragment.data.data(),
-                (UINT32)fragment.data.size())) {
-            return false;
-        }
-    }
-
-    diskRuntime->staging.writes.erase(it);
-    return true;
-}
-
-void discardStagedWrite(
-    DiskRuntime* diskRuntime,
-    UINT64 eventId)
-{
-    std::unique_lock<std::shared_mutex> guard(diskRuntime->media.lock);
-    diskRuntime->staging.writes.erase(eventId);
 }
 
 } // namespace clientbackend

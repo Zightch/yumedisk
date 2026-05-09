@@ -30,6 +30,8 @@ qt_add_executable(
         CreateDiskDialog/CreateDiskDialog.cpp
         CreateDiskDialog/CreateDiskDialog.h
         CreateDiskDialog/CreateDiskDialog.ui
+        backend/StagingStore/StagingStore.cpp
+        backend/StagingStore/StagingStore.h
         main.cpp
         backend/Backend.cpp
         backend/Backend.h

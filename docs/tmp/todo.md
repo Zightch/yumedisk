@@ -19,19 +19,6 @@
 
 ## 3. 当前未完成子步骤
 
-### Step 3. 重建按盘暂存层
-
-目标：
-
-- 重建 `StagingStore`，统一承接 `stageWrite / commit / reject`；
-- 重建暂存读叠加与提交应用的唯一落点。
-
-完成定义：
-
-- 暂存状态只有一份真实来源；
-- `commit / reject` 不再分散在多个函数和临时容器中；
-- 读写链路按 `targetId` 进入对应单盘暂存层。
-
 ### Step 4. 重建介质抽象主线
 
 目标：
@@ -60,4 +47,4 @@
 
 ## 4. 当前唯一下一步
 
-- 先重建按盘暂存层，把当前 `DiskRuntime` 里的 staged write 状态继续收口成唯一按盘暂存落点，并统一 `stageWrite / commit / reject` 主线。
+- 先重建介质抽象主线，把当前 `denseMem / sparseMem / rawFile` 的读写差异继续从 `runtime / media` 杂糅实现里收口到统一 `Media` 继承主线。

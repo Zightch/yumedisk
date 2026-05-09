@@ -311,7 +311,7 @@ void handleAppKernelEvent(
         break;
 
     case AkEventWriteFinalCommitted:
-        if (!applyCommittedWrite(diskRuntime.get(), eventRecord->EventId)) {
+        if (!commitDiskRuntimeStaging(diskRuntime.get(), eventRecord->EventId)) {
             context->appendLog(
                 L"[backend] commit write failed, target=" + std::to_wstring(eventRecord->TargetId) +
                 L", event=" + std::to_wstring(eventRecord->EventId));
@@ -319,7 +319,7 @@ void handleAppKernelEvent(
         break;
 
     case AkEventWriteFinalRejected:
-        discardStagedWrite(diskRuntime.get(), eventRecord->EventId);
+        rejectDiskRuntimeStaging(diskRuntime.get(), eventRecord->EventId);
         break;
 
     case AkEventDiskRemoved:
