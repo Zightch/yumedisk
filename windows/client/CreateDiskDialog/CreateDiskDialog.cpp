@@ -4,7 +4,10 @@
 
 #include <limits>
 
+#include <QFileInfo>
+#include <QComboBox>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
 
@@ -21,6 +24,8 @@ clientbackend::MediaMode mediaModeFromIndex(
         return clientbackend::MediaMode::dense;
     case 2:
         return clientbackend::MediaMode::sparse;
+    case 3:
+        return clientbackend::MediaMode::raw;
     default:
         return clientbackend::MediaMode::autoSelect;
     }
@@ -40,6 +45,13 @@ CreateDiskDialog::CreateDiskDialog(QWidget* parent)
     connect(ui->cancelButton, &QPushButton::clicked, this, [this]() {
         reject();
     });
+    connect(
+        ui->mediaModeComboBox,
+        qOverload<int>(&QComboBox::currentIndexChanged),
+        this,
+        [this]() {
+            refreshModeUi();
+        });
 }
 
 CreateDiskDialog::~CreateDiskDialog() {
@@ -60,8 +72,24 @@ void CreateDiskDialog::initializeUi() {
     ui->targetIdLineEdit->setValidator(digitsOnlyValidator);
     ui->capacityLineEdit->setText(QStringLiteral("64"));
     ui->targetIdLineEdit->clear();
+    ui->rawFileLineEdit->clear();
     ui->mediaModeComboBox->setCurrentIndex(0);
     ui->readOnlyCheckBox->setChecked(false);
+    refreshModeUi();
+}
+
+void CreateDiskDialog::refreshModeUi() {
+    const bool rawModeSelected = isRawModeSelected();
+
+    ui->capacityLabel->setEnabled(!rawModeSelected);
+    ui->capacityLineEdit->setEnabled(!rawModeSelected);
+    ui->rawFileLabel->setEnabled(rawModeSelected);
+    ui->rawFileLineEdit->setEnabled(rawModeSelected);
+}
+
+bool CreateDiskDialog::isRawModeSelected() const {
+    return mediaModeFromIndex(ui->mediaModeComboBox->currentIndex()) ==
+        clientbackend::MediaMode::raw;
 }
 
 bool CreateDiskDialog::tryBuildRequest(
@@ -70,29 +98,67 @@ bool CreateDiskDialog::tryBuildRequest(
 {
     BackendCreateDiskRequest request;
     bool ok = false;
+    const bool rawModeSelected = isRawModeSelected();
     const QString capacityText = ui->capacityLineEdit->text().trimmed();
     const QString targetIdText = ui->targetIdLineEdit->text().trimmed();
     const qulonglong maxCapacityMiB =
         std::numeric_limits<qulonglong>::max() / mibBytes;
-    const qulonglong capacityMiB = capacityText.toULongLong(&ok);
-
-    if (!ok || capacityMiB == 0) {
-        if (outErrorText != nullptr) {
-            *outErrorText = QStringLiteral("容量必须是大于 0 的 MiB 整数");
-        }
-        return false;
-    }
-
-    if (capacityMiB > maxCapacityMiB) {
-        if (outErrorText != nullptr) {
-            *outErrorText = QStringLiteral("容量超出当前支持范围");
-        }
-        return false;
-    }
-
-    request.diskSizeBytes = capacityMiB * mibBytes;
-    request.readOnly = ui->readOnlyCheckBox->isChecked();
     request.requestedMode = mediaModeFromIndex(ui->mediaModeComboBox->currentIndex());
+    request.readOnly = ui->readOnlyCheckBox->isChecked();
+
+    if (rawModeSelected) {
+        const QString rawFileText = ui->rawFileLineEdit->text().trimmed();
+        const QFileInfo rawFileInfo(rawFileText);
+
+        if (rawFileText.isEmpty()) {
+            if (outErrorText != nullptr) {
+                *outErrorText = QStringLiteral("raw 文件路径不能为空");
+            }
+            return false;
+        }
+
+        if (!rawFileInfo.exists() || !rawFileInfo.isFile()) {
+            if (outErrorText != nullptr) {
+                *outErrorText = QStringLiteral("raw 文件必须是已存在的普通文件");
+            }
+            return false;
+        }
+
+        if (rawFileInfo.size() <= 0) {
+            if (outErrorText != nullptr) {
+                *outErrorText = QStringLiteral("raw 文件大小必须大于 0");
+            }
+            return false;
+        }
+
+        request.diskSizeBytes = (qulonglong)rawFileInfo.size();
+        if ((request.diskSizeBytes % clientbackend::defaultSectorSize) != 0) {
+            if (outErrorText != nullptr) {
+                *outErrorText = QStringLiteral("raw 文件大小必须按 4096 字节对齐");
+            }
+            return false;
+        }
+
+        request.rawFilePath = rawFileInfo.absoluteFilePath();
+    } else {
+        const qulonglong capacityMiB = capacityText.toULongLong(&ok);
+
+        if (!ok || capacityMiB == 0) {
+            if (outErrorText != nullptr) {
+                *outErrorText = QStringLiteral("容量必须是大于 0 的 MiB 整数");
+            }
+            return false;
+        }
+
+        if (capacityMiB > maxCapacityMiB) {
+            if (outErrorText != nullptr) {
+                *outErrorText = QStringLiteral("容量超出当前支持范围");
+            }
+            return false;
+        }
+
+        request.diskSizeBytes = capacityMiB * mibBytes;
+    }
 
     if (!targetIdText.isEmpty()) {
         const qulonglong parsedTargetId = targetIdText.toULongLong(&ok);

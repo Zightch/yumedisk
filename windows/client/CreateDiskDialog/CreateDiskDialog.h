@@ -19,6 +19,8 @@ public:
 
 private:
     void initializeUi();
+    void refreshModeUi();
+    bool isRawModeSelected() const;
     bool tryBuildRequest(
         BackendCreateDiskRequest* outRequest,
         QString* outErrorText) const;

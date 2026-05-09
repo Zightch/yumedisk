@@ -18,6 +18,7 @@
 #   ./uia_test.ps1 -ProcessId 12345 -Action list -Scope children
 #   ./uia_test.ps1 -ProcessId 12345 -Name yumedisk.session.state_value -Action read
 #   ./uia_test.ps1 -ProcessId 12345 -Name yumedisk.disk.create_button -Action click
+#   ./uia_test.ps1 -ProcessId 12345 -Name yumedisk.create.media_mode_combo -Action select -Value raw
 
 param(
     [string]$Window = "Client",
@@ -41,6 +42,20 @@ try {
 }
 
 Add-Type -AssemblyName UIAutomationClient
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public static class UiaNativeMouse {
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+
+    public const uint LeftDown = 0x0002;
+    public const uint LeftUp = 0x0004;
+}
+"@
 
 if ($Help) {
     $helpText = @'
@@ -74,6 +89,7 @@ YumeDisk Client UIA 单步测试脚本
   read          : 读取控件文本 / 值
   write         : 写入文本控件
   click         : 点击控件
+  select        : 选择下拉框 / 列表项
   toggle        : 切换复选框
   enabled       : 读取控件可用状态
   wait          : 等待控件满足条件
@@ -224,6 +240,27 @@ function Convert-BoundingRectangle {
         }
     } catch {
         return $null
+    }
+}
+
+function Click-BoundingRectangleCenter {
+    param([object]$Rect)
+
+    if ($null -eq $Rect) {
+        return $false
+    }
+
+    try {
+        $x = [int][Math]::Round($Rect.Left + ($Rect.Width / 2.0))
+        $y = [int][Math]::Round($Rect.Top + ($Rect.Height / 2.0))
+        [UiaNativeMouse]::SetCursorPos($x, $y) | Out-Null
+        Start-Sleep -Milliseconds 60
+        [UiaNativeMouse]::mouse_event([UiaNativeMouse]::LeftDown, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 30
+        [UiaNativeMouse]::mouse_event([UiaNativeMouse]::LeftUp, 0, 0, 0, [UIntPtr]::Zero)
+        return $true
+    } catch {
+        return $false
     }
 }
 
@@ -507,6 +544,127 @@ function Set-ElementValue {
     }
 }
 
+function Select-ElementOption {
+    param(
+        [System.Windows.Automation.AutomationElement]$Root,
+        [System.Windows.Automation.AutomationElement]$Element,
+        [string]$TargetValue
+    )
+
+    if (($null -eq $Root) -or ($null -eq $Element) -or [string]::IsNullOrWhiteSpace($TargetValue)) {
+        return $false
+    }
+
+    try {
+        $Element.SetFocus()
+    } catch {
+    }
+
+    $readCurrentValue = {
+        $text = Get-ElementValueText -Element $Element
+        if (-not [string]::IsNullOrWhiteSpace($text)) {
+            return $text
+        }
+        return Get-ElementText -Element $Element
+    }
+
+    try {
+        $valuePattern = $Element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+        if (($null -ne $valuePattern) -and (-not $valuePattern.Current.IsReadOnly)) {
+            $valuePattern.SetValue($TargetValue)
+            Start-Sleep -Milliseconds 150
+            if ((& $readCurrentValue) -eq $TargetValue) {
+                return $true
+            }
+        }
+    } catch {
+    }
+
+    try {
+        $expandPattern = $Element.GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern)
+        if ($expandPattern.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
+            $expandPattern.Expand()
+            Start-Sleep -Milliseconds 200
+        }
+    } catch {
+    }
+
+    $option = Find-Element -Root $Element -ElementName $TargetValue
+    if ($null -eq $option) {
+        $option = Find-Element -Root $Root -ElementName $TargetValue
+    }
+    if ($null -eq $option) {
+        $processId = [int](Get-PropertyValueOrNull -Element $Element -Property ([System.Windows.Automation.AutomationElement]::ProcessIdProperty))
+        if ($processId -gt 0) {
+            $pidCondition = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+                $processId
+            )
+            $nameCondition = New-Object System.Windows.Automation.PropertyCondition(
+                [System.Windows.Automation.AutomationElement]::NameProperty,
+                $TargetValue
+            )
+            $condition = New-Object System.Windows.Automation.AndCondition($pidCondition, $nameCondition)
+            $option = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                $condition
+            )
+        }
+    }
+
+    if ($null -eq $option) {
+        return $false
+    }
+
+    try {
+        $option.SetFocus()
+    } catch {
+    }
+
+    try {
+        $invokePattern = $option.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+        $invokePattern.Invoke()
+        Start-Sleep -Milliseconds 150
+        if ((& $readCurrentValue) -eq $TargetValue) {
+            return $true
+        }
+    } catch {
+    }
+
+    try {
+        $legacyPattern = $option.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)
+        $legacyPattern.DoDefaultAction()
+        Start-Sleep -Milliseconds 150
+        if ((& $readCurrentValue) -eq $TargetValue) {
+            return $true
+        }
+    } catch {
+    }
+
+    try {
+        $selectionPattern = $option.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+        $selectionPattern.Select()
+        Start-Sleep -Milliseconds 150
+        if ((& $readCurrentValue) -eq $TargetValue) {
+            return $true
+        }
+    } catch {
+    }
+
+    try {
+        $rect = $option.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::BoundingRectangleProperty)
+        if (Click-BoundingRectangleCenter -Rect $rect) {
+            Start-Sleep -Milliseconds 200
+            if ((& $readCurrentValue) -eq $TargetValue) {
+                return $true
+            }
+        }
+    } catch {
+    }
+
+    return $false
+}
+
 function Set-ElementToggle {
     param(
         [System.Windows.Automation.AutomationElement]$Element,
@@ -767,6 +925,30 @@ switch ($actionName) {
             Write-UiaSuccess -Message "点击成功" -Data (Get-ElementSnapshot -Element $element)
         } else {
             Write-UiaError "点击失败: $Name"
+            exit 1
+        }
+    }
+
+    "select" {
+        if ([string]::IsNullOrWhiteSpace($Name)) {
+            Write-UiaError "需要指定 -Name"
+            exit 1
+        }
+        if ([string]::IsNullOrWhiteSpace($Value)) {
+            Write-UiaError "需要指定 -Value"
+            exit 1
+        }
+
+        $element = Find-Element -Root $mainWindow -ElementName $Name
+        if ($null -eq $element) {
+            Write-UiaError "未找到控件: $Name"
+            exit 1
+        }
+
+        if (Select-ElementOption -Root $mainWindow -Element $element -TargetValue $Value) {
+            Write-UiaSuccess -Message "选择成功" -Data (Get-ElementSnapshot -Element $element)
+        } else {
+            Write-UiaError "选择失败: $Name -> $Value"
             exit 1
         }
     }

@@ -40,7 +40,8 @@ inline constexpr size_t maxBufferedLogLines = 256;
 enum class MediaMode {
     autoSelect,
     dense,
-    sparse
+    sparse,
+    raw
 };
 
 struct AppConfig {
@@ -54,6 +55,7 @@ struct CreateDiskRequest {
     uint64_t diskSizeBytes = 0;
     MediaMode requestedMode = MediaMode::autoSelect;
     bool readOnly = false;
+    std::wstring rawFilePath;
 };
 
 struct ManagedDiskSnapshot {
@@ -125,10 +127,10 @@ struct ManagedDisk {
     MediaMode mode = MediaMode::autoSelect;
     DiskIdentity identity{};
     mutable std::shared_mutex mediaLock;
-    std::mutex sparseIoLock;
+    std::mutex backingFileIoLock;
     std::vector<unsigned char> denseMedium;
-    HANDLE sparseFile = INVALID_HANDLE_VALUE;
-    std::wstring sparseBackingPath;
+    HANDLE backingFile = INVALID_HANDLE_VALUE;
+    std::wstring backingFilePath;
     std::map<UINT64, StagedWriteRecord> stagedWrites;
     UINT64 nextStageOrdinal = 1;
 };

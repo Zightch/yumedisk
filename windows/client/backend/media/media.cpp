@@ -67,64 +67,70 @@ std::wstring buildSparseBackingPath(
            L".bin";
 }
 
-bool seekSparseFileLocked(
+bool isFileBackedMode(
+    MediaMode mode)
+{
+    return (mode == MediaMode::sparse) || (mode == MediaMode::raw);
+}
+
+bool seekBackingFileLocked(
     ManagedDisk* disk,
     UINT64 offset)
 {
     LARGE_INTEGER position;
 
-    if ((disk == nullptr) || (disk->sparseFile == INVALID_HANDLE_VALUE)) {
+    if ((disk == nullptr) || (disk->backingFile == INVALID_HANDLE_VALUE)) {
         return false;
     }
 
     position.QuadPart = offset;
-    return SetFilePointerEx(disk->sparseFile, position, nullptr, FILE_BEGIN) != FALSE;
+    return SetFilePointerEx(disk->backingFile, position, nullptr, FILE_BEGIN) != FALSE;
 }
 
-bool readSparseRangeLocked(
+bool readBackingFileRangeLocked(
     ManagedDisk* disk,
     UINT64 offset,
     void* buffer,
     UINT32 length)
 {
     DWORD bytesRead;
-    std::lock_guard<std::mutex> ioGuard(disk->sparseIoLock);
+    std::lock_guard<std::mutex> ioGuard(disk->backingFileIoLock);
 
     if (length == 0) {
         return true;
     }
 
-    if (!seekSparseFileLocked(disk, offset)) {
+    if (!seekBackingFileLocked(disk, offset)) {
         return false;
     }
 
     bytesRead = 0;
-    if (!ReadFile(disk->sparseFile, buffer, length, &bytesRead, nullptr)) {
+    if (!ReadFile(disk->backingFile, buffer, length, &bytesRead, nullptr)) {
         return false;
     }
 
     return bytesRead == length;
 }
 
-bool writeSparseRangeLocked(
+bool writeBackingFileRangeLocked(
     ManagedDisk* disk,
     UINT64 offset,
     const void* buffer,
     UINT32 length)
 {
     DWORD bytesWritten;
-    std::lock_guard<std::mutex> ioGuard(disk->sparseIoLock);
+    std::lock_guard<std::mutex> ioGuard(disk->backingFileIoLock);
 
     if (length == 0) {
         return true;
     }
 
-    if (!seekSparseFileLocked(disk, offset)) {
+    if (!seekBackingFileLocked(disk, offset)) {
         return false;
     }
 
     bytesWritten = 0;
-    if (!WriteFile(disk->sparseFile, buffer, length, &bytesWritten, nullptr)) {
+    if (!WriteFile(disk->backingFile, buffer, length, &bytesWritten, nullptr)) {
         return false;
     }
 
@@ -145,8 +151,8 @@ bool readBackingRangeLocked(
         return true;
     }
 
-    if (disk->mode == MediaMode::sparse) {
-        return readSparseRangeLocked(disk, offset, buffer, length);
+    if (isFileBackedMode(disk->mode)) {
+        return readBackingFileRangeLocked(disk, offset, buffer, length);
     }
 
     return false;
@@ -166,8 +172,8 @@ bool writeBackingRangeLocked(
         return true;
     }
 
-    if (disk->mode == MediaMode::sparse) {
-        return writeSparseRangeLocked(disk, offset, buffer, length);
+    if (isFileBackedMode(disk->mode)) {
+        return writeBackingFileRangeLocked(disk, offset, buffer, length);
     }
 
     return false;
@@ -193,8 +199,8 @@ bool initializeDenseMedia(
         return false;
     }
 
-    disk->sparseFile = INVALID_HANDLE_VALUE;
-    disk->sparseBackingPath.clear();
+    disk->backingFile = INVALID_HANDLE_VALUE;
+    disk->backingFilePath.clear();
     return true;
 }
 
@@ -249,8 +255,57 @@ bool initializeSparseMedia(
     }
 
     disk->denseMedium.clear();
-    disk->sparseFile = fileHandle;
-    disk->sparseBackingPath = path;
+    disk->backingFile = fileHandle;
+    disk->backingFilePath = path;
+    return true;
+}
+
+bool initializeRawMedia(
+    ManagedDisk* disk,
+    std::wstring* outReason)
+{
+    HANDLE fileHandle;
+    LARGE_INTEGER fileSize;
+    DWORD desiredAccess;
+
+    if (disk->backingFilePath.empty()) {
+        setFailureReason(outReason, L"raw-file-path-required");
+        return false;
+    }
+
+    desiredAccess = GENERIC_READ;
+    if (!disk->readOnly) {
+        desiredAccess |= GENERIC_WRITE;
+    }
+
+    fileHandle = CreateFileW(
+        disk->backingFilePath.c_str(),
+        desiredAccess,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (fileHandle == INVALID_HANDLE_VALUE) {
+        setFailureReason(outReason, L"raw-file-open-failed");
+        return false;
+    }
+
+    if (!GetFileSizeEx(fileHandle, &fileSize) || (fileSize.QuadPart <= 0)) {
+        CloseHandle(fileHandle);
+        setFailureReason(outReason, L"raw-file-size-invalid");
+        return false;
+    }
+
+    disk->diskSizeBytes = (uint64_t)fileSize.QuadPart;
+    if ((disk->diskSizeBytes % disk->sectorSize) != 0) {
+        CloseHandle(fileHandle);
+        setFailureReason(outReason, L"raw-file-size-not-sector-aligned");
+        return false;
+    }
+
+    disk->denseMedium.clear();
+    disk->backingFile = fileHandle;
     return true;
 }
 
@@ -282,6 +337,9 @@ bool initializeManagedDiskMedia(
     if (resolvedMode == MediaMode::sparse) {
         return initializeSparseMedia(disk, outReason);
     }
+    if (resolvedMode == MediaMode::raw) {
+        return initializeRawMedia(disk, outReason);
+    }
 
     setFailureReason(outReason, L"unsupported-media-mode");
     return false;
@@ -296,11 +354,11 @@ void cleanupManagedDiskMedia(
     disk->denseMedium.clear();
     disk->denseMedium.shrink_to_fit();
 
-    if (disk->sparseFile != INVALID_HANDLE_VALUE) {
-        CloseHandle(disk->sparseFile);
-        disk->sparseFile = INVALID_HANDLE_VALUE;
+    if (disk->backingFile != INVALID_HANDLE_VALUE) {
+        CloseHandle(disk->backingFile);
+        disk->backingFile = INVALID_HANDLE_VALUE;
     }
-    disk->sparseBackingPath.clear();
+    disk->backingFilePath.clear();
 }
 
 AK_STATUS AK_CALL hostReadBytes(

@@ -17,6 +17,7 @@ struct BackendCreateDiskRequest {
     unsigned long long diskSizeBytes = 0;
     bool readOnly = false;
     clientbackend::MediaMode requestedMode = clientbackend::MediaMode::autoSelect;
+    QString rawFilePath;
 };
 
 class Backend final {

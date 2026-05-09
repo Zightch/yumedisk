@@ -736,6 +736,7 @@ bool createManagedDisk(
     disk->sectorSize = context->config.sectorSize;
     disk->diskSizeBytes = request.diskSizeBytes;
     disk->readOnly = request.readOnly;
+    disk->backingFilePath = request.rawFilePath;
     disk->slotDepth = context->config.queueDepth;
     disk->readWorkerCount = computeWorkerCount(
         disk->slotDepth,
@@ -761,7 +762,7 @@ bool createManagedDisk(
 
     params.TargetId = targetId;
     params.SectorSize = context->config.sectorSize;
-    params.DiskSizeBytes = request.diskSizeBytes;
+    params.DiskSizeBytes = disk->diskSizeBytes;
     params.QueueDepth = (UINT32)context->config.queueDepth;
     params.WriteSlotBytes = (UINT32)context->config.writeSlotBytes;
     params.ReadWorkerCount = (UINT16)disk->readWorkerCount;
@@ -788,9 +789,14 @@ bool createManagedDisk(
     appendLog(
         context,
         L"[backend] created target=" + std::to_wstring(targetId) +
-            L", diskBytes=" + std::to_wstring(request.diskSizeBytes) +
+            L", diskBytes=" + std::to_wstring(disk->diskSizeBytes) +
             L", readOnly=" + readOnlyToText(disk->readOnly) +
             L", media=" + mediaModeToText(disk->mode));
+    if (disk->mode == MediaMode::raw) {
+        appendLog(
+            context,
+            L"[backend] rawFile=" + disk->backingFilePath);
+    }
 
     if (tryRefreshManagedDiskIdentity(context, disk, &visibleDisksBeforeCreate, diskArrivalTimeoutMs)) {
         appendLog(

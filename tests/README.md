@@ -145,6 +145,7 @@ pwsh -File tests/uia_test.ps1 -ProcessId <pid> -Action waitwindow -Timeout 10000
 - `read`
 - `write`
 - `click`
+- `select`
 - `toggle`
 - `enabled`
 - `wait`
@@ -181,6 +182,7 @@ pwsh -File tests/uia_test.ps1 -ProcessId <pid> -Action waitwindow -Timeout 10000
 - target id 输入：`yumedisk.create.target_id_input`
 - 建盘确认按钮：`yumedisk.create.submit_button`
 - 建盘取消按钮：`yumedisk.create.cancel_button`
+- `raw` 文件路径输入：`yumedisk.create.raw_file_input`
 - 托盘打开动作：`yumedisk.tray.open_action`
 - 托盘退出动作：`yumedisk.tray.quit_action`
 

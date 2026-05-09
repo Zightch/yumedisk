@@ -10,6 +10,8 @@ std::wstring mediaModeToText(MediaMode mode) {
         return L"dense";
     case MediaMode::sparse:
         return L"sparse";
+    case MediaMode::raw:
+        return L"raw";
     default:
         return L"unknown";
     }

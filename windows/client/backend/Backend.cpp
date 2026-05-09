@@ -66,6 +66,7 @@ bool Backend::createManagedDisk(
     backendRequest.diskSizeBytes = request.diskSizeBytes;
     backendRequest.readOnly = request.readOnly;
     backendRequest.requestedMode = request.requestedMode;
+    backendRequest.rawFilePath = request.rawFilePath.toStdWString();
 
     if (!clientbackend::createManagedDisk(context.get(), backendRequest, &errorText)) {
         assignErrorText(outErrorText, errorText);

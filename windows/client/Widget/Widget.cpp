@@ -36,6 +36,8 @@ QString mediaModeText(
         return QStringLiteral("dense");
     case clientbackend::MediaMode::sparse:
         return QStringLiteral("sparse");
+    case clientbackend::MediaMode::raw:
+        return QStringLiteral("raw");
     default:
         return QStringLiteral("auto");
     }
