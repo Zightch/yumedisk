@@ -522,6 +522,14 @@ function Invoke-ElementClick {
     } catch {
     }
 
+    try {
+        $rect = $Element.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::BoundingRectangleProperty)
+        if (Click-BoundingRectangleCenter -Rect $rect) {
+            return $true
+        }
+    } catch {
+    }
+
     return $false
 }
 

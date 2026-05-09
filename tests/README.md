@@ -55,6 +55,10 @@
   - 创建磁盘后不手动删盘；
   - 直接显式退出；
   - 验证可见盘回落和再次启动 session 正常打开。
+- `raw_loop`
+  - 创建 `raw` 文件盘；
+  - 验证 `create -> list -> remove -> quit`；
+  - 验证 `raw` 介质和 `rawFile` 日志进入固定回归入口。
 - `stop_process`
   - 强制停止目标进程；
   - 只用于调试收尾。
@@ -86,6 +90,7 @@ pwsh -File tests/uia_scenario.ps1 -Scenario minimal_loop -Launch
 pwsh -File tests/uia_scenario.ps1 -Scenario full_shell -Launch -StopAfter
 pwsh -File tests/uia_scenario.ps1 -Scenario minimal_loop -Launch
 pwsh -File tests/uia_scenario.ps1 -Scenario quit_cleanup -Launch -StopAfter
+pwsh -File tests/uia_scenario.ps1 -Scenario raw_loop -Launch
 ```
 
 默认可执行文件路径：
@@ -99,6 +104,19 @@ pwsh -File tests/uia_scenario.ps1 `
   -Scenario smoke `
   -Launch `
   -ExePath windows/client/cmake-build-minsizerel/client.exe
+```
+
+`raw_loop` 默认使用：
+
+- `C:\Users\0\AppData\Local\Temp\YumeDiskClientRawTests\raw-64m.bin`
+
+如果你要换成别的现有 `raw` 文件，可以显式传：
+
+```powershell
+pwsh -File tests/uia_scenario.ps1 `
+  -Scenario raw_loop `
+  -Launch `
+  -RawFilePath C:\path\to\aligned-raw.bin
 ```
 
 ### 5.3 只做控件树定位
@@ -199,11 +217,12 @@ pwsh -File tests/uia_test.ps1 -ProcessId <pid> -Action waitwindow -Timeout 10000
 - 关闭主窗口后进程仍然存活；
 - 最小闭环 `create -> list -> remove -> quit` 可被直接回归。
 
-当前全量测试固定拆成两段：
+当前全量测试固定按以下顺序执行：
 
 - `full_shell`
 - `minimal_loop`
 - `quit_cleanup`
+- `raw_loop`
 
 ## 9. 常见问题
 
