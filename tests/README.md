@@ -36,7 +36,7 @@
 
 ## 4. 当前可直接使用的场景
 
-当前 `windows/client` 还是 Qt 示例壳体阶段，所以现成场景主要验证窗口和托盘壳：
+当前现成场景分两类：壳体验证 + 最小闭环验收。
 
 - `smoke`
   - 等待主窗口出现；
@@ -48,6 +48,9 @@
 - `close_to_tray`
   - 发送关闭主窗口命令；
   - 验证进程仍然存活。
+- `minimal_loop`
+  - 启动后走一轮 `create -> list -> remove -> quit`；
+  - 直接验证当前客户端最小闭环。
 - `stop_process`
   - 强制停止目标进程；
   - 只用于调试收尾。
@@ -65,6 +68,21 @@
 pwsh -File tests/uia_scenario.ps1 -Scenario full_shell -Launch -StopAfter
 ```
 
+### 5.2 跑最小闭环验收
+
+在管理员 PowerShell 中运行：
+
+```powershell
+pwsh -File tests/uia_scenario.ps1 -Scenario minimal_loop -Launch
+```
+
+如果要跑当前全量回归，固定口径是：
+
+```powershell
+pwsh -File tests/uia_scenario.ps1 -Scenario full_shell -Launch -StopAfter
+pwsh -File tests/uia_scenario.ps1 -Scenario minimal_loop -Launch
+```
+
 默认可执行文件路径：
 
 - `windows/client/cmake-build-debug/client.exe`
@@ -78,7 +96,7 @@ pwsh -File tests/uia_scenario.ps1 `
   -ExePath windows/client/cmake-build-minsizerel/client.exe
 ```
 
-### 5.2 只做控件树定位
+### 5.3 只做控件树定位
 
 先启动 `client`，再跑：
 
@@ -86,7 +104,7 @@ pwsh -File tests/uia_scenario.ps1 `
 pwsh -File tests/uia_scenario.ps1 -Scenario inspect -ProcessId <pid>
 ```
 
-### 5.3 单步读控件 / 点控件
+### 5.4 单步读控件 / 点控件
 
 ```powershell
 pwsh -File tests/uia_test.ps1 -ProcessId <pid> -Action list -Scope descendants
@@ -95,13 +113,15 @@ pwsh -File tests/uia_test.ps1 -ProcessId <pid> -Name yumedisk.disk.create_button
 pwsh -File tests/uia_test.ps1 -ProcessId <pid> -Name yumedisk.create.capacity_input -Action write -Value 1024
 ```
 
-### 5.4 先看桌面窗口，再决定目标
+表格行选择也继续用 `click`，脚本现在会优先按可选项语义处理 `DataItem / ListItem / TreeItem / TabItem`，避免 Qt 表格只触发默认动作却不更新选择状态。
+
+### 5.5 先看桌面窗口，再决定目标
 
 ```powershell
 pwsh -File tests/uia_test.ps1 -Action windows
 ```
 
-### 5.5 等待主窗口出现
+### 5.6 等待主窗口出现
 
 ```powershell
 pwsh -File tests/uia_test.ps1 -ProcessId <pid> -Action waitwindow -Timeout 10000
@@ -147,6 +167,7 @@ pwsh -File tests/uia_test.ps1 -ProcessId <pid> -Action waitwindow -Timeout 10000
 - 受管磁盘表：`yumedisk.disk.table`
 - 创建磁盘按钮：`yumedisk.disk.create_button`
 - 删除磁盘按钮：`yumedisk.disk.remove_button`
+- 显式退出按钮：`yumedisk.client.quit_button`
 - 日志面板：`yumedisk.log.text`
 - 建盘对话框：`yumedisk.create.dialog`
 - 容量输入：`yumedisk.create.capacity_input`
@@ -168,17 +189,13 @@ pwsh -File tests/uia_test.ps1 -ProcessId <pid> -Action waitwindow -Timeout 10000
 - `client.exe` 能被启动；
 - 主窗口能被 UIA 找到；
 - 能导出控件树；
-- 关闭主窗口后进程仍然存活。
+- 关闭主窗口后进程仍然存活；
+- 最小闭环 `create -> list -> remove -> quit` 可被直接回归。
 
-等 `windows/client` 接入真实宿主后，再继续追加：
+当前全量测试固定拆成两段：
 
-- session 状态读取；
-- 建盘对话框填写；
-- 建盘按钮触发；
-- 磁盘列表刷新；
-- 删除磁盘；
-- 日志读取；
-- 显式退出。
+- `full_shell`
+- `minimal_loop`
 
 ## 9. 常见问题
 

@@ -28,6 +28,7 @@ private:
     void initializeInteractions();
     void showFromTray();
     void initializeTray();
+    void quitClient();
     void refreshView();
     void refreshSessionState();
     void refreshManagedDisks();

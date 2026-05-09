@@ -1,6 +1,6 @@
-#include "createDiskDialog.h"
+#include "CreateDiskDialog.h"
 
-#include "ui_createDiskDialog.h"
+#include "ui_CreateDiskDialog.h"
 
 #include <limits>
 

@@ -27,12 +27,12 @@ qt_standard_project_setup()
 
 qt_add_executable(
         client
-        createDiskDialog/createDiskDialog.cpp
-        createDiskDialog/createDiskDialog.h
-        createDiskDialog/createDiskDialog.ui
+        CreateDiskDialog/CreateDiskDialog.cpp
+        CreateDiskDialog/CreateDiskDialog.h
+        CreateDiskDialog/CreateDiskDialog.ui
         main.cpp
-        backend/backend.cpp
-        backend/backend.h
+        backend/Backend.cpp
+        backend/Backend.h
         backend/config/config.cpp
         backend/config/config.h
         backend/media/media.cpp
@@ -40,9 +40,9 @@ qt_add_executable(
         backend/runtime/runtime.cpp
         backend/runtime/runtime.h
         backend/types/types.h
-        widget/widget.cpp
-        widget/widget.h
-        widget/widget.ui
+        Widget/Widget.cpp
+        Widget/Widget.h
+        Widget/Widget.ui
 )
 
 target_include_directories(

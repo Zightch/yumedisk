@@ -40,6 +40,8 @@ public:
     bool removeAllManagedDisks(
         bool closing,
         QString* outErrorText = nullptr);
+    bool shutdown(
+        QString* outErrorText = nullptr);
 
     QString querySessionState() const;
     std::vector<clientbackend::ManagedDiskSnapshot> snapshotManagedDisks() const;

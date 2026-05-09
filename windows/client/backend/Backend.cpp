@@ -1,4 +1,4 @@
-#include "backend.h"
+#include "Backend.h"
 
 #include "backend/runtime/runtime.h"
 
@@ -101,6 +101,12 @@ bool Backend::removeAllManagedDisks(
     }
 
     return true;
+}
+
+bool Backend::shutdown(
+    QString* outErrorText)
+{
+    return removeAllManagedDisks(true, outErrorText);
 }
 
 QString Backend::querySessionState() const {

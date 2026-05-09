@@ -15,12 +15,15 @@
 
 - 目录优先按类拆分，而不是先按文件类型拆分。
 - 一个明确类优先使用一个同名子目录承接其实现文件。
+- 类目录名与类名保持一致，统一使用 `UpperCamelCase`。
+- 类实现文件名也与类名保持一致，统一使用 `UpperCamelCase`，包括 `ui / cpp / h`。
+- 没有明显类归属、而是按功能聚合的组件目录和组件文件名，统一使用 `lowerCamelCase`。
 - 当前推荐结构形态：
-  - `widget/widget.h`
-  - `widget/widget.cpp`
-  - `widget/widget.ui`
-  - `backend/backend.h`
-  - `backend/backend.cpp`
+  - `Widget/Widget.h`
+  - `Widget/Widget.cpp`
+  - `Widget/Widget.ui`
+  - `backend/Backend.h`
+  - `backend/Backend.cpp`
 - 没有明显类归属、而是按功能聚合的代码，再按功能模块或组件拆子目录，例如：
   - `utils/`
   - `media/`

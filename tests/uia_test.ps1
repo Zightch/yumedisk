@@ -448,6 +448,23 @@ function Invoke-ElementClick {
     }
 
     try {
+        $Element.SetFocus()
+    } catch {
+    }
+
+    $controlType = Get-PropertyValueOrNull -Element $Element -Property ([System.Windows.Automation.AutomationElement]::ControlTypeProperty)
+    $controlTypeName = if ($null -ne $controlType) { [string]$controlType.ProgrammaticName } else { "" }
+
+    if ($controlTypeName -in @("ControlType.DataItem", "ControlType.ListItem", "ControlType.TreeItem", "ControlType.TabItem")) {
+        try {
+            $selectionPattern = $Element.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+            $selectionPattern.Select()
+            return $true
+        } catch {
+        }
+    }
+
+    try {
         $invokePattern = $Element.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
         $invokePattern.Invoke()
         return $true

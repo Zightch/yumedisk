@@ -1,17 +1,19 @@
-#include "widget.h"
+#include "Widget.h"
 
-#include "backend/backend.h"
-#include "createDiskDialog/createDiskDialog.h"
-#include "ui_widget.h"
+#include "backend/Backend.h"
+#include "CreateDiskDialog/CreateDiskDialog.h"
+#include "ui_Widget.h"
 
 #include <QHeaderView>
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QIcon>
+#include <QKeySequence>
 #include <QMessageBox>
 #include <QMenu>
 #include <QPlainTextEdit>
+#include <QShortcut>
 #include <QStyle>
 #include <QSystemTrayIcon>
 #include <QTableWidgetItem>
@@ -119,6 +121,9 @@ void Widget::initializeInteractions() {
     connect(ui->removeDiskButton, &QPushButton::clicked, this, [this]() {
         removeDisk();
     });
+    connect(ui->quitButton, &QPushButton::clicked, this, [this]() {
+        quitClient();
+    });
     connect(
         ui->diskTableWidget,
         &QTableWidget::itemSelectionChanged,
@@ -138,15 +143,19 @@ void Widget::showFromTray() {
 }
 
 void Widget::initializeTray() {
+    auto* quitShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Q")), this);
+
     trayIcon = new QSystemTrayIcon(this);
     trayMenu = new QMenu(this);
     openAction = trayMenu->addAction("打开主窗口");
     quitAction = trayMenu->addAction("退出");
     openAction->setObjectName(QStringLiteral("yumedisk.tray.open_action"));
     quitAction->setObjectName(QStringLiteral("yumedisk.tray.quit_action"));
+    quitAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Q")));
 
     connect(openAction, &QAction::triggered, this, &Widget::showFromTray);
-    connect(quitAction, &QAction::triggered, qApp, &QApplication::quit);
+    connect(quitAction, &QAction::triggered, this, &Widget::quitClient);
+    connect(quitShortcut, &QShortcut::activated, this, &Widget::quitClient);
     connect(
         trayIcon,
         &QSystemTrayIcon::activated,
@@ -162,6 +171,19 @@ void Widget::initializeTray() {
     trayIcon->setToolTip("YumeDisk Client");
     trayIcon->setIcon(style()->standardIcon(QStyle::SP_ComputerIcon));
     trayIcon->show();
+}
+
+void Widget::quitClient() {
+    if (backend != nullptr) {
+        QString errorText;
+
+        if (!backend->shutdown(&errorText)) {
+            QMessageBox::warning(this, QStringLiteral("退出客户端"), errorText);
+            return;
+        }
+    }
+
+    qApp->quit();
 }
 
 void Widget::refreshView() {

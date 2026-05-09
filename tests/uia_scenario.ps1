@@ -53,12 +53,13 @@ YumeDisk Client UIA 场景脚本
   smoke        : 等待主窗口并读取窗口信息 + children 控件列表
   inspect      : 等待主窗口并导出 descendants 控件列表
   close_to_tray: 发送关闭窗口命令，并确认进程仍存活
+  minimal_loop : 验证 create -> list -> remove -> quit 最小闭环
   stop_process : 停止目标进程
   full_shell   : smoke -> inspect -> close_to_tray
 
 说明:
-  - 当前 `windows/client` 还是壳体阶段，因此场景主要验证窗口和托盘关闭语义。
-  - 真正的 session / 磁盘 / 日志控件测试，会在 UI 落地后复用同一套脚本继续扩展。
+  - 当前脚本既覆盖壳体验证，也覆盖 `client` 最小闭环验收。
+  - 推荐全量执行：先跑 `full_shell`，再跑 `minimal_loop`。
 
 "@
     exit 0
@@ -69,6 +70,7 @@ if ($List) {
     Write-Host "  smoke"
     Write-Host "  inspect"
     Write-Host "  close_to_tray"
+    Write-Host "  minimal_loop"
     Write-Host "  stop_process"
     Write-Host "  full_shell"
     exit 0
@@ -111,20 +113,25 @@ function Invoke-UiaTest {
         [bool]$Check = $false,
         [string]$Condition = "",
         [string]$LocalScope = "descendants",
-        [int]$LocalTimeout = $Timeout
+        [int]$LocalTimeout = $Timeout,
+        [string]$LocalWindow = $Window,
+        [switch]$WindowOnly
     )
 
     $args = @(
         "-NoLogo",
         "-NoProfile",
         "-File", (Join-Path $ScriptDir "uia_test.ps1"),
-        "-ProcessId", $script:TargetProcessId,
-        "-Window", $Window,
+        "-Window", $LocalWindow,
         "-ProcessName", $ProcessName,
         "-Action", $Action,
         "-Scope", $LocalScope,
         "-Timeout", $LocalTimeout
     )
+
+    if (-not $WindowOnly) {
+        $args += @("-ProcessId", $script:TargetProcessId)
+    }
 
     if (-not [string]::IsNullOrWhiteSpace($Name)) {
         $args += @("-Name", $Name)
@@ -150,6 +157,55 @@ function Invoke-UiaTest {
     }
 
     return $jsonLine | ConvertFrom-Json
+}
+
+function Read-ElementTextValue {
+    param(
+        [string]$ElementName,
+        [string]$LocalWindow = $Window,
+        [switch]$WindowOnly
+    )
+
+    $result = Invoke-UiaTest -Action "read" -Name $ElementName -LocalWindow $LocalWindow -WindowOnly:$WindowOnly
+    if ($result.status -ne "success") {
+        throw "读取控件失败: $ElementName, $($result.message)"
+    }
+
+    $valueText = ""
+    if ($null -ne $result.data) {
+        $valueText = [string]$result.data.value
+        if ([string]::IsNullOrWhiteSpace($valueText)) {
+            $valueText = [string]$result.data.name
+        }
+    }
+
+    return $valueText
+}
+
+function Wait-TargetProcessExit {
+    param([int]$TimeoutMs = 10000)
+
+    $start = Get-Date
+    while (((Get-Date) - $start).TotalMilliseconds -lt $TimeoutMs) {
+        $process = Get-Process -Id $script:TargetProcessId -ErrorAction SilentlyContinue
+        if ($null -eq $process) {
+            return $true
+        }
+
+        Start-Sleep -Milliseconds 200
+    }
+
+    return $false
+}
+
+function Get-LatestCreatedTargetId {
+    $logText = Read-ElementTextValue -ElementName "yumedisk.log.text"
+    $matches = [regex]::Matches($logText, "created target=(\d+)")
+    if ($matches.Count -le 0) {
+        throw "未在日志中找到 created target="
+    }
+
+    return [string]$matches[$matches.Count - 1].Groups[1].Value
 }
 
 function Resolve-TargetProcessId {
@@ -267,6 +323,124 @@ function Test-CloseToTray {
     return $true
 }
 
+function Test-MinimalLoop {
+    Write-TestStart "client 最小闭环"
+
+    $null = Ensure-WindowReady
+
+    $result = Invoke-UiaTest -Action "click" -Name "yumedisk.disk.create_button"
+    if ($result.status -ne "success") {
+        Write-TestFail "打开建盘对话框失败"
+        return $false
+    }
+    Write-TestPass "打开建盘对话框成功"
+
+    $result = Invoke-UiaTest -Action "waitwindow" -LocalWindow "yumedisk.create.dialog" -WindowOnly -LocalTimeout 5000
+    if ($result.status -ne "success") {
+        Write-TestFail "等待建盘对话框失败"
+        return $false
+    }
+    Write-TestPass "建盘对话框已出现"
+
+    $result = Invoke-UiaTest -Action "click" -LocalWindow "yumedisk.create.dialog" -WindowOnly -Name "yumedisk.create.submit_button"
+    if ($result.status -ne "success") {
+        Write-TestFail "提交建盘失败"
+        return $false
+    }
+    Write-TestPass "提交建盘成功"
+
+    $result = Invoke-UiaTest -Action "wait" -Name "yumedisk.log.text" -Condition "contains:created target=" -LocalTimeout 15000
+    if ($result.status -ne "success") {
+        Write-TestFail "等待建盘日志失败"
+        return $false
+    }
+    Write-TestPass "建盘日志已出现"
+
+    $targetId = ""
+    try {
+        $targetId = Get-LatestCreatedTargetId
+    } catch {
+        Write-TestFail $_.Exception.Message
+        return $false
+    }
+    Write-TestInfo "target id: $targetId"
+
+    $result = Invoke-UiaTest -Action "list" -LocalScope "descendants"
+    if ($result.status -ne "success") {
+        Write-TestFail "读取磁盘表控件树失败"
+        return $false
+    }
+
+    $dataItems = @($result.data | Where-Object { $_.controlType -eq "ControlType.DataItem" })
+    $hasTargetCell = @($dataItems | Where-Object { [string]$_.name -eq $targetId }).Count -gt 0
+    $hasRunningCell = @($dataItems | Where-Object { [string]$_.name -eq "running" }).Count -gt 0
+    $hasMediaCell = @($dataItems | Where-Object { [string]$_.name -in @("dense", "sparse", "auto") }).Count -gt 0
+    $hasVisiblePathCell = @(
+        $dataItems | Where-Object {
+            $name = [string]$_.name
+            (-not [string]::IsNullOrWhiteSpace($name)) -and
+            ($name -ne $targetId) -and
+            ($name -ne "running") -and
+            ($name -notin @("dense", "sparse", "auto"))
+        }
+    ).Count -gt 0
+
+    if (($dataItems.Count -lt 4) -or (-not $hasTargetCell) -or (-not $hasRunningCell) -or (-not $hasMediaCell) -or (-not $hasVisiblePathCell)) {
+        Write-TestFail "磁盘列表未收口出完整一行数据"
+        return $false
+    }
+    Write-TestPass "磁盘列表已出现完整一行数据"
+
+    $result = Invoke-UiaTest -Action "click" -Name $targetId
+    if ($result.status -ne "success") {
+        Write-TestFail "选中磁盘行失败"
+        return $false
+    }
+    Write-TestPass "选中磁盘行成功"
+
+    $result = Invoke-UiaTest -Action "wait" -Name "yumedisk.disk.remove_button" -Condition "enabled" -LocalTimeout 5000
+    if ($result.status -ne "success") {
+        Write-TestFail "删盘按钮未启用"
+        return $false
+    }
+    Write-TestPass "删盘按钮已启用"
+
+    $result = Invoke-UiaTest -Action "click" -Name "yumedisk.disk.remove_button"
+    if ($result.status -ne "success") {
+        Write-TestFail "点击删盘按钮失败"
+        return $false
+    }
+    Write-TestPass "点击删盘按钮成功"
+
+    $result = Invoke-UiaTest -Action "wait" -Name "yumedisk.log.text" -Condition ("contains:removed target=" + $targetId) -LocalTimeout 15000
+    if ($result.status -ne "success") {
+        Write-TestFail "等待删盘日志失败"
+        return $false
+    }
+    Write-TestPass "删盘日志已出现"
+
+    $result = Invoke-UiaTest -Action "wait" -Name $targetId -Condition "notexists" -LocalTimeout 10000
+    if ($result.status -ne "success") {
+        Write-TestFail "磁盘行未从列表移除"
+        return $false
+    }
+    Write-TestPass "磁盘行已从列表移除"
+
+    $result = Invoke-UiaTest -Action "click" -Name "yumedisk.client.quit_button"
+    if ($result.status -ne "success") {
+        Write-TestFail "点击显式退出按钮失败"
+        return $false
+    }
+    Write-TestPass "点击显式退出按钮成功"
+
+    if (-not (Wait-TargetProcessExit -TimeoutMs 10000)) {
+        Write-TestFail "显式退出后进程仍存活"
+        return $false
+    }
+    Write-TestPass "显式退出后进程已退出"
+    return $true
+}
+
 function Stop-TargetProcess {
     Write-TestStart "停止目标进程"
 
@@ -313,6 +487,9 @@ switch ($Scenario.ToLowerInvariant()) {
     }
     "close_to_tray" {
         $overallSuccess = Test-CloseToTray
+    }
+    "minimal_loop" {
+        $overallSuccess = Test-MinimalLoop
     }
     "stop_process" {
         $overallSuccess = Stop-TargetProcess

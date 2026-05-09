@@ -2,7 +2,7 @@
 
 #include <QDialog>
 
-#include "backend/backend.h"
+#include "backend/Backend.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
