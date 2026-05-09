@@ -4,25 +4,7 @@
 
 ## 子步骤
 
-1. 重建 `BackendCore` 运行时主线
-   - 迁出并收口：
-     - `BackendContext`
-     - `DiskRuntime`
-     - 事件线程
-     - 日志缓冲
-     - session / disk 快照
-     - stats / debug snapshot
-   - 保持当前真实运行主线不变：
-     - `AppKernel session`
-     - `map<targetId, DiskRuntime>`
-     - `N` 盘模型
-     - 每盘一份 `StagingStore`
-     - 每盘一份 `Media`
-   - 这一层的目标是：
-     - 让 `BackendCore` 自己独立承接当前 runtime 真状态
-     - 不再依赖 `client` 里的 UI 适配层解释运行状态
-
-2. 重建 `BackendCore` 建盘与删盘接口
+1. 重建 `BackendCore` 建盘与删盘接口
    - `BackendCore` 只接收已经收口后的运行参数
    - `Media` 由宿主侧创建后移交给 `BackendCore`
    - `BackendCore` 负责：
@@ -30,7 +12,7 @@
      - 建盘
      - 删盘
      - 全删盘
-     - shutdown / close
+     - `shutdown / close`
    - 这里要明确调整一条现有行为：
      - `readWorkerCount`
      - `writeWorkerCount`
@@ -38,7 +20,7 @@
      - `queueDepth`
      不再由 core 隐式替上层决定，改为上层可传、core 校验后落地
 
-3. 重建 `client` 宿主适配层 `backendHost`
+2. 重建 `client` 宿主适配层 `backendHost`
    - 新建 `windows/client/backendHost/`
    - 它只负责：
      - `QString` / 表单输入解析
@@ -54,7 +36,7 @@
      - 自己维护 staging 生命周期
      - 自己接 `AppKernel`
 
-4. 重建 `client` 介质实现归属
+3. 重建 `client` 介质实现归属
    - 把当前具体介质实现留在 `client` 宿主侧
    - 固定归属：
      - `client/media/FileMedia/`
@@ -68,7 +50,7 @@
      - 让 `BackendCore` 只关心“怎么驱动盘”
      - 不关心“宿主用什么本地文件介质实现”
 
-5. 重建 `client` 调用链
+4. 重建 `client` 调用链
    - 把当前 `Widget/CreateDiskDialog -> Backend` 的直连路径
      重建为：
      - `Widget/CreateDiskDialog`
@@ -78,7 +60,7 @@
    - `CreateDiskDialog` 只收集输入，不承接运行时规则
    - 保持当前“UI 与运行时分离”原则，不回退成 UI 直接解释 runtime 细节
 
-6. 重建构建与部署链路
+5. 重建构建与部署链路
    - `client` 改为链接 `BackendCore`
    - `BackendCore` 再链接：
      - `AppKernel`
@@ -90,7 +72,7 @@
      - IDE 构建可运行
      - `cmake-build-debug` 产物可直接启动
 
-7. 重建验收口径
+6. 重建验收口径
    - 先做构建验收：
      - `BackendCore` 独立可编译
      - `client` 链接新链路后可编译
@@ -143,6 +125,6 @@
 
 ## 当前唯一下一步
 
-重建 `BackendCore` 运行时主线：把当前 `BackendContext / DiskRuntime / event thread / log buffer / snapshot / stats` 继续从过渡骨架收口成 DLL 内唯一 runtime 真状态，并清掉仍依赖宿主解释的过渡痕迹。
+重建 `BackendCore` 建盘与删盘接口：让 core 正式接收宿主移交的 `Media` 与显式 `SessionConfig / DiskConfig`，清掉当前建盘路径里“media 实例尚未正式进入 core 接口”的最后过渡痕迹。
 
 历史完成事实与验收结果请查看 [../progress/README.md](../progress/README.md) 对应日期文件。

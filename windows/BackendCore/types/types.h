@@ -2,25 +2,14 @@
 
 #include <Windows.h>
 
-#include <atomic>
+#include <cstddef>
 #include <cstdint>
-#include <map>
-#include <memory>
-#include <mutex>
-#include <shared_mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
-#include "media/Media/Media.h"
-#include "StagingStore/StagingStore.h"
-#include "appkernel.h"
-#include "scan.h"
 #include "yumedisk_proto.h"
 
 namespace clientbackend {
-
-using yumedisk::scan::DiskIdentity;
 
 inline constexpr ULONG defaultSectorSize = 4096;
 inline constexpr UINT32 defaultQueueDepth = 32;
@@ -91,80 +80,6 @@ struct DebugSnapshot {
     std::vector<ManagedDiskSnapshot> disks;
 };
 
-struct DiskMetadata {
-    ULONG targetId = 0;
-    ULONG sectorSize = 0;
-    uint64_t diskSizeBytes = 0;
-    bool readOnly = false;
-    MediaKind mediaKind = MediaKind::unknown;
-    DiskIdentity identity{};
-};
-
-struct DiskQueueConfig {
-    UINT32 queueDepth = 0;
-    UINT32 writeSlotBytes = 0;
-    UINT16 readWorkerCount = 0;
-    UINT16 writeWorkerCount = 0;
-    UINT32 ackBatchMaxRanges = 0;
-};
-
-struct DiskLifecycleState {
-    AK_DISK* handle = nullptr;
-};
-
-struct DiskMediaState {
-    mutable std::shared_mutex lock;
-    std::unique_ptr<Media> instance;
-};
-
-struct DiskRuntime;
-
-struct BackendContext {
-    SessionConfig sessionConfig;
-    AK_SESSION* session = nullptr;
-    HANDLE stopEvent = nullptr;
-    std::atomic<bool> stop{false};
-    std::mutex diskRuntimesLock;
-    std::map<ULONG, std::shared_ptr<DiskRuntime>> diskRuntimes;
-    mutable std::mutex logLock;
-    std::vector<std::wstring> logLines;
-    std::thread eventThread;
-    AK_STATUS openStatus = AK_STATUS_SUCCESS;
-    DWORD openWin32Error = ERROR_SUCCESS;
-    bool openSucceeded = false;
-
-    bool open();
-    void close();
-
-    std::wstring querySessionStateText() const;
-    std::vector<std::wstring> snapshotLogLines() const;
-    std::vector<ManagedDiskSnapshot> snapshotManagedDisks() const;
-    bool queryBackendStats(
-        BackendStatsSnapshot* outStats,
-        std::wstring* outErrorText = nullptr) const;
-    bool queryDebugSnapshot(
-        DebugSnapshot* outSnapshot,
-        std::wstring* outErrorText = nullptr) const;
-
-    ULONG findFirstFreeTarget();
-    bool createManagedDisk(
-        const CreateDiskRequest& request,
-        std::wstring* outErrorText = nullptr);
-    bool removeManagedDisk(
-        ULONG targetId,
-        std::wstring* outErrorText = nullptr);
-    bool removeAllManagedDisks(bool closing);
-
-    void appendLog(const std::wstring& text);
-};
-
-struct DiskRuntime {
-    BackendContext* context = nullptr;
-    DiskMetadata metadata;
-    DiskQueueConfig queueConfig;
-    DiskLifecycleState lifecycle;
-    DiskMediaState media;
-    StagingStore staging;
-};
+class BackendContext;
 
 } // namespace clientbackend

@@ -28,6 +28,7 @@ add_library(
         media/Media/Media.h
         runtime/runtime.cpp
         runtime/runtime.h
+        runtime/runtimeDisk.h
         StagingStore/StagingStore.cpp
         StagingStore/StagingStore.h
         types/types.h

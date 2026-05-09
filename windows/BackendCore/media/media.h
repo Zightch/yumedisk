@@ -1,11 +1,13 @@
 #pragma once
 
-#include <memory>
 #include <string>
 
+#include "appkernel.h"
 #include "types/types.h"
 
 namespace clientbackend {
+
+struct DiskRuntime;
 
 bool initializeManagedDiskMedia(
     DiskRuntime* diskRuntime,

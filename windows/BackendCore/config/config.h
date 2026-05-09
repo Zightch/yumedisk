@@ -2,6 +2,7 @@
 
 #include <string>
 
+#include "appkernel.h"
 #include "types/types.h"
 
 namespace clientbackend {
