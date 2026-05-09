@@ -4,7 +4,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -24,40 +23,45 @@ namespace clientbackend {
 using yumedisk::scan::DiskIdentity;
 
 inline constexpr ULONG defaultSectorSize = 4096;
-inline constexpr size_t defaultQueueDepth = 32;
-inline constexpr size_t maxSlotEngineQueueDepth = MAXIMUM_WAIT_OBJECTS / 2;
-inline constexpr size_t defaultWriteSlotBytes = 1024 * 1024;
-inline constexpr uint64_t maxDenseMediaBytes = 1024ull * 1024ull * 1024ull;
-inline constexpr size_t maxReadWorkersPerDisk = 4;
-inline constexpr size_t maxWriteWorkersPerDisk = 2;
-inline constexpr size_t readSlotsPerWorkerTarget = 8;
-inline constexpr size_t writeSlotsPerWorkerTarget = 16;
+inline constexpr UINT32 defaultQueueDepth = 32;
+inline constexpr UINT32 defaultWriteSlotBytes = 1024 * 1024;
+inline constexpr UINT16 defaultReadWorkerCount = 4;
+inline constexpr UINT16 defaultWriteWorkerCount = 2;
+inline constexpr UINT32 defaultAckBatchMaxRanges = defaultQueueDepth;
 inline constexpr DWORD diskArrivalPollMs = 100;
 inline constexpr DWORD diskArrivalTimeoutMs = 2000;
 inline constexpr DWORD eventWaitPollMs = 100;
-inline constexpr UINT32 heartbeatIntervalMs = 1000;
-inline constexpr UINT32 initialEventQueueCapacity = 1024;
+inline constexpr UINT32 defaultHeartbeatIntervalMs = 1000;
+inline constexpr UINT32 defaultInitialEventQueueCapacity = 1024;
 inline constexpr size_t maxBufferedLogLines = 256;
 
-enum class MediaMode {
-    autoSelect,
+enum class MediaKind {
+    unknown,
     denseMem,
     sparseMem,
     rawFile
 };
 
-struct AppConfig {
+struct SessionConfig {
+    UINT32 heartbeatIntervalMs = defaultHeartbeatIntervalMs;
+    UINT32 initialEventQueueCapacity = defaultInitialEventQueueCapacity;
+};
+
+struct DiskConfig {
+    ULONG targetId = YUMEDISK_MAX_TARGETS;
     ULONG sectorSize = defaultSectorSize;
-    size_t queueDepth = defaultQueueDepth;
-    size_t writeSlotBytes = defaultWriteSlotBytes;
+    uint64_t diskSizeBytes = 0;
+    UINT32 queueDepth = defaultQueueDepth;
+    UINT32 writeSlotBytes = defaultWriteSlotBytes;
+    UINT16 readWorkerCount = defaultReadWorkerCount;
+    UINT16 writeWorkerCount = defaultWriteWorkerCount;
+    UINT32 ackBatchMaxRanges = defaultAckBatchMaxRanges;
+    bool readOnly = false;
 };
 
 struct CreateDiskRequest {
-    ULONG targetId = YUMEDISK_MAX_TARGETS;
-    uint64_t diskSizeBytes = 0;
-    MediaMode requestedMode = MediaMode::autoSelect;
-    bool readOnly = false;
-    std::wstring rawFilePath;
+    DiskConfig diskConfig;
+    MediaKind mediaKind = MediaKind::unknown;
 };
 
 struct ManagedDiskSnapshot {
@@ -65,7 +69,7 @@ struct ManagedDiskSnapshot {
     uint64_t diskSizeBytes = 0;
     ULONG sectorSize = 0;
     bool readOnly = false;
-    MediaMode mode = MediaMode::autoSelect;
+    MediaKind mediaKind = MediaKind::unknown;
     std::wstring visiblePath;
     std::wstring physicalDrivePath;
     std::wstring lifecycleText;
@@ -92,15 +96,16 @@ struct DiskMetadata {
     ULONG sectorSize = 0;
     uint64_t diskSizeBytes = 0;
     bool readOnly = false;
-    MediaMode mode = MediaMode::autoSelect;
-    std::wstring backingFilePath;
+    MediaKind mediaKind = MediaKind::unknown;
     DiskIdentity identity{};
 };
 
 struct DiskQueueConfig {
-    size_t slotDepth = 0;
-    size_t readWorkerCount = 0;
-    size_t writeWorkerCount = 0;
+    UINT32 queueDepth = 0;
+    UINT32 writeSlotBytes = 0;
+    UINT16 readWorkerCount = 0;
+    UINT16 writeWorkerCount = 0;
+    UINT32 ackBatchMaxRanges = 0;
 };
 
 struct DiskLifecycleState {
@@ -115,7 +120,7 @@ struct DiskMediaState {
 struct DiskRuntime;
 
 struct BackendContext {
-    AppConfig config;
+    SessionConfig sessionConfig;
     AK_SESSION* session = nullptr;
     HANDLE stopEvent = nullptr;
     std::atomic<bool> stop{false};

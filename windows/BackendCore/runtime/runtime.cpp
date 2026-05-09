@@ -211,24 +211,6 @@ bool tryRefreshDiskRuntimeIdentity(
     }
 }
 
-size_t computeWorkerCount(
-    size_t slotDepth,
-    size_t targetSlotsPerWorker,
-    size_t maxWorkers)
-{
-    size_t workerCount;
-
-    if (slotDepth == 0) {
-        return 1;
-    }
-
-    workerCount = (slotDepth + targetSlotsPerWorker - 1) / targetSlotsPerWorker;
-    workerCount = std::max<size_t>(1, workerCount);
-    workerCount = std::min(workerCount, maxWorkers);
-    workerCount = std::min(workerCount, slotDepth);
-    return workerCount;
-}
-
 std::wstring lifecycleToText(
     AK_LIFECYCLE_STATE lifecycle)
 {
@@ -264,7 +246,7 @@ ManagedDiskSnapshot makeManagedDiskSnapshot(
     snapshot.diskSizeBytes = diskRuntime->metadata.diskSizeBytes;
     snapshot.sectorSize = diskRuntime->metadata.sectorSize;
     snapshot.readOnly = diskRuntime->metadata.readOnly;
-    snapshot.mode = diskRuntime->metadata.mode;
+    snapshot.mediaKind = diskRuntime->metadata.mediaKind;
 
     (void)tryRefreshDiskRuntimeIdentity(context, diskRuntime, nullptr, 0);
     snapshot.visiblePath = diskRuntime->metadata.identity.Path;
@@ -388,14 +370,21 @@ void closeBackendContext(BackendContext* context)
 
 bool BackendContext::open()
 {
-    AK_OPEN_PARAMS openParams{};
     AK_SESSION_STATE sessionState{};
     AK_STATUS status;
+    std::wstring errorText;
 
     stop.store(false, std::memory_order_relaxed);
     openStatus = AK_STATUS_SUCCESS;
     openWin32Error = ERROR_SUCCESS;
     openSucceeded = false;
+
+    if (!validateSessionConfig(sessionConfig, &errorText)) {
+        openStatus = AK_STATUS_INVALID_PARAMETER;
+        openWin32Error = ERROR_INVALID_PARAMETER;
+        appendLog(L"[backend] invalid session config, reason=" + errorText);
+        return false;
+    }
 
     stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (stopEvent == nullptr) {
@@ -405,11 +394,10 @@ bool BackendContext::open()
         return false;
     }
 
-    openParams.HeartbeatIntervalMs = heartbeatIntervalMs;
-    openParams.InitialEventQueueCapacity = initialEventQueueCapacity;
-    openParams.LogFn = appKernelLogCallback;
-    openParams.LogCtx = this;
-
+    const AK_OPEN_PARAMS openParams = buildAkOpenParams(
+        sessionConfig,
+        appKernelLogCallback,
+        this);
     status = AkOpen(&openParams, &session);
     if (status != AK_STATUS_SUCCESS) {
         openStatus = status;
@@ -436,9 +424,8 @@ bool BackendContext::open()
         appendLog(L"[backend] session opened");
     }
     appendLog(
-        L"[backend] config queueDepth=" + std::to_wstring(config.queueDepth) +
-        L", writeSlotBytes=" + std::to_wstring(config.writeSlotBytes) +
-        L", sectorSize=" + std::to_wstring(config.sectorSize));
+        L"[backend] sessionConfig heartbeatIntervalMs=" + std::to_wstring(sessionConfig.heartbeatIntervalMs) +
+        L", initialEventQueueCapacity=" + std::to_wstring(sessionConfig.initialEventQueueCapacity));
 
     try {
         eventThread = std::thread(runEventLoop, this);
@@ -671,12 +658,12 @@ bool BackendContext::createManagedDisk(
     std::wstring* outErrorText)
 {
     std::shared_ptr<DiskRuntime> diskRuntime;
-    AK_DISK_PARAMS params{};
+    DiskConfig diskConfig = request.diskConfig;
     AK_DISK* handle;
     AK_STATUS status;
+    std::wstring configError;
     std::wstring mediaReason;
     const auto visibleDisksBeforeCreate = EnumerateVisibleYumeDisks();
-    ULONG targetId = request.targetId;
 
     if (session == nullptr) {
         if (outErrorText != nullptr) {
@@ -685,9 +672,9 @@ bool BackendContext::createManagedDisk(
         return false;
     }
 
-    if (targetId >= YUMEDISK_MAX_TARGETS) {
-        targetId = findFirstFreeTarget();
-        if (targetId >= YUMEDISK_MAX_TARGETS) {
+    if (diskConfig.targetId == YUMEDISK_MAX_TARGETS) {
+        diskConfig.targetId = findFirstFreeTarget();
+        if (diskConfig.targetId >= YUMEDISK_MAX_TARGETS) {
             if (outErrorText != nullptr) {
                 *outErrorText = L"no-free-target";
             }
@@ -695,7 +682,16 @@ bool BackendContext::createManagedDisk(
         }
     }
 
-    if (diskRuntimeExists(this, targetId)) {
+    if (!validateCreateDiskRequest(
+            CreateDiskRequest{diskConfig, request.mediaKind},
+            &configError)) {
+        if (outErrorText != nullptr) {
+            *outErrorText = configError;
+        }
+        return false;
+    }
+
+    if (diskRuntimeExists(this, diskConfig.targetId)) {
         if (outErrorText != nullptr) {
             *outErrorText = L"target-already-exists";
         }
@@ -704,66 +700,56 @@ bool BackendContext::createManagedDisk(
 
     diskRuntime = std::make_shared<DiskRuntime>();
     diskRuntime->context = this;
-    diskRuntime->metadata.targetId = targetId;
-    diskRuntime->metadata.sectorSize = config.sectorSize;
-    diskRuntime->metadata.diskSizeBytes = request.diskSizeBytes;
-    diskRuntime->metadata.readOnly = request.readOnly;
-    diskRuntime->metadata.backingFilePath = request.rawFilePath;
-    diskRuntime->queueConfig.slotDepth = config.queueDepth;
-    diskRuntime->queueConfig.readWorkerCount = computeWorkerCount(
-        diskRuntime->queueConfig.slotDepth,
-        readSlotsPerWorkerTarget,
-        maxReadWorkersPerDisk);
-    diskRuntime->queueConfig.writeWorkerCount = computeWorkerCount(
-        diskRuntime->queueConfig.slotDepth,
-        writeSlotsPerWorkerTarget,
-        maxWriteWorkersPerDisk);
+    diskRuntime->metadata.targetId = diskConfig.targetId;
+    diskRuntime->metadata.sectorSize = diskConfig.sectorSize;
+    diskRuntime->metadata.diskSizeBytes = diskConfig.diskSizeBytes;
+    diskRuntime->metadata.readOnly = diskConfig.readOnly;
+    diskRuntime->metadata.mediaKind = request.mediaKind;
+    diskRuntime->queueConfig.queueDepth = diskConfig.queueDepth;
+    diskRuntime->queueConfig.writeSlotBytes = diskConfig.writeSlotBytes;
+    diskRuntime->queueConfig.readWorkerCount = diskConfig.readWorkerCount;
+    diskRuntime->queueConfig.writeWorkerCount = diskConfig.writeWorkerCount;
+    diskRuntime->queueConfig.ackBatchMaxRanges = diskConfig.ackBatchMaxRanges;
 
-    if (!initializeManagedDiskMedia(diskRuntime.get(), request.requestedMode, &mediaReason)) {
+    if (!initializeManagedDiskMedia(diskRuntime.get(), request.mediaKind, &mediaReason)) {
         if (outErrorText != nullptr) {
             *outErrorText = mediaReason;
         }
         appendLog(
-            L"[backend] create failed, target=" + std::to_wstring(targetId) +
+            L"[backend] create failed, target=" + std::to_wstring(diskConfig.targetId) +
             L", reason=" + mediaReason);
         return false;
     }
 
     insertDiskRuntime(this, diskRuntime);
 
-    params.TargetId = targetId;
-    params.SectorSize = config.sectorSize;
-    params.DiskSizeBytes = diskRuntime->metadata.diskSizeBytes;
-    params.QueueDepth = (UINT32)config.queueDepth;
-    params.WriteSlotBytes = (UINT32)config.writeSlotBytes;
-    params.ReadWorkerCount = (UINT16)diskRuntime->queueConfig.readWorkerCount;
-    params.WriteWorkerCount = (UINT16)diskRuntime->queueConfig.writeWorkerCount;
-    params.AckBatchMaxRanges = (UINT32)config.queueDepth;
-    params.ReadOnly = request.readOnly ? 1u : 0u;
-
+    diskConfig.diskSizeBytes = diskRuntime->metadata.diskSizeBytes;
+    const AK_DISK_PARAMS params = buildAkDiskParams(diskConfig);
     handle = nullptr;
     status = AkCreateDisk(session, &params, &mediaOps, diskRuntime.get(), &handle);
     if (status != AK_STATUS_SUCCESS) {
-        eraseDiskRuntime(this, targetId);
+        eraseDiskRuntime(this, diskConfig.targetId);
         cleanupManagedDiskMedia(diskRuntime.get());
         if (outErrorText != nullptr) {
             *outErrorText = formatStatusHex(status);
         }
         appendLog(
-            L"[backend] create failed, target=" + std::to_wstring(targetId) +
+            L"[backend] create failed, target=" + std::to_wstring(diskConfig.targetId) +
             L", status=" + formatStatusHex(status));
         return false;
     }
 
     diskRuntime->lifecycle.handle = handle;
     appendLog(
-        L"[backend] created target=" + std::to_wstring(targetId) +
+        L"[backend] created target=" + std::to_wstring(diskConfig.targetId) +
         L", diskBytes=" + std::to_wstring(diskRuntime->metadata.diskSizeBytes) +
         L", readOnly=" + readOnlyToText(diskRuntime->metadata.readOnly) +
-        L", media=" + mediaModeToText(diskRuntime->metadata.mode));
-    if (diskRuntime->metadata.mode == MediaMode::rawFile) {
-        appendLog(L"[backend] rawFile=" + diskRuntime->metadata.backingFilePath);
-    }
+        L", media=" + mediaKindToText(diskRuntime->metadata.mediaKind) +
+        L", queueDepth=" + std::to_wstring(diskRuntime->queueConfig.queueDepth) +
+        L", writeSlotBytes=" + std::to_wstring(diskRuntime->queueConfig.writeSlotBytes) +
+        L", readWorkerCount=" + std::to_wstring(diskRuntime->queueConfig.readWorkerCount) +
+        L", writeWorkerCount=" + std::to_wstring(diskRuntime->queueConfig.writeWorkerCount) +
+        L", ackBatchMaxRanges=" + std::to_wstring(diskRuntime->queueConfig.ackBatchMaxRanges));
 
     if (tryRefreshDiskRuntimeIdentity(this, diskRuntime, &visibleDisksBeforeCreate, diskArrivalTimeoutMs)) {
         appendLog(
@@ -771,7 +757,7 @@ bool BackendContext::createManagedDisk(
             L", physicalDrive=" + MakePhysicalDrivePath(diskRuntime->metadata.identity.DeviceNumber));
     } else {
         appendLog(
-            L"[backend] visiblePath=<pending-enumeration>, target=" + std::to_wstring(targetId));
+            L"[backend] visiblePath=<pending-enumeration>, target=" + std::to_wstring(diskConfig.targetId));
     }
 
     return true;

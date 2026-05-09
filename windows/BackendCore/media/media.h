@@ -9,7 +9,7 @@ namespace clientbackend {
 
 bool initializeManagedDiskMedia(
     DiskRuntime* diskRuntime,
-    MediaMode requestedMode,
+    MediaKind mediaKind,
     std::wstring* outReason);
 
 void cleanupManagedDiskMedia(DiskRuntime* diskRuntime);

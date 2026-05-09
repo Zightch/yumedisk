@@ -1,8 +1,10 @@
 #include "media/media.h"
 
+#include <mutex>
 #include <shared_mutex>
+#include <string>
 
-#include "config/config.h"
+#include "types/types.h"
 
 namespace clientbackend {
 
@@ -21,17 +23,18 @@ void setFailureReason(
 
 bool initializeManagedDiskMedia(
     DiskRuntime* diskRuntime,
-    MediaMode requestedMode,
+    MediaKind mediaKind,
     std::wstring* outReason)
 {
-    MediaMode resolvedMode;
-
     if (diskRuntime == nullptr) {
         setFailureReason(outReason, L"invalid-parameter");
         return false;
     }
 
-    resolvedMode = resolveMediaMode(requestedMode, diskRuntime->metadata.diskSizeBytes);
+    if (mediaKind == MediaKind::unknown) {
+        setFailureReason(outReason, L"media-kind-missing");
+        return false;
+    }
 
     {
         std::unique_lock<std::shared_mutex> guard(diskRuntime->media.lock);
@@ -39,15 +42,12 @@ bool initializeManagedDiskMedia(
             setFailureReason(outReason, L"media-instance-missing");
             return false;
         }
+        if (mediaKind == MediaKind::rawFile) {
+            diskRuntime->metadata.diskSizeBytes = diskRuntime->media.instance->sizeBytes();
+        }
     }
 
-    if (resolvedMode != MediaMode::rawFile) {
-        diskRuntime->metadata.backingFilePath.clear();
-    } else {
-        diskRuntime->metadata.diskSizeBytes = diskRuntime->media.instance->sizeBytes();
-    }
-
-    diskRuntime->metadata.mode = resolvedMode;
+    diskRuntime->metadata.mediaKind = mediaKind;
     return true;
 }
 
@@ -61,7 +61,6 @@ void cleanupManagedDiskMedia(
     std::unique_lock<std::shared_mutex> guard(diskRuntime->media.lock);
     diskRuntime->staging.clearLocked();
     diskRuntime->media.instance.reset();
-    diskRuntime->metadata.backingFilePath.clear();
 }
 
 bool writeMediaRangeLocked(
