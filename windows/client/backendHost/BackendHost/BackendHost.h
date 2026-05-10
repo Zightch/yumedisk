@@ -10,29 +10,35 @@ namespace clientbackend {
 struct BackendContext;
 }
 
-enum class BackendMediaMode {
+enum class BackendHostMediaMode {
     autoSelect,
     denseMem,
     sparseMem,
     rawFile
 };
 
-struct BackendCreateDiskRequest {
+struct BackendHostCreateDiskRequest {
     QString capacityMiBText;
     QString targetIdText;
+    QString sectorSizeText;
+    QString queueDepthText;
+    QString writeSlotBytesText;
+    QString readWorkerCountText;
+    QString writeWorkerCountText;
+    QString ackBatchMaxRangesText;
     bool readOnly = false;
-    BackendMediaMode requestedMode = BackendMediaMode::autoSelect;
+    BackendHostMediaMode requestedMode = BackendHostMediaMode::autoSelect;
     QString rawFilePath;
 };
 
-struct BackendManagedDiskSnapshot {
+struct BackendHostManagedDiskSnapshot {
     unsigned long targetId = 0;
     QString lifecycleText;
     QString mediaText;
     QString visiblePathText;
 };
 
-struct BackendStatsSnapshot {
+struct BackendHostStatsSnapshot {
     unsigned long long heartbeatSent = 0;
     unsigned long long commandFailures = 0;
     unsigned long long protocolFailures = 0;
@@ -41,30 +47,30 @@ struct BackendStatsSnapshot {
     unsigned long long diskCount = 0;
 };
 
-struct BackendSnapshot {
+struct BackendHostSnapshot {
     QString sessionStateText;
     QStringList logLines;
-    std::vector<BackendManagedDiskSnapshot> disks;
+    std::vector<BackendHostManagedDiskSnapshot> disks;
 };
 
-struct BackendDebugSnapshot {
+struct BackendHostDebugSnapshot {
     QString sessionStateText;
-    BackendStatsSnapshot stats;
-    std::vector<BackendManagedDiskSnapshot> disks;
+    BackendHostStatsSnapshot stats;
+    std::vector<BackendHostManagedDiskSnapshot> disks;
 };
 
-class Backend final {
+class BackendHost final {
 public:
-    Backend();
-    ~Backend();
+    BackendHost();
+    ~BackendHost();
 
-    Backend(const Backend&) = delete;
-    Backend& operator=(const Backend&) = delete;
+    BackendHost(const BackendHost&) = delete;
+    BackendHost& operator=(const BackendHost&) = delete;
 
-    BackendSnapshot snapshot() const;
+    BackendHostSnapshot snapshot() const;
 
     bool createManagedDisk(
-        const BackendCreateDiskRequest& request,
+        const BackendHostCreateDiskRequest& request,
         QString* outErrorText = nullptr);
     bool removeManagedDisk(
         unsigned long targetId,
@@ -76,10 +82,10 @@ public:
         QString* outErrorText = nullptr);
 
     bool queryBackendStats(
-        BackendStatsSnapshot* outStats,
+        BackendHostStatsSnapshot* outStats,
         QString* outErrorText = nullptr) const;
     bool queryDebugSnapshot(
-        BackendDebugSnapshot* outSnapshot,
+        BackendHostDebugSnapshot* outSnapshot,
         QString* outErrorText = nullptr) const;
 
 private:

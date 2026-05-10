@@ -9,18 +9,18 @@
 
 namespace {
 
-BackendMediaMode mediaModeFromIndex(
+BackendHostMediaMode mediaModeFromIndex(
     int index)
 {
     switch (index) {
     case 1:
-        return BackendMediaMode::denseMem;
+        return BackendHostMediaMode::denseMem;
     case 2:
-        return BackendMediaMode::sparseMem;
+        return BackendHostMediaMode::sparseMem;
     case 3:
-        return BackendMediaMode::rawFile;
+        return BackendHostMediaMode::rawFile;
     default:
-        return BackendMediaMode::autoSelect;
+        return BackendHostMediaMode::autoSelect;
     }
 }
 
@@ -51,7 +51,7 @@ CreateDiskDialog::~CreateDiskDialog() {
     delete ui;
 }
 
-BackendCreateDiskRequest CreateDiskDialog::createRequest() const {
+BackendHostCreateDiskRequest CreateDiskDialog::createRequest() const {
     return acceptedRequest;
 }
 
@@ -82,7 +82,7 @@ void CreateDiskDialog::refreshModeUi() {
 
 bool CreateDiskDialog::isRawModeSelected() const {
     return mediaModeFromIndex(ui->mediaModeComboBox->currentIndex()) ==
-        BackendMediaMode::rawFile;
+        BackendHostMediaMode::rawFile;
 }
 
 void CreateDiskDialog::submit() {

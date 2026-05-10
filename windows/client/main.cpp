@@ -1,7 +1,7 @@
 #include <QApplication>
 #include <QString>
 
-#include "backend/Backend.h"
+#include "backendHost/BackendHost/BackendHost.h"
 #include "Widget/Widget.h"
 
 int main(int argc, char* argv[]) {
@@ -10,13 +10,13 @@ int main(int argc, char* argv[]) {
     QApplication::setApplicationName("client");
     QApplication::setApplicationDisplayName("Client");
 
-    Backend backend;
-    QObject::connect(&app, &QCoreApplication::aboutToQuit, [&backend]() {
+    BackendHost backendHost;
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, [&backendHost]() {
         QString errorText;
 
-        (void)backend.shutdown(&errorText);
+        (void)backendHost.shutdown(&errorText);
     });
-    Widget window(&backend);
+    Widget window(&backendHost);
     window.show();
     return QApplication::exec();
 }

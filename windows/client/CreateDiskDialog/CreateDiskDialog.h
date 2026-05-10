@@ -2,7 +2,7 @@
 
 #include <QDialog>
 
-#include "backend/Backend.h"
+#include "backendHost/BackendHost/BackendHost.h"
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -15,7 +15,7 @@ public:
     explicit CreateDiskDialog(QWidget* parent = nullptr);
     ~CreateDiskDialog() override;
 
-    BackendCreateDiskRequest createRequest() const;
+    BackendHostCreateDiskRequest createRequest() const;
 
 private:
     void initializeUi();
@@ -24,5 +24,5 @@ private:
     void submit();
 
     Ui::CreateDiskDialog* ui;
-    BackendCreateDiskRequest acceptedRequest;
+    BackendHostCreateDiskRequest acceptedRequest;
 };

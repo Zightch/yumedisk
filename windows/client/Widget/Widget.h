@@ -9,8 +9,8 @@ class Widget;
 QT_END_NAMESPACE
 
 class QAction;
-class Backend;
-struct BackendSnapshot;
+class BackendHost;
+struct BackendHostSnapshot;
 class QCloseEvent;
 class QMenu;
 class QSystemTrayIcon;
@@ -18,7 +18,7 @@ class QTimer;
 
 class Widget : public QWidget {
 public:
-    explicit Widget(Backend* backend, QWidget* parent = nullptr);
+    explicit Widget(BackendHost* backendHost, QWidget* parent = nullptr);
     ~Widget() override;
 
 protected:
@@ -31,7 +31,7 @@ private:
     void initializeTray();
     void quitClient();
     void refreshView();
-    void applySnapshot(const BackendSnapshot& snapshot);
+    void applySnapshot(const BackendHostSnapshot& snapshot);
     void updateRemoveButtonState();
     void createDisk();
     void removeDisk();
@@ -39,7 +39,7 @@ private:
     bool hasCurrentTarget() const;
 
     Ui::Widget* ui;
-    Backend* backend = nullptr;
+    BackendHost* backendHost = nullptr;
     QSystemTrayIcon* trayIcon = nullptr;
     QMenu* trayMenu = nullptr;
     QAction* openAction = nullptr;

@@ -4,13 +4,8 @@ include(env.cmake OPTIONAL)
 project(client LANGUAGES CXX)
 
 add_subdirectory(
-        ../AppKernel
-        ${CMAKE_CURRENT_BINARY_DIR}/AppKernel
-)
-
-add_subdirectory(
-        ../scan
-        ${CMAKE_CURRENT_BINARY_DIR}/scan
+        ../BackendCore
+        ${CMAKE_CURRENT_BINARY_DIR}/BackendCore
 )
 
 find_package(Qt6 6 REQUIRED COMPONENTS Core Widgets)
@@ -30,25 +25,15 @@ qt_add_executable(
         CreateDiskDialog/CreateDiskDialog.cpp
         CreateDiskDialog/CreateDiskDialog.h
         CreateDiskDialog/CreateDiskDialog.ui
-        backend/StagingStore/StagingStore.cpp
-        backend/StagingStore/StagingStore.h
+        backendHost/BackendHost/BackendHost.cpp
+        backendHost/BackendHost/BackendHost.h
         main.cpp
-        backend/Backend.cpp
-        backend/Backend.h
-        backend/config/config.cpp
-        backend/config/config.h
         backend/media/FileMedia/FileMedia.cpp
         backend/media/FileMedia/FileMedia.h
-        backend/media/Media/Media.h
         backend/media/MemoryMedia/MemoryMedia.cpp
         backend/media/MemoryMedia/MemoryMedia.h
         backend/media/RawFileMedia/RawFileMedia.cpp
         backend/media/RawFileMedia/RawFileMedia.h
-        backend/media/media.cpp
-        backend/media/media.h
-        backend/runtime/runtime.cpp
-        backend/runtime/runtime.h
-        backend/types/types.h
         Widget/Widget.cpp
         Widget/Widget.h
         Widget/Widget.ui
@@ -63,8 +48,7 @@ target_include_directories(
 target_link_libraries(
         client
         PRIVATE
-        AppKernel
-        scan
+        BackendCore
         Qt::Core
         Qt::Widgets
 )
@@ -72,6 +56,9 @@ target_link_libraries(
 add_custom_command(
         TARGET client
         POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        $<TARGET_FILE:BackendCore>
+        $<TARGET_FILE_DIR:client>
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:AppKernel>
         $<TARGET_FILE_DIR:client>

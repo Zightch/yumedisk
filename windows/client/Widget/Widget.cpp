@@ -1,6 +1,6 @@
 #include "Widget.h"
 
-#include "backend/Backend.h"
+#include "backendHost/BackendHost/BackendHost.h"
 #include "CreateDiskDialog/CreateDiskDialog.h"
 #include "ui_Widget.h"
 
@@ -20,8 +20,8 @@
 #include <QTextCursor>
 #include <QTimer>
 
-Widget::Widget(Backend* backend, QWidget* parent)
-    : QWidget(parent), ui(new Ui::Widget), backend(backend) {
+Widget::Widget(BackendHost* backendHost, QWidget* parent)
+    : QWidget(parent), ui(new Ui::Widget), backendHost(backendHost) {
     ui->setupUi(this);
     initializeShellUi();
     initializeInteractions();
@@ -56,7 +56,7 @@ void Widget::initializeShellUi() {
     ui->diskTableWidget->horizontalHeader()->setSectionResizeMode(
         2,
         QHeaderView::ResizeToContents);
-    ui->createDiskButton->setEnabled(backend != nullptr);
+    ui->createDiskButton->setEnabled(backendHost != nullptr);
     ui->removeDiskButton->setEnabled(false);
     ui->sessionStateValueLabel->setText(QStringLiteral("未接入宿主后端"));
     ui->logPlainTextEdit->setPlainText(QStringLiteral("[backend] no logs"));
@@ -128,10 +128,10 @@ void Widget::initializeTray() {
 }
 
 void Widget::quitClient() {
-    if (backend != nullptr) {
+    if (backendHost != nullptr) {
         QString errorText;
 
-        if (!backend->shutdown(&errorText)) {
+        if (!backendHost->shutdown(&errorText)) {
             QMessageBox::warning(this, QStringLiteral("退出客户端"), errorText);
             return;
         }
@@ -141,14 +141,14 @@ void Widget::quitClient() {
 }
 
 void Widget::refreshView() {
-    if (backend == nullptr) {
+    if (backendHost == nullptr) {
         return;
     }
 
-    applySnapshot(backend->snapshot());
+    applySnapshot(backendHost->snapshot());
 }
 
-void Widget::applySnapshot(const BackendSnapshot& snapshot) {
+void Widget::applySnapshot(const BackendHostSnapshot& snapshot) {
     const bool hadCurrentTarget = hasCurrentTarget();
     const unsigned long selectedTargetId =
         hadCurrentTarget ? currentTargetId() : 0;
@@ -200,11 +200,11 @@ void Widget::applySnapshot(const BackendSnapshot& snapshot) {
 
 void Widget::updateRemoveButtonState() {
     ui->removeDiskButton->setEnabled(
-        (backend != nullptr) && hasCurrentTarget());
+        (backendHost != nullptr) && hasCurrentTarget());
 }
 
 void Widget::createDisk() {
-    if (backend == nullptr) {
+    if (backendHost == nullptr) {
         return;
     }
 
@@ -214,7 +214,7 @@ void Widget::createDisk() {
     }
 
     QString errorText;
-    if (!backend->createManagedDisk(dialog.createRequest(), &errorText)) {
+    if (!backendHost->createManagedDisk(dialog.createRequest(), &errorText)) {
         QMessageBox::warning(this, QStringLiteral("创建磁盘"), errorText);
         return;
     }
@@ -223,12 +223,12 @@ void Widget::createDisk() {
 }
 
 void Widget::removeDisk() {
-    if (backend == nullptr || !hasCurrentTarget()) {
+    if (backendHost == nullptr || !hasCurrentTarget()) {
         return;
     }
 
     QString errorText;
-    if (!backend->removeManagedDisk(currentTargetId(), &errorText)) {
+    if (!backendHost->removeManagedDisk(currentTargetId(), &errorText)) {
         QMessageBox::warning(this, QStringLiteral("删除磁盘"), errorText);
         return;
     }

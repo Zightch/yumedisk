@@ -1,26 +1,10 @@
 # 当前总目标
 
-重建 `BackendCore` 最小抽离闭环：把当前 `windows/client/backend/` 中真正属于运行时核心的部分抽成独立 `BackendCore.dll`，并让 `client` 最终收口为 `UI + backendHost + media 实现`。
+重建 `BackendCore` 最小抽离闭环的剩余宿主侧收口：让 `client` 最终稳定为 `UI + backendHost + media 实现`，并把具体介质实现从旧 `backend` 过渡目录中收出来。
 
 ## 子步骤
 
-1. 重建 `client` 宿主适配层 `backendHost`
-   - 新建 `windows/client/backendHost/`
-   - 它只负责：
-     - `QString` / 表单输入解析
-     - `QFileInfo` / 路径存在性判断
-     - `rawFile` 大小与 4096 对齐校验
-     - `denseMem / sparseMem / rawFile` 选择
-     - 创建 `Media`
-     - 调 `BackendCore`
-     - 把 core 快照转换成 UI DTO
-   - 它不负责：
-     - 自己维护 session 真状态
-     - 自己维护 disk runtime
-     - 自己维护 staging 生命周期
-     - 自己接 `AppKernel`
-
-2. 重建 `client` 介质实现归属
+1. 重建 `client` 介质实现归属
    - 把当前具体介质实现留在 `client` 宿主侧
    - 固定归属：
      - `client/media/FileMedia/`
@@ -34,39 +18,17 @@
      - 让 `BackendCore` 只关心“怎么驱动盘”
      - 不关心“宿主用什么本地文件介质实现”
 
-3. 重建 `client` 调用链
-   - 把当前 `Widget/CreateDiskDialog -> Backend` 的直连路径
-     重建为：
-     - `Widget/CreateDiskDialog`
-     - `-> backendHost`
-     - `-> BackendCore`
-   - `Widget` 只读 UI 快照，只发 UI 命令
-   - `CreateDiskDialog` 只收集输入，不承接运行时规则
-   - 保持当前“UI 与运行时分离”原则，不回退成 UI 直接解释 runtime 细节
-
-4. 重建构建与部署链路
-   - `client` 改为链接 `BackendCore`
-   - `BackendCore` 再链接：
-     - `AppKernel`
-     - `scan`
-   - `client` 运行目录需要同时具备：
+2. 重建最小运行验收口
+   - 验收当前 `client` 运行目录：
      - `BackendCore.dll`
      - `AppKernel.dll`
-   - 保证当前最小闭环下：
-     - IDE 构建可运行
-     - `cmake-build-debug` 产物可直接启动
-
-5. 重建验收口径
-   - 先做构建验收：
-     - `BackendCore` 独立可编译
-     - `client` 链接新链路后可编译
-   - 再做最小运行验收：
+   - 验收当前最小闭环下：
      - `client.exe` 可启动
      - session 状态可刷新
      - 建盘 / 删盘可走通
      - 磁盘列表可刷新
      - 日志可刷新
-   - 这一阶段不新增新的测试体系，继续复用现有：
+   - 这一阶段继续复用现有：
      - `tests/uia_test.ps1`
      - `tests/uia_scenario.ps1`
 
@@ -109,6 +71,6 @@
 
 ## 当前唯一下一步
 
-重建 `client` 宿主适配层 `backendHost`：把 `QString/QFileInfo/UI DTO` 收到宿主侧，负责创建 `Media` 后调用 `BackendCore`，同时不把 session 真状态、disk runtime、staging 生命周期重新拉回 `client`。
+重建 `client` 介质实现归属：把 `windows/client/backend/media/` 下仍保留的 `FileMedia/MemoryMedia/RawFileMedia` 收到正式宿主侧 `windows/client/media/`，同时保持 `BackendCore` 只依赖 `Media` 抽象接口。
 
 历史完成事实与验收结果请查看 [../progress/README.md](../progress/README.md) 对应日期文件。

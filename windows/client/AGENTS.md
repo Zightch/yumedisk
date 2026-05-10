@@ -22,8 +22,8 @@
   - `Widget/Widget.h`
   - `Widget/Widget.cpp`
   - `Widget/Widget.ui`
-  - `backend/Backend.h`
-  - `backend/Backend.cpp`
+  - `backendHost/BackendHost/BackendHost.h`
+  - `backendHost/BackendHost/BackendHost.cpp`
 - 没有明显类归属、而是按功能聚合的代码，再按功能模块或组件拆子目录，例如：
   - `utils/`
   - `media/`
