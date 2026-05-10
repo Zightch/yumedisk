@@ -5,7 +5,7 @@
 
 #include "media/FileMedia/FileMedia.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 class RawFileMedia final : public FileMedia {
 public:
@@ -21,4 +21,5 @@ private:
         uint64_t mediaSizeBytes);
 };
 
-} // namespace clientbackend
+} // namespace BackendCore
+

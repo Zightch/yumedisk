@@ -6,6 +6,7 @@
 
 - Qt 相关代码采用类 Java 风格：
   - 类名使用 `UpperCamelCase`
+  - 命名空间使用 `UpperCamelCase`
   - 方法名使用 `lowerCamelCase`
   - 成员变量使用 `lowerCamelCase`
   - 局部变量和参数使用 `lowerCamelCase`

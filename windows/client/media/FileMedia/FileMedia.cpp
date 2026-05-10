@@ -1,6 +1,6 @@
 #include "media/FileMedia/FileMedia.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 FileMedia::FileMedia(
     HANDLE backingFileHandle,
@@ -83,4 +83,5 @@ bool FileMedia::seekLocked(UINT64 offset)
     return SetFilePointerEx(backingFile, position, nullptr, FILE_BEGIN) != FALSE;
 }
 
-} // namespace clientbackend
+} // namespace BackendCore
+

@@ -9,7 +9,7 @@
 
 #include "yumedisk_proto.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 inline constexpr ULONG defaultSectorSize = 4096;
 inline constexpr UINT32 defaultQueueDepth = 32;
@@ -77,4 +77,5 @@ struct DebugSnapshot {
 
 class BackendContext;
 
-} // namespace clientbackend
+} // namespace BackendCore
+

@@ -7,7 +7,7 @@
 
 #include "media/Media/Media.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 class FileMedia : public Media {
 public:
@@ -38,4 +38,5 @@ private:
     std::mutex backingFileIoLock;
 };
 
-} // namespace clientbackend
+} // namespace BackendCore
+

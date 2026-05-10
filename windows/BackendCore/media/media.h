@@ -6,7 +6,7 @@
 #include "appkernel.h"
 #include "types/types.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 class Media;
 struct DiskRuntime;
@@ -36,4 +36,5 @@ AK_STATUS AK_CALL hostStageWrite(
     const void* dataBuffer,
     UINT32 dataLength);
 
-} // namespace clientbackend
+} // namespace BackendCore
+

@@ -5,7 +5,7 @@
 #include "appkernel.h"
 #include "types/types.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 class Media;
 
@@ -28,4 +28,5 @@ AK_OPEN_PARAMS buildAkOpenParams(
 AK_DISK_PARAMS buildAkDiskParams(
     const DiskConfig& diskConfig);
 
-} // namespace clientbackend
+} // namespace BackendCore
+

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace clientbackend {
+namespace BackendCore {
 
 class Media {
 public:
@@ -23,4 +23,5 @@ public:
     virtual uint64_t sizeBytes() const = 0;
 };
 
-} // namespace clientbackend
+} // namespace BackendCore
+

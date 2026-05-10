@@ -30,33 +30,33 @@ void assignErrorText(
     }
 }
 
-clientbackend::MediaKind resolveMediaKind(
+BackendCore::MediaKind resolveMediaKind(
     BackendHostMediaMode requestedMode,
     uint64_t diskSizeBytes)
 {
     switch (requestedMode) {
     case BackendHostMediaMode::denseMem:
-        return clientbackend::MediaKind::denseMem;
+        return BackendCore::MediaKind::denseMem;
     case BackendHostMediaMode::sparseMem:
-        return clientbackend::MediaKind::sparseMem;
+        return BackendCore::MediaKind::sparseMem;
     case BackendHostMediaMode::rawFile:
-        return clientbackend::MediaKind::rawFile;
+        return BackendCore::MediaKind::rawFile;
     case BackendHostMediaMode::autoSelect:
     default:
         return diskSizeBytes <= maxDenseMediaBytes
-            ? clientbackend::MediaKind::denseMem
-            : clientbackend::MediaKind::sparseMem;
+            ? BackendCore::MediaKind::denseMem
+            : BackendCore::MediaKind::sparseMem;
     }
 }
 
 QString mediaText(
-    clientbackend::MediaKind mediaKind)
+    BackendCore::MediaKind mediaKind)
 {
-    return fromWide(clientbackend::mediaKindToText(mediaKind));
+    return fromWide(BackendCore::mediaKindToText(mediaKind));
 }
 
 QString visiblePathText(
-    const clientbackend::ManagedDiskSnapshot& snapshot)
+    const BackendCore::ManagedDiskSnapshot& snapshot)
 {
     if (!snapshot.visiblePath.empty()) {
         return fromWide(snapshot.visiblePath);
@@ -70,7 +70,7 @@ QString visiblePathText(
 }
 
 BackendHostManagedDiskSnapshot toBackendHostManagedDiskSnapshot(
-    const clientbackend::ManagedDiskSnapshot& snapshot)
+    const BackendCore::ManagedDiskSnapshot& snapshot)
 {
     BackendHostManagedDiskSnapshot result;
 
@@ -225,7 +225,7 @@ bool tryResolveDiskSizeBytes(
         }
 
         const auto diskSizeBytes = (uint64_t)rawFileInfo.size();
-        if ((diskSizeBytes % clientbackend::defaultSectorSize) != 0) {
+        if ((diskSizeBytes % BackendCore::defaultSectorSize) != 0) {
             if (outErrorText != nullptr) {
                 *outErrorText = QStringLiteral("raw 文件大小必须按 4096 字节对齐");
             }
@@ -266,15 +266,15 @@ bool tryResolveDiskSizeBytes(
 
 bool tryBuildDiskConfig(
     const BackendHostCreateDiskRequest& request,
-    clientbackend::DiskConfig* outDiskConfig,
-    clientbackend::MediaKind* outMediaKind,
+    BackendCore::DiskConfig* outDiskConfig,
+    BackendCore::MediaKind* outMediaKind,
     QString* outRawFilePath,
     QString* outErrorText)
 {
-    clientbackend::DiskConfig diskConfig{};
+    BackendCore::DiskConfig diskConfig{};
     QString rawFilePath;
     uint64_t diskSizeBytes = 0;
-    quint32 sectorSize = clientbackend::defaultSectorSize;
+    quint32 sectorSize = BackendCore::defaultSectorSize;
 
     if (!tryResolveDiskSizeBytes(
             request,
@@ -284,7 +284,7 @@ bool tryBuildDiskConfig(
         return false;
     }
 
-    const clientbackend::MediaKind mediaKind =
+    const BackendCore::MediaKind mediaKind =
         resolveMediaKind(request.requestedMode, diskSizeBytes);
 
     if (!tryParseOptionalTargetId(
@@ -299,7 +299,7 @@ bool tryBuildDiskConfig(
 
     if (!tryParseOptionalUInt32(
             request.sectorSizeText.trimmed(),
-            clientbackend::defaultSectorSize,
+            BackendCore::defaultSectorSize,
             QStringLiteral("sector size 必须是正整数"),
             &sectorSize,
             outErrorText)) {
@@ -309,7 +309,7 @@ bool tryBuildDiskConfig(
 
     if (!tryParseOptionalUInt32(
             request.queueDepthText.trimmed(),
-            clientbackend::defaultQueueDepth,
+            BackendCore::defaultQueueDepth,
             QStringLiteral("queue depth 必须是正整数"),
             &diskConfig.queueDepth,
             outErrorText)) {
@@ -318,7 +318,7 @@ bool tryBuildDiskConfig(
 
     if (!tryParseOptionalUInt32(
             request.writeSlotBytesText.trimmed(),
-            clientbackend::defaultWriteSlotBytes,
+            BackendCore::defaultWriteSlotBytes,
             QStringLiteral("write slot bytes 必须是正整数"),
             &diskConfig.writeSlotBytes,
             outErrorText)) {
@@ -327,7 +327,7 @@ bool tryBuildDiskConfig(
 
     if (!tryParseOptionalUInt16(
             request.readWorkerCountText.trimmed(),
-            clientbackend::defaultReadWorkerCount,
+            BackendCore::defaultReadWorkerCount,
             QStringLiteral("read worker count 必须是正整数"),
             &diskConfig.readWorkerCount,
             outErrorText)) {
@@ -336,7 +336,7 @@ bool tryBuildDiskConfig(
 
     if (!tryParseOptionalUInt16(
             request.writeWorkerCountText.trimmed(),
-            clientbackend::defaultWriteWorkerCount,
+            BackendCore::defaultWriteWorkerCount,
             QStringLiteral("write worker count 必须是正整数"),
             &diskConfig.writeWorkerCount,
             outErrorText)) {
@@ -345,15 +345,15 @@ bool tryBuildDiskConfig(
 
     if (!tryParseOptionalUInt32(
             request.ackBatchMaxRangesText.trimmed(),
-            clientbackend::defaultAckBatchMaxRanges,
+            BackendCore::defaultAckBatchMaxRanges,
             QStringLiteral("ack batch max ranges 必须是正整数"),
             &diskConfig.ackBatchMaxRanges,
             outErrorText)) {
         return false;
     }
 
-    if (mediaKind == clientbackend::MediaKind::rawFile &&
-        diskConfig.sectorSize != clientbackend::defaultSectorSize) {
+    if (mediaKind == BackendCore::MediaKind::rawFile &&
+        diskConfig.sectorSize != BackendCore::defaultSectorSize) {
         if (outErrorText != nullptr) {
             *outErrorText = QStringLiteral("rawFile 当前要求 sector size 固定为 4096");
         }
@@ -373,10 +373,10 @@ bool tryBuildDiskConfig(
 }
 
 bool tryCreateMedia(
-    const clientbackend::DiskConfig& diskConfig,
-    clientbackend::MediaKind mediaKind,
+    const BackendCore::DiskConfig& diskConfig,
+    BackendCore::MediaKind mediaKind,
     const QString& rawFilePath,
-    std::unique_ptr<clientbackend::Media>* outMedia,
+    std::unique_ptr<BackendCore::Media>* outMedia,
     QString* outErrorText)
 {
     if (outMedia == nullptr) {
@@ -386,11 +386,11 @@ bool tryCreateMedia(
         return false;
     }
 
-    if (mediaKind == clientbackend::MediaKind::denseMem ||
-        mediaKind == clientbackend::MediaKind::sparseMem) {
+    if (mediaKind == BackendCore::MediaKind::denseMem ||
+        mediaKind == BackendCore::MediaKind::sparseMem) {
         if (diskConfig.diskSizeBytes > (uint64_t)std::numeric_limits<size_t>::max()) {
             if (outErrorText != nullptr) {
-                *outErrorText = mediaKind == clientbackend::MediaKind::denseMem
+                *outErrorText = mediaKind == BackendCore::MediaKind::denseMem
                     ? QStringLiteral("denseMem 大小超出当前进程可分配范围")
                     : QStringLiteral("sparseMem 大小超出当前进程可分配范围");
             }
@@ -398,11 +398,11 @@ bool tryCreateMedia(
         }
 
         try {
-            *outMedia = std::make_unique<clientbackend::MemoryMedia>(
+            *outMedia = std::make_unique<BackendCore::MemoryMedia>(
                 (size_t)diskConfig.diskSizeBytes);
         } catch (const std::exception&) {
             if (outErrorText != nullptr) {
-                *outErrorText = mediaKind == clientbackend::MediaKind::denseMem
+                *outErrorText = mediaKind == BackendCore::MediaKind::denseMem
                     ? QStringLiteral("denseMem 分配失败")
                     : QStringLiteral("sparseMem 分配失败");
             }
@@ -412,9 +412,9 @@ bool tryCreateMedia(
         return true;
     }
 
-    if (mediaKind == clientbackend::MediaKind::rawFile) {
+    if (mediaKind == BackendCore::MediaKind::rawFile) {
         std::wstring reason;
-        *outMedia = clientbackend::RawFileMedia::open(
+        *outMedia = BackendCore::RawFileMedia::open(
             rawFilePath.toStdWString(),
             diskConfig.readOnly,
             diskConfig.sectorSize,
@@ -436,7 +436,7 @@ bool tryCreateMedia(
 } // namespace
 
 BackendHost::BackendHost()
-    : context(std::make_unique<clientbackend::BackendContext>())
+    : context(std::make_unique<BackendCore::BackendContext>())
 {
     (void)context->open();
 }
@@ -468,10 +468,10 @@ bool BackendHost::createManagedDisk(
     const BackendHostCreateDiskRequest& request,
     QString* outErrorText)
 {
-    clientbackend::DiskConfig diskConfig{};
-    clientbackend::MediaKind mediaKind = clientbackend::MediaKind::unknown;
+    BackendCore::DiskConfig diskConfig{};
+    BackendCore::MediaKind mediaKind = BackendCore::MediaKind::unknown;
     QString rawFilePath;
-    std::unique_ptr<clientbackend::Media> media;
+    std::unique_ptr<BackendCore::Media> media;
     std::wstring errorText;
 
     if (!tryBuildDiskConfig(
@@ -551,7 +551,7 @@ bool BackendHost::queryBackendStats(
     QString* outErrorText) const
 {
     std::wstring errorText;
-    clientbackend::BackendStatsSnapshot stats{};
+    BackendCore::BackendStatsSnapshot stats{};
 
     if ((outStats == nullptr) || !context->queryBackendStats(&stats, &errorText)) {
         assignErrorText(outErrorText, errorText);
@@ -572,7 +572,7 @@ bool BackendHost::queryDebugSnapshot(
     QString* outErrorText) const
 {
     std::wstring errorText;
-    clientbackend::DebugSnapshot snapshot{};
+    BackendCore::DebugSnapshot snapshot{};
 
     if ((outSnapshot == nullptr) || !context->queryDebugSnapshot(&snapshot, &errorText)) {
         assignErrorText(outErrorText, errorText);
@@ -593,3 +593,4 @@ bool BackendHost::queryDebugSnapshot(
     }
     return true;
 }
+

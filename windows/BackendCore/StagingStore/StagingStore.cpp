@@ -8,7 +8,7 @@
 #include "media/media.h"
 #include "runtime/runtimeDisk.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 namespace {
 
@@ -202,4 +202,5 @@ void rejectDiskRuntimeStaging(
     diskRuntime->staging.rejectLocked(eventId);
 }
 
-} // namespace clientbackend
+} // namespace BackendCore
+

@@ -9,7 +9,7 @@
 
 #include "appkernel.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 struct DiskRuntime;
 
@@ -68,4 +68,5 @@ void rejectDiskRuntimeStaging(
     DiskRuntime* diskRuntime,
     UINT64 eventId);
 
-} // namespace clientbackend
+} // namespace BackendCore
+

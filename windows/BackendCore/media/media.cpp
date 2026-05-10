@@ -6,7 +6,7 @@
 
 #include "runtime/runtimeDisk.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 namespace {
 
@@ -151,4 +151,5 @@ AK_STATUS AK_CALL hostStageWrite(
     }
 }
 
-} // namespace clientbackend
+} // namespace BackendCore
+

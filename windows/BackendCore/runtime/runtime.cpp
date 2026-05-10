@@ -15,7 +15,7 @@
 #include "runtime/runtimeDisk.h"
 #include "scan.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 using yumedisk::scan::EnumerateVisibleYumeDisks;
 using yumedisk::scan::MakePhysicalDrivePath;
@@ -956,4 +956,5 @@ bool BackendContext::removeAllManagedDisks(bool closing)
     return ok || closing;
 }
 
-} // namespace clientbackend
+} // namespace BackendCore
+

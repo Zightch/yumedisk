@@ -2,7 +2,7 @@
 
 #include "media/Media/Media.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 namespace {
 
@@ -157,4 +157,5 @@ AK_DISK_PARAMS buildAkDiskParams(
     return diskParams;
 }
 
-} // namespace clientbackend
+} // namespace BackendCore
+

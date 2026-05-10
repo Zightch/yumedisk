@@ -1,6 +1,6 @@
 #include "media/RawFileMedia/RawFileMedia.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 namespace {
 
@@ -71,4 +71,5 @@ RawFileMedia::RawFileMedia(
 {
 }
 
-} // namespace clientbackend
+} // namespace BackendCore
+

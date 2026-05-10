@@ -6,7 +6,7 @@
 #include <QString>
 #include <QStringList>
 
-namespace clientbackend {
+namespace BackendCore {
 struct BackendContext;
 }
 
@@ -89,5 +89,6 @@ public:
         QString* outErrorText = nullptr) const;
 
 private:
-    std::unique_ptr<clientbackend::BackendContext> context;
+    std::unique_ptr<BackendCore::BackendContext> context;
 };
+

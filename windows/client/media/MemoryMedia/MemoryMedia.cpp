@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-namespace clientbackend {
+namespace BackendCore {
 
 MemoryMedia::MemoryMedia(size_t mediaSizeBytes)
     : memory(mediaSizeBytes, 0u)
@@ -46,4 +46,5 @@ uint64_t MemoryMedia::sizeBytes() const
     return (uint64_t)memory.size();
 }
 
-} // namespace clientbackend
+} // namespace BackendCore
+

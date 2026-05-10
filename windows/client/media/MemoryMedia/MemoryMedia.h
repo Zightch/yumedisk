@@ -6,7 +6,7 @@
 
 #include "media/Media/Media.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 class MemoryMedia final : public Media {
 public:
@@ -28,4 +28,5 @@ private:
     std::vector<unsigned char> memory;
 };
 
-} // namespace clientbackend
+} // namespace BackendCore
+

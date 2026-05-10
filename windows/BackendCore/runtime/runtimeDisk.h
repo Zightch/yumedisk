@@ -12,7 +12,7 @@
 #include "scan.h"
 #include "types/types.h"
 
-namespace clientbackend {
+namespace BackendCore {
 
 using yumedisk::scan::DiskIdentity;
 
@@ -51,4 +51,5 @@ struct DiskRuntime {
     StagingStore staging;
 };
 
-} // namespace clientbackend
+} // namespace BackendCore
+
