@@ -1,25 +1,52 @@
+# IDE / tooling
 **/.idea/
 **/.codebuddy/
+**/.vs/
+**/.vscode/
 
+# Native build outputs
+**/x64/
+**/build/
+**/cmake-build-*/
+**/out/
+
+# Frontend / Node.js
+**/node_modules/
+**/dist/
+**/.vite/
+**/coverage/
+**/*.tsbuildinfo
+**/.pnpm-store/
+**/.npm/
+**/.yarn/*
+!**/.yarn/patches/
+!**/.yarn/plugins/
+!**/.yarn/releases/
+!**/.yarn/sdks/
+!**/.yarn/versions/
+**/npm-debug.log*
+**/pnpm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+**/lerna-debug.log*
+**/pnpm-lock.yaml
+
+# Tauri / Rust generated outputs
+**/src-tauri/target/
+**/src-tauri/gen/
+
+# Project-local runtime / assets
 symbol/
 symbol.txt
 storage/
 jsoncpp/
 
-**/x64/
-**/.vs/
-**/.vscode/
-**/build/
-**/cmake-build-*/
-**/out/
-**/node_modules/
-**/dist/
-**/pnpm-lock.yaml
-
+# Temporary docs / scratch
 **/tmp*/
 !docs/tmp/
 docs/tmp/*
 !docs/tmp/todo.md
 !docs/tmp/backend-dll-boundary-draft.md
 
+# Local environment
 **/env.cmake
