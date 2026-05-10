@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -7,7 +8,7 @@
 #include <QStringList>
 
 namespace BackendCore {
-struct BackendContext;
+class BackendContext;
 }
 
 enum class BackendHostMediaMode {
@@ -89,6 +90,9 @@ public:
         QString* outErrorText = nullptr) const;
 
 private:
+    QString mediaTextForTargetId(unsigned long targetId) const;
+
     std::unique_ptr<BackendCore::BackendContext> context;
+    std::map<unsigned long, QString> mediaTextsByTargetId;
 };
 

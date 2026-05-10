@@ -12,6 +12,8 @@
 
 - [项目概述](./项目概述.md)
 - [AppKernel设计文档](../windows/AppKernel/AppKernel设计文档.md)
+- [AppKernel SDK文档](../windows/AppKernel/AppKernel-SDK文档.md)
+- [BackendCore SDK文档](../windows/BackendCore/BackendCore-SDK文档.md)
 - [功能文档](./功能文档.md)
 - [技术文档](./技术文档.md)
 - [开发文档](./开发文档.md)

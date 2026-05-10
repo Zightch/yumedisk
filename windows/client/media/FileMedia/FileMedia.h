@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <mutex>
 
-#include "media/Media/Media.h"
+#include "BackendCore.h"
 
 namespace BackendCore {
 

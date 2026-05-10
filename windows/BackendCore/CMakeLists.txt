@@ -37,6 +37,7 @@ add_library(
 target_compile_definitions(
         BackendCore
         PRIVATE
+        BACKENDCORE_BUILD_SHARED
         WIN32_LEAN_AND_MEAN
         NOMINMAX
 )
@@ -44,20 +45,17 @@ target_compile_definitions(
 target_include_directories(
         BackendCore
         PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/BackendCore
+        ${CMAKE_CURRENT_SOURCE_DIR}/../shared
+        PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(
         BackendCore
-        PUBLIC
+        PRIVATE
         AppKernel
         scan
-)
-
-set_target_properties(
-        BackendCore
-        PROPERTIES
-        WINDOWS_EXPORT_ALL_SYMBOLS TRUE
 )
 
 add_custom_command(

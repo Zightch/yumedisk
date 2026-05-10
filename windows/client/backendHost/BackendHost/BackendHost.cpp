@@ -6,7 +6,7 @@
 
 #include <QFileInfo>
 
-#include "BackendCore/BackendCore.h"
+#include "BackendCore.h"
 #include "media/MemoryMedia/MemoryMedia.h"
 #include "media/RawFileMedia/RawFileMedia.h"
 
@@ -30,29 +30,39 @@ void assignErrorText(
     }
 }
 
-BackendCore::MediaKind resolveMediaKind(
+BackendHostMediaMode resolveMediaMode(
     BackendHostMediaMode requestedMode,
     uint64_t diskSizeBytes)
 {
     switch (requestedMode) {
     case BackendHostMediaMode::denseMem:
-        return BackendCore::MediaKind::denseMem;
+        return BackendHostMediaMode::denseMem;
     case BackendHostMediaMode::sparseMem:
-        return BackendCore::MediaKind::sparseMem;
+        return BackendHostMediaMode::sparseMem;
     case BackendHostMediaMode::rawFile:
-        return BackendCore::MediaKind::rawFile;
+        return BackendHostMediaMode::rawFile;
     case BackendHostMediaMode::autoSelect:
     default:
         return diskSizeBytes <= maxDenseMediaBytes
-            ? BackendCore::MediaKind::denseMem
-            : BackendCore::MediaKind::sparseMem;
+            ? BackendHostMediaMode::denseMem
+            : BackendHostMediaMode::sparseMem;
     }
 }
 
 QString mediaText(
-    BackendCore::MediaKind mediaKind)
+    BackendHostMediaMode mediaMode)
 {
-    return fromWide(BackendCore::mediaKindToText(mediaKind));
+    switch (mediaMode) {
+    case BackendHostMediaMode::denseMem:
+        return QStringLiteral("denseMem");
+    case BackendHostMediaMode::sparseMem:
+        return QStringLiteral("sparseMem");
+    case BackendHostMediaMode::rawFile:
+        return QStringLiteral("rawFile");
+    case BackendHostMediaMode::autoSelect:
+    default:
+        return QStringLiteral("<unknown-media>");
+    }
 }
 
 QString visiblePathText(
@@ -70,13 +80,14 @@ QString visiblePathText(
 }
 
 BackendHostManagedDiskSnapshot toBackendHostManagedDiskSnapshot(
-    const BackendCore::ManagedDiskSnapshot& snapshot)
+    const BackendCore::ManagedDiskSnapshot& snapshot,
+    const QString& mediaTextValue)
 {
     BackendHostManagedDiskSnapshot result;
 
     result.targetId = snapshot.targetId;
     result.lifecycleText = fromWide(snapshot.lifecycleText);
-    result.mediaText = mediaText(snapshot.mediaKind);
+    result.mediaText = mediaTextValue;
     result.visiblePathText = visiblePathText(snapshot);
     return result;
 }
@@ -267,7 +278,7 @@ bool tryResolveDiskSizeBytes(
 bool tryBuildDiskConfig(
     const BackendHostCreateDiskRequest& request,
     BackendCore::DiskConfig* outDiskConfig,
-    BackendCore::MediaKind* outMediaKind,
+    BackendHostMediaMode* outMediaMode,
     QString* outRawFilePath,
     QString* outErrorText)
 {
@@ -284,8 +295,8 @@ bool tryBuildDiskConfig(
         return false;
     }
 
-    const BackendCore::MediaKind mediaKind =
-        resolveMediaKind(request.requestedMode, diskSizeBytes);
+    const BackendHostMediaMode mediaMode =
+        resolveMediaMode(request.requestedMode, diskSizeBytes);
 
     if (!tryParseOptionalTargetId(
             request.targetIdText.trimmed(),
@@ -352,7 +363,7 @@ bool tryBuildDiskConfig(
         return false;
     }
 
-    if (mediaKind == BackendCore::MediaKind::rawFile &&
+    if (mediaMode == BackendHostMediaMode::rawFile &&
         diskConfig.sectorSize != BackendCore::defaultSectorSize) {
         if (outErrorText != nullptr) {
             *outErrorText = QStringLiteral("rawFile 当前要求 sector size 固定为 4096");
@@ -363,8 +374,8 @@ bool tryBuildDiskConfig(
     if (outDiskConfig != nullptr) {
         *outDiskConfig = diskConfig;
     }
-    if (outMediaKind != nullptr) {
-        *outMediaKind = mediaKind;
+    if (outMediaMode != nullptr) {
+        *outMediaMode = mediaMode;
     }
     if (outRawFilePath != nullptr) {
         *outRawFilePath = rawFilePath;
@@ -374,7 +385,7 @@ bool tryBuildDiskConfig(
 
 bool tryCreateMedia(
     const BackendCore::DiskConfig& diskConfig,
-    BackendCore::MediaKind mediaKind,
+    BackendHostMediaMode mediaMode,
     const QString& rawFilePath,
     std::unique_ptr<BackendCore::Media>* outMedia,
     QString* outErrorText)
@@ -386,11 +397,11 @@ bool tryCreateMedia(
         return false;
     }
 
-    if (mediaKind == BackendCore::MediaKind::denseMem ||
-        mediaKind == BackendCore::MediaKind::sparseMem) {
+    if (mediaMode == BackendHostMediaMode::denseMem ||
+        mediaMode == BackendHostMediaMode::sparseMem) {
         if (diskConfig.diskSizeBytes > (uint64_t)std::numeric_limits<size_t>::max()) {
             if (outErrorText != nullptr) {
-                *outErrorText = mediaKind == BackendCore::MediaKind::denseMem
+                *outErrorText = mediaMode == BackendHostMediaMode::denseMem
                     ? QStringLiteral("denseMem 大小超出当前进程可分配范围")
                     : QStringLiteral("sparseMem 大小超出当前进程可分配范围");
             }
@@ -402,7 +413,7 @@ bool tryCreateMedia(
                 (size_t)diskConfig.diskSizeBytes);
         } catch (const std::exception&) {
             if (outErrorText != nullptr) {
-                *outErrorText = mediaKind == BackendCore::MediaKind::denseMem
+                *outErrorText = mediaMode == BackendHostMediaMode::denseMem
                     ? QStringLiteral("denseMem 分配失败")
                     : QStringLiteral("sparseMem 分配失败");
             }
@@ -412,7 +423,7 @@ bool tryCreateMedia(
         return true;
     }
 
-    if (mediaKind == BackendCore::MediaKind::rawFile) {
+    if (mediaMode == BackendHostMediaMode::rawFile) {
         std::wstring reason;
         *outMedia = BackendCore::RawFileMedia::open(
             rawFilePath.toStdWString(),
@@ -458,7 +469,9 @@ BackendHostSnapshot BackendHost::snapshot() const
         result.logLines.push_back(QStringLiteral("[backend] no logs"));
     }
     for (const auto& snapshotItem : context->snapshotManagedDisks()) {
-        result.disks.push_back(toBackendHostManagedDiskSnapshot(snapshotItem));
+        result.disks.push_back(toBackendHostManagedDiskSnapshot(
+            snapshotItem,
+            mediaTextForTargetId(snapshotItem.targetId)));
     }
 
     return result;
@@ -469,7 +482,7 @@ bool BackendHost::createManagedDisk(
     QString* outErrorText)
 {
     BackendCore::DiskConfig diskConfig{};
-    BackendCore::MediaKind mediaKind = BackendCore::MediaKind::unknown;
+    BackendHostMediaMode mediaMode = BackendHostMediaMode::autoSelect;
     QString rawFilePath;
     std::unique_ptr<BackendCore::Media> media;
     std::wstring errorText;
@@ -477,15 +490,25 @@ bool BackendHost::createManagedDisk(
     if (!tryBuildDiskConfig(
             request,
             &diskConfig,
-            &mediaKind,
+            &mediaMode,
             &rawFilePath,
             outErrorText)) {
         return false;
     }
 
+    if (diskConfig.targetId == YUMEDISK_MAX_TARGETS) {
+        diskConfig.targetId = context->findFirstFreeTarget();
+        if (diskConfig.targetId >= YUMEDISK_MAX_TARGETS) {
+            if (outErrorText != nullptr) {
+                *outErrorText = QStringLiteral("no-free-target");
+            }
+            return false;
+        }
+    }
+
     if (!tryCreateMedia(
             diskConfig,
-            mediaKind,
+            mediaMode,
             rawFilePath,
             &media,
             outErrorText)) {
@@ -494,12 +517,13 @@ bool BackendHost::createManagedDisk(
 
     if (!context->createManagedDisk(
             diskConfig,
-            mediaKind,
             std::move(media),
             &errorText)) {
         assignErrorText(outErrorText, errorText);
         return false;
     }
+
+    mediaTextsByTargetId[diskConfig.targetId] = mediaText(mediaMode);
 
     return true;
 }
@@ -515,6 +539,8 @@ bool BackendHost::removeManagedDisk(
         return false;
     }
 
+    mediaTextsByTargetId.erase(targetId);
+
     return true;
 }
 
@@ -528,6 +554,8 @@ bool BackendHost::removeAllManagedDisks(
         }
         return false;
     }
+
+    mediaTextsByTargetId.clear();
 
     return true;
 }
@@ -543,6 +571,7 @@ bool BackendHost::shutdown(
     }
 
     context->close();
+    mediaTextsByTargetId.clear();
     return true;
 }
 
@@ -589,8 +618,22 @@ bool BackendHost::queryDebugSnapshot(
     outSnapshot->disks.clear();
     outSnapshot->disks.reserve(snapshot.disks.size());
     for (const auto& disk : snapshot.disks) {
-        outSnapshot->disks.push_back(toBackendHostManagedDiskSnapshot(disk));
+        outSnapshot->disks.push_back(toBackendHostManagedDiskSnapshot(
+            disk,
+            mediaTextForTargetId(disk.targetId)));
     }
     return true;
+}
+
+QString BackendHost::mediaTextForTargetId(
+    unsigned long targetId) const
+{
+    const auto it = mediaTextsByTargetId.find(targetId);
+
+    if (it == mediaTextsByTargetId.end()) {
+        return QStringLiteral("<unknown-media>");
+    }
+
+    return it->second;
 }
 

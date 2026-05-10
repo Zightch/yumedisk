@@ -17,21 +17,6 @@ void assignErrorText(
 
 } // namespace
 
-std::wstring mediaKindToText(MediaKind mediaKind)
-{
-    switch (mediaKind) {
-    case MediaKind::denseMem:
-        return L"denseMem";
-    case MediaKind::sparseMem:
-        return L"sparseMem";
-    case MediaKind::rawFile:
-        return L"rawFile";
-    case MediaKind::unknown:
-    default:
-        return L"unknown";
-    }
-}
-
 bool validateSessionConfig(
     const SessionConfig& sessionConfig,
     std::wstring* outErrorText)
@@ -100,15 +85,9 @@ bool validateDiskConfig(
 
 bool validateCreateDiskInputs(
     const DiskConfig& diskConfig,
-    MediaKind mediaKind,
     const Media* media,
     std::wstring* outErrorText)
 {
-    if (mediaKind == MediaKind::unknown) {
-        assignErrorText(outErrorText, L"invalid-media-kind");
-        return false;
-    }
-
     if (media == nullptr) {
         assignErrorText(outErrorText, L"invalid-media-instance");
         return false;

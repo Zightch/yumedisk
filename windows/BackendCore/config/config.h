@@ -2,14 +2,11 @@
 
 #include <string>
 
+#include "BackendCore.h"
 #include "appkernel.h"
-#include "types/types.h"
 
 namespace BackendCore {
 
-class Media;
-
-std::wstring mediaKindToText(MediaKind mediaKind);
 bool validateSessionConfig(
     const SessionConfig& sessionConfig,
     std::wstring* outErrorText = nullptr);
@@ -18,7 +15,6 @@ bool validateDiskConfig(
     std::wstring* outErrorText = nullptr);
 bool validateCreateDiskInputs(
     const DiskConfig& diskConfig,
-    MediaKind mediaKind,
     const Media* media,
     std::wstring* outErrorText = nullptr);
 AK_OPEN_PARAMS buildAkOpenParams(

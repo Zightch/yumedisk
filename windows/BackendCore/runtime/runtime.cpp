@@ -20,6 +20,9 @@ namespace BackendCore {
 using yumedisk::scan::EnumerateVisibleYumeDisks;
 using yumedisk::scan::MakePhysicalDrivePath;
 
+std::wstring formatStatusHex(AK_STATUS status);
+std::wstring formatVersionBe(UINT32 versionBe);
+
 VOID AK_CALL appKernelLogCallback(
     void* logCtx,
     INT level,
@@ -293,8 +296,6 @@ ManagedDiskSnapshot makeManagedDiskSnapshot(
     snapshot.diskSizeBytes = diskRuntime->metadata.diskSizeBytes;
     snapshot.sectorSize = diskRuntime->metadata.sectorSize;
     snapshot.readOnly = diskRuntime->metadata.readOnly;
-    snapshot.mediaKind = diskRuntime->metadata.mediaKind;
-
     (void)tryRefreshDiskRuntimeIdentity(context, diskRuntime, nullptr, 0);
     snapshot.visiblePath = diskRuntime->metadata.identity.Path;
     snapshot.physicalDrivePath = MakePhysicalDrivePath(diskRuntime->metadata.identity.DeviceNumber);
@@ -757,7 +758,6 @@ ULONG BackendContext::findFirstFreeTarget()
 
 bool BackendContext::createManagedDisk(
     DiskConfig diskConfig,
-    MediaKind mediaKind,
     std::unique_ptr<Media> media,
     std::wstring* outErrorText)
 {
@@ -788,7 +788,6 @@ bool BackendContext::createManagedDisk(
 
     if (!validateCreateDiskInputs(
             diskConfig,
-            mediaKind,
             media.get(),
             &configError)) {
         if (outErrorText != nullptr) {
@@ -810,7 +809,6 @@ bool BackendContext::createManagedDisk(
     diskRuntime->metadata.sectorSize = diskConfig.sectorSize;
     diskRuntime->metadata.diskSizeBytes = diskConfig.diskSizeBytes;
     diskRuntime->metadata.readOnly = diskConfig.readOnly;
-    diskRuntime->metadata.mediaKind = mediaKind;
     diskRuntime->queueConfig.queueDepth = diskConfig.queueDepth;
     diskRuntime->queueConfig.writeSlotBytes = diskConfig.writeSlotBytes;
     diskRuntime->queueConfig.readWorkerCount = diskConfig.readWorkerCount;
@@ -850,7 +848,6 @@ bool BackendContext::createManagedDisk(
         L"[backend] created target=" + std::to_wstring(diskConfig.targetId) +
         L", diskBytes=" + std::to_wstring(diskRuntime->metadata.diskSizeBytes) +
         L", readOnly=" + readOnlyToText(diskRuntime->metadata.readOnly) +
-        L", media=" + mediaKindToText(diskRuntime->metadata.mediaKind) +
         L", queueDepth=" + std::to_wstring(diskRuntime->queueConfig.queueDepth) +
         L", writeSlotBytes=" + std::to_wstring(diskRuntime->queueConfig.writeSlotBytes) +
         L", readWorkerCount=" + std::to_wstring(diskRuntime->queueConfig.readWorkerCount) +

@@ -6,11 +6,10 @@
 #include <memory>
 #include <shared_mutex>
 
+#include "BackendCore.h"
 #include "StagingStore/StagingStore.h"
 #include "appkernel.h"
-#include "media/Media/Media.h"
 #include "scan.h"
-#include "types/types.h"
 
 namespace BackendCore {
 
@@ -21,7 +20,6 @@ struct DiskMetadata {
     ULONG sectorSize = 0;
     uint64_t diskSizeBytes = 0;
     bool readOnly = false;
-    MediaKind mediaKind = MediaKind::unknown;
     DiskIdentity identity{};
 };
 

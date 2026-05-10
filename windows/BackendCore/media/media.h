@@ -3,12 +3,11 @@
 #include <memory>
 #include <string>
 
+#include "BackendCore.h"
 #include "appkernel.h"
-#include "types/types.h"
 
 namespace BackendCore {
 
-class Media;
 struct DiskRuntime;
 
 bool adoptManagedDiskMedia(

@@ -31,11 +31,6 @@ bool adoptManagedDiskMedia(
         return false;
     }
 
-    if (diskRuntime->metadata.mediaKind == MediaKind::unknown) {
-        setFailureReason(outReason, L"media-kind-missing");
-        return false;
-    }
-
     if (media == nullptr) {
         setFailureReason(outReason, L"media-instance-missing");
         return false;
