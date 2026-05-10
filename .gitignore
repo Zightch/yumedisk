@@ -35,6 +35,8 @@
 **/src-tauri/target/
 **/src-tauri/gen/
 **/src-tauri/Cargo.lock
+**/target/
+**/Cargo.lock
 
 # Project-local runtime / assets
 symbol/
