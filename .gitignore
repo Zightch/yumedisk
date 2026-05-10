@@ -34,6 +34,7 @@
 # Tauri / Rust generated outputs
 **/src-tauri/target/
 **/src-tauri/gen/
+**/src-tauri/Cargo.lock
 
 # Project-local runtime / assets
 symbol/
