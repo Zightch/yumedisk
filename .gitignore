@@ -12,6 +12,9 @@ jsoncpp/
 **/build/
 **/cmake-build-*/
 **/out/
+**/node_modules/
+**/dist/
+**/pnpm-lock.yaml
 
 **/tmp*/
 !docs/tmp/

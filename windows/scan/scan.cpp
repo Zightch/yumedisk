@@ -7,7 +7,7 @@
 #include <cwctype>
 #include <vector>
 
-namespace yumedisk::scan {
+namespace YumeDisk::Scan {
 
 namespace {
 
@@ -298,4 +298,4 @@ std::wstring MakePhysicalDrivePath(
     return LR"(\\.\PhysicalDrive)" + std::to_wstring(device_number);
 }
 
-} // namespace yumedisk::scan
+}

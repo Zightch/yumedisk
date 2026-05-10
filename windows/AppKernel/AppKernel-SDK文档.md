@@ -1035,9 +1035,9 @@ for (;;) {
 ```cpp
 #include "scan.h"
 
-using yumedisk::scan::DiskIdentity;
-using yumedisk::scan::EnumerateVisibleYumeDisks;
-using yumedisk::scan::MakePhysicalDrivePath;
+using YumeDisk::Scan::DiskIdentity;
+using YumeDisk::Scan::EnumerateVisibleYumeDisks;
+using YumeDisk::Scan::MakePhysicalDrivePath;
 ```
 
 `scan` 静态库的职责固定为：

@@ -19,7 +19,7 @@
 
 namespace testapp {
 
-using yumedisk::scan::DiskIdentity;
+using YumeDisk::Scan::DiskIdentity;
 
 constexpr ULONG kDefaultSectorSize = 4096;
 constexpr size_t kDefaultQueueDepth = 32;

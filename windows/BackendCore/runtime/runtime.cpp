@@ -17,8 +17,8 @@
 
 namespace BackendCore {
 
-using yumedisk::scan::EnumerateVisibleYumeDisks;
-using yumedisk::scan::MakePhysicalDrivePath;
+using YumeDisk::Scan::EnumerateVisibleYumeDisks;
+using YumeDisk::Scan::MakePhysicalDrivePath;
 
 std::wstring formatStatusHex(AK_STATUS status);
 std::wstring formatVersionBe(UINT32 versionBe);

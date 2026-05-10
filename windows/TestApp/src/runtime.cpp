@@ -11,8 +11,8 @@
 
 namespace testapp {
 
-using yumedisk::scan::EnumerateVisibleYumeDisks;
-using yumedisk::scan::MakePhysicalDrivePath;
+using YumeDisk::Scan::EnumerateVisibleYumeDisks;
+using YumeDisk::Scan::MakePhysicalDrivePath;
 
 namespace {
 

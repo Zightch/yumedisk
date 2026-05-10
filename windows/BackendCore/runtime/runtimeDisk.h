@@ -13,7 +13,7 @@
 
 namespace BackendCore {
 
-using yumedisk::scan::DiskIdentity;
+using YumeDisk::Scan::DiskIdentity;
 
 struct DiskMetadata {
     ULONG targetId = 0;

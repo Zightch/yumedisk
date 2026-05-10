@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace yumedisk::scan {
+namespace YumeDisk::Scan {
 
 struct DiskIdentity {
     std::wstring Path;
@@ -20,4 +20,4 @@ struct DiskIdentity {
 std::vector<DiskIdentity> EnumerateVisibleYumeDisks();
 std::wstring MakePhysicalDrivePath(DWORD device_number);
 
-} // namespace yumedisk::scan
+}
