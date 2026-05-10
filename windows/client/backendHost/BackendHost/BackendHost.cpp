@@ -7,8 +7,8 @@
 #include <QFileInfo>
 
 #include "BackendCore/BackendCore.h"
-#include "backend/media/MemoryMedia/MemoryMedia.h"
-#include "backend/media/RawFileMedia/RawFileMedia.h"
+#include "media/MemoryMedia/MemoryMedia.h"
+#include "media/RawFileMedia/RawFileMedia.h"
 
 namespace {
 

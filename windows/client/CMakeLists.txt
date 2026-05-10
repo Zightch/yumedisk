@@ -28,12 +28,12 @@ qt_add_executable(
         backendHost/BackendHost/BackendHost.cpp
         backendHost/BackendHost/BackendHost.h
         main.cpp
-        backend/media/FileMedia/FileMedia.cpp
-        backend/media/FileMedia/FileMedia.h
-        backend/media/MemoryMedia/MemoryMedia.cpp
-        backend/media/MemoryMedia/MemoryMedia.h
-        backend/media/RawFileMedia/RawFileMedia.cpp
-        backend/media/RawFileMedia/RawFileMedia.h
+        media/FileMedia/FileMedia.cpp
+        media/FileMedia/FileMedia.h
+        media/MemoryMedia/MemoryMedia.cpp
+        media/MemoryMedia/MemoryMedia.h
+        media/RawFileMedia/RawFileMedia.cpp
+        media/RawFileMedia/RawFileMedia.h
         Widget/Widget.cpp
         Widget/Widget.h
         Widget/Widget.ui

@@ -3,7 +3,7 @@
 #include <memory>
 #include <string>
 
-#include "backend/media/FileMedia/FileMedia.h"
+#include "media/FileMedia/FileMedia.h"
 
 namespace clientbackend {
 
