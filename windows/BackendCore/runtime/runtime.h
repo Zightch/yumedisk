@@ -9,6 +9,8 @@
 
 namespace clientbackend {
 
+class Media;
+
 class BackendContext final {
 public:
     BackendContext();
@@ -35,7 +37,9 @@ public:
 
     ULONG findFirstFreeTarget();
     bool createManagedDisk(
-        const CreateDiskRequest& request,
+        DiskConfig diskConfig,
+        MediaKind mediaKind,
+        std::unique_ptr<Media> media,
         std::wstring* outErrorText = nullptr);
     bool removeManagedDisk(
         ULONG targetId,

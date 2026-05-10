@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string>
 
 #include "appkernel.h"
@@ -7,11 +8,12 @@
 
 namespace clientbackend {
 
+class Media;
 struct DiskRuntime;
 
-bool initializeManagedDiskMedia(
+bool adoptManagedDiskMedia(
     DiskRuntime* diskRuntime,
-    MediaKind mediaKind,
+    std::unique_ptr<Media> media,
     std::wstring* outReason);
 
 void cleanupManagedDiskMedia(DiskRuntime* diskRuntime);

@@ -4,23 +4,7 @@
 
 ## 子步骤
 
-1. 重建 `BackendCore` 建盘与删盘接口
-   - `BackendCore` 只接收已经收口后的运行参数
-   - `Media` 由宿主侧创建后移交给 `BackendCore`
-   - `BackendCore` 负责：
-     - 参数合法性校验
-     - 建盘
-     - 删盘
-     - 全删盘
-     - `shutdown / close`
-   - 这里要明确调整一条现有行为：
-     - `readWorkerCount`
-     - `writeWorkerCount`
-     - `ackBatchMaxRanges`
-     - `queueDepth`
-     不再由 core 隐式替上层决定，改为上层可传、core 校验后落地
-
-2. 重建 `client` 宿主适配层 `backendHost`
+1. 重建 `client` 宿主适配层 `backendHost`
    - 新建 `windows/client/backendHost/`
    - 它只负责：
      - `QString` / 表单输入解析
@@ -36,7 +20,7 @@
      - 自己维护 staging 生命周期
      - 自己接 `AppKernel`
 
-3. 重建 `client` 介质实现归属
+2. 重建 `client` 介质实现归属
    - 把当前具体介质实现留在 `client` 宿主侧
    - 固定归属：
      - `client/media/FileMedia/`
@@ -50,7 +34,7 @@
      - 让 `BackendCore` 只关心“怎么驱动盘”
      - 不关心“宿主用什么本地文件介质实现”
 
-4. 重建 `client` 调用链
+3. 重建 `client` 调用链
    - 把当前 `Widget/CreateDiskDialog -> Backend` 的直连路径
      重建为：
      - `Widget/CreateDiskDialog`
@@ -60,7 +44,7 @@
    - `CreateDiskDialog` 只收集输入，不承接运行时规则
    - 保持当前“UI 与运行时分离”原则，不回退成 UI 直接解释 runtime 细节
 
-5. 重建构建与部署链路
+4. 重建构建与部署链路
    - `client` 改为链接 `BackendCore`
    - `BackendCore` 再链接：
      - `AppKernel`
@@ -72,7 +56,7 @@
      - IDE 构建可运行
      - `cmake-build-debug` 产物可直接启动
 
-6. 重建验收口径
+5. 重建验收口径
    - 先做构建验收：
      - `BackendCore` 独立可编译
      - `client` 链接新链路后可编译
@@ -125,6 +109,6 @@
 
 ## 当前唯一下一步
 
-重建 `BackendCore` 建盘与删盘接口：让 core 正式接收宿主移交的 `Media` 与显式 `SessionConfig / DiskConfig`，清掉当前建盘路径里“media 实例尚未正式进入 core 接口”的最后过渡痕迹。
+重建 `client` 宿主适配层 `backendHost`：把 `QString/QFileInfo/UI DTO` 收到宿主侧，负责创建 `Media` 后调用 `BackendCore`，同时不把 session 真状态、disk runtime、staging 生命周期重新拉回 `client`。
 
 历史完成事实与验收结果请查看 [../progress/README.md](../progress/README.md) 对应日期文件。

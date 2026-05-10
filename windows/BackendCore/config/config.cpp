@@ -1,5 +1,7 @@
 #include "config/config.h"
 
+#include "media/Media/Media.h"
+
 namespace clientbackend {
 
 namespace {
@@ -96,16 +98,32 @@ bool validateDiskConfig(
     return true;
 }
 
-bool validateCreateDiskRequest(
-    const CreateDiskRequest& request,
+bool validateCreateDiskInputs(
+    const DiskConfig& diskConfig,
+    MediaKind mediaKind,
+    const Media* media,
     std::wstring* outErrorText)
 {
-    if (request.mediaKind == MediaKind::unknown) {
+    if (mediaKind == MediaKind::unknown) {
         assignErrorText(outErrorText, L"invalid-media-kind");
         return false;
     }
 
-    return validateDiskConfig(request.diskConfig, outErrorText);
+    if (media == nullptr) {
+        assignErrorText(outErrorText, L"invalid-media-instance");
+        return false;
+    }
+
+    if (!validateDiskConfig(diskConfig, outErrorText)) {
+        return false;
+    }
+
+    if (media->sizeBytes() != diskConfig.diskSizeBytes) {
+        assignErrorText(outErrorText, L"media-size-mismatch");
+        return false;
+    }
+
+    return true;
 }
 
 AK_OPEN_PARAMS buildAkOpenParams(

@@ -7,6 +7,8 @@
 
 namespace clientbackend {
 
+class Media;
+
 std::wstring mediaKindToText(MediaKind mediaKind);
 bool validateSessionConfig(
     const SessionConfig& sessionConfig,
@@ -14,8 +16,10 @@ bool validateSessionConfig(
 bool validateDiskConfig(
     const DiskConfig& diskConfig,
     std::wstring* outErrorText = nullptr);
-bool validateCreateDiskRequest(
-    const CreateDiskRequest& request,
+bool validateCreateDiskInputs(
+    const DiskConfig& diskConfig,
+    MediaKind mediaKind,
+    const Media* media,
     std::wstring* outErrorText = nullptr);
 AK_OPEN_PARAMS buildAkOpenParams(
     const SessionConfig& sessionConfig,

@@ -21,9 +21,9 @@ void setFailureReason(
 
 } // namespace
 
-bool initializeManagedDiskMedia(
+bool adoptManagedDiskMedia(
     DiskRuntime* diskRuntime,
-    MediaKind mediaKind,
+    std::unique_ptr<Media> media,
     std::wstring* outReason)
 {
     if (diskRuntime == nullptr) {
@@ -31,23 +31,31 @@ bool initializeManagedDiskMedia(
         return false;
     }
 
-    if (mediaKind == MediaKind::unknown) {
+    if (diskRuntime->metadata.mediaKind == MediaKind::unknown) {
         setFailureReason(outReason, L"media-kind-missing");
+        return false;
+    }
+
+    if (media == nullptr) {
+        setFailureReason(outReason, L"media-instance-missing");
+        return false;
+    }
+
+    if (media->sizeBytes() != diskRuntime->metadata.diskSizeBytes) {
+        setFailureReason(outReason, L"media-size-mismatch");
         return false;
     }
 
     {
         std::unique_lock<std::shared_mutex> guard(diskRuntime->media.lock);
-        if (diskRuntime->media.instance == nullptr) {
-            setFailureReason(outReason, L"media-instance-missing");
+        if (diskRuntime->media.instance != nullptr) {
+            setFailureReason(outReason, L"media-instance-already-set");
             return false;
         }
-        if (mediaKind == MediaKind::rawFile) {
-            diskRuntime->metadata.diskSizeBytes = diskRuntime->media.instance->sizeBytes();
-        }
+
+        diskRuntime->media.instance = std::move(media);
     }
 
-    diskRuntime->metadata.mediaKind = mediaKind;
     return true;
 }
 

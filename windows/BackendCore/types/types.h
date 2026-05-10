@@ -48,11 +48,6 @@ struct DiskConfig {
     bool readOnly = false;
 };
 
-struct CreateDiskRequest {
-    DiskConfig diskConfig;
-    MediaKind mediaKind = MediaKind::unknown;
-};
-
 struct ManagedDiskSnapshot {
     ULONG targetId = 0;
     uint64_t diskSizeBytes = 0;

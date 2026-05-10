@@ -756,11 +756,12 @@ ULONG BackendContext::findFirstFreeTarget()
 }
 
 bool BackendContext::createManagedDisk(
-    const CreateDiskRequest& request,
+    DiskConfig diskConfig,
+    MediaKind mediaKind,
+    std::unique_ptr<Media> media,
     std::wstring* outErrorText)
 {
     std::shared_ptr<DiskRuntime> diskRuntime;
-    DiskConfig diskConfig = request.diskConfig;
     AK_DISK* handle;
     AK_STATUS status;
     std::wstring configError;
@@ -785,8 +786,10 @@ bool BackendContext::createManagedDisk(
         }
     }
 
-    if (!validateCreateDiskRequest(
-            CreateDiskRequest{diskConfig, request.mediaKind},
+    if (!validateCreateDiskInputs(
+            diskConfig,
+            mediaKind,
+            media.get(),
             &configError)) {
         if (outErrorText != nullptr) {
             *outErrorText = configError;
@@ -807,14 +810,14 @@ bool BackendContext::createManagedDisk(
     diskRuntime->metadata.sectorSize = diskConfig.sectorSize;
     diskRuntime->metadata.diskSizeBytes = diskConfig.diskSizeBytes;
     diskRuntime->metadata.readOnly = diskConfig.readOnly;
-    diskRuntime->metadata.mediaKind = request.mediaKind;
+    diskRuntime->metadata.mediaKind = mediaKind;
     diskRuntime->queueConfig.queueDepth = diskConfig.queueDepth;
     diskRuntime->queueConfig.writeSlotBytes = diskConfig.writeSlotBytes;
     diskRuntime->queueConfig.readWorkerCount = diskConfig.readWorkerCount;
     diskRuntime->queueConfig.writeWorkerCount = diskConfig.writeWorkerCount;
     diskRuntime->queueConfig.ackBatchMaxRanges = diskConfig.ackBatchMaxRanges;
 
-    if (!initializeManagedDiskMedia(diskRuntime.get(), request.mediaKind, &mediaReason)) {
+    if (!adoptManagedDiskMedia(diskRuntime.get(), std::move(media), &mediaReason)) {
         if (outErrorText != nullptr) {
             *outErrorText = mediaReason;
         }
