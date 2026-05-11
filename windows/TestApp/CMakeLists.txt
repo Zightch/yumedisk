@@ -1,52 +1,69 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(TestApp LANGUAGES CXX)
+project(CppCli LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_subdirectory(
-    ../AppKernel
-    ${CMAKE_CURRENT_BINARY_DIR}/AppKernel
-)
-
-add_subdirectory(
-    ../scan
-    ${CMAKE_CURRENT_BINARY_DIR}/scan
+    ../BackendCore
+    ${CMAKE_CURRENT_BINARY_DIR}/BackendCore
 )
 
 add_executable(
-    TestApp
+    cpp_cli
     src/main.cpp
     src/config.cpp
     src/media.cpp
     src/runtime.cpp
 )
 
+set_target_properties(
+    cpp_cli
+    PROPERTIES
+    OUTPUT_NAME "cpp-cli"
+)
+
 target_compile_definitions(
-    TestApp
+    cpp_cli
     PRIVATE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
 )
 
 target_include_directories(
-    TestApp
+    cpp_cli
     PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_link_libraries(
-    TestApp
+    cpp_cli
     PRIVATE
-    AppKernel
+    BackendCore
     scan
+)
+
+add_custom_command(
+    TARGET cpp_cli
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:BackendCore>
+    $<TARGET_FILE_DIR:cpp_cli>
+)
+
+add_custom_command(
+    TARGET cpp_cli
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    $<TARGET_FILE:AppKernel>
+    $<TARGET_FILE_DIR:cpp_cli>
 )
 
 if (MINGW)
     target_link_options(
-        TestApp
+        cpp_cli
         PRIVATE
         -static
         -static-libstdc++

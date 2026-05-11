@@ -127,7 +127,7 @@ bool ParseTargetToken(
 void PrintUsage()
 {
     std::cout
-        << "TestApp [--queue-depth N] [--slot-bytes BYTES] [--sector-size BYTES]\n"
+        << "cpp-cli [--queue-depth N] [--slot-bytes BYTES] [--sector-size BYTES]\n"
         << "\n"
         << "defaults:\n"
         << "  queue-depth = " << kDefaultQueueDepth << "\n"
