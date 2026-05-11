@@ -646,7 +646,7 @@ impl BackendContext {
     }
 
     pub fn close(&self) {
-        let _ = self.remove_all_managed_disks(true);
+        let _ = self.remove_all_managed_disks_internal(true);
         self.inner.stop.store(true, Ordering::Relaxed);
 
         let stop_event = *self.inner.stop_event.lock().expect("stop_event poisoned");
@@ -978,7 +978,11 @@ impl BackendContext {
         true
     }
 
-    pub fn remove_all_managed_disks(&self, closing: bool) -> bool {
+    pub fn remove_all_managed_disks(&self) -> bool {
+        self.remove_all_managed_disks_internal(false)
+    }
+
+    fn remove_all_managed_disks_internal(&self, closing: bool) -> bool {
         let runtime_list = self.snapshot_disk_runtimes();
         let session = *self.inner.session.lock().expect("session poisoned");
         let mut removed_target_ids = Vec::new();

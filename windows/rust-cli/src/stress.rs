@@ -5,7 +5,7 @@ use std::time::Instant;
 use backend_rust::BackendContext;
 use backend_rust::DiskConfig;
 use backend_rust::ManagedDiskSnapshot;
-use backend_rust::appkernel;
+use backend_rust::YUMEDISK_MAX_TARGETS;
 
 use crate::dense_mem::DenseMem;
 use crate::disk_io::DeviceHandle;
@@ -53,7 +53,7 @@ pub fn run_smoke(config: SmokeConfig) -> Result<(), String> {
     let target_id = config
         .target_id
         .unwrap_or_else(|| context.find_first_free_target());
-    if target_id >= appkernel::YUMEDISK_MAX_TARGETS {
+    if target_id >= YUMEDISK_MAX_TARGETS {
         return Err("no-free-target".to_string());
     }
 

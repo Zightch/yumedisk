@@ -60,7 +60,7 @@ pub fn validate_create_disk_inputs(
     Ok(())
 }
 
-pub fn build_ak_open_params(
+pub(crate) fn build_ak_open_params(
     session_config: &SessionConfig,
     log_fn: Option<appkernel::AkLogFn>,
     log_ctx: *mut core::ffi::c_void,
@@ -73,7 +73,7 @@ pub fn build_ak_open_params(
     }
 }
 
-pub fn build_ak_disk_params(disk_config: &DiskConfig) -> appkernel::AkDiskParams {
+pub(crate) fn build_ak_disk_params(disk_config: &DiskConfig) -> appkernel::AkDiskParams {
     appkernel::AkDiskParams {
         target_id: disk_config.target_id,
         sector_size: disk_config.sector_size,
