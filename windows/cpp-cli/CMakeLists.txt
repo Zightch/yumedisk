@@ -22,7 +22,7 @@ add_executable(
 set_target_properties(
     cpp_cli
     PROPERTIES
-    OUTPUT_NAME "cpp-cli"
+    OUTPUT_NAME "cpp_cli"
 )
 
 target_compile_definitions(
