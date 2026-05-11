@@ -179,6 +179,7 @@ unsafe extern "C" {
         timeout_ms: u32,
         out_event: *mut AkEvent,
     ) -> AkStatus;
+    pub fn AkPollEvent(session: *mut AkSession, out_event: *mut AkEvent) -> AkStatus;
     pub fn AkCreateDisk(
         session: *mut AkSession,
         params: *const AkDiskParams,

@@ -428,15 +428,11 @@ impl BackendContext {
 
             // SAFETY: valid session while open.
             let status = unsafe {
-                appkernel::AkWaitEvent(
-                    session as *mut appkernel::AkSession,
-                    types::EVENT_WAIT_POLL_MS,
-                    &mut event_record,
-                )
+                appkernel::AkPollEvent(session as *mut appkernel::AkSession, &mut event_record)
             };
-            if status == appkernel::AK_STATUS_TIMEOUT
-                || status == appkernel::AK_STATUS_NO_MORE_ENTRIES
-            {
+            if status == appkernel::AK_STATUS_NO_MORE_ENTRIES {
+                // SAFETY: bounded polling sleep.
+                unsafe { win32::Sleep(types::EVENT_WAIT_POLL_MS) };
                 continue;
             }
             if status != appkernel::AK_STATUS_SUCCESS {
