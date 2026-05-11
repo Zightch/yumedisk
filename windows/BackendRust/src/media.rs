@@ -6,8 +6,4 @@ pub trait Media: Send + Sync + 'static {
     fn read_locked(&self, offset: u64, buffer: &mut [u8]) -> Result<(), BackendError>;
 
     fn write_locked(&self, offset: u64, data: &[u8]) -> Result<(), BackendError>;
-
-    fn flush(&self) -> Result<(), BackendError> {
-        Ok(())
-    }
 }
