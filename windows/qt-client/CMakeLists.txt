@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.19)
 include(env.cmake OPTIONAL)
 
-project(qt-client LANGUAGES CXX)
+project(QtClient LANGUAGES CXX)
 
 add_subdirectory(
         ../BackendCore
@@ -21,7 +21,7 @@ set(CMAKE_AUTORCC ON)
 qt_standard_project_setup()
 
 qt_add_executable(
-        qt-client
+        qt_client
         CreateDiskDialog/CreateDiskDialog.cpp
         CreateDiskDialog/CreateDiskDialog.h
         CreateDiskDialog/CreateDiskDialog.ui
@@ -40,13 +40,13 @@ qt_add_executable(
 )
 
 target_include_directories(
-        qt-client
+        qt_client
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 target_link_libraries(
-        qt-client
+        qt_client
         PRIVATE
         BackendCore
         Qt::Core
@@ -54,14 +54,14 @@ target_link_libraries(
 )
 
 add_custom_command(
-        TARGET qt-client
+        TARGET qt_client
         POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:BackendCore>
-        $<TARGET_FILE_DIR:qt-client>
+        $<TARGET_FILE_DIR:qt_client>
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:AppKernel>
-        $<TARGET_FILE_DIR:qt-client>
+        $<TARGET_FILE_DIR:qt_client>
 )
 
-set_target_properties(qt-client PROPERTIES WIN32_EXECUTABLE TRUE)
+set_target_properties(qt_client PROPERTIES WIN32_EXECUTABLE TRUE)
