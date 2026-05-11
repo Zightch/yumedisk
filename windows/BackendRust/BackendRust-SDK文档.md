@@ -83,7 +83,6 @@ pub trait Media: Send + Sync + 'static {
     fn size_bytes(&self) -> u64;
     fn read_locked(&self, offset: u64, buffer: &mut [u8]) -> Result<(), BackendError>;
     fn write_locked(&self, offset: u64, data: &[u8]) -> Result<(), BackendError>;
-    fn flush(&self) -> Result<(), BackendError> { Ok(()) }
 }
 ```
 
@@ -94,7 +93,6 @@ pub trait Media: Send + Sync + 'static {
 | `size_bytes` | 无 | `u64` | 返回介质总字节数，必须稳定等于建盘时的 `disk_size_bytes` |
 | `read_locked` | `offset`, `buffer` | `Result<(), BackendError>` | 从介质读取指定范围到 `buffer` |
 | `write_locked` | `offset`, `data` | `Result<(), BackendError>` | 把数据写入介质 |
-| `flush` | 无 | `Result<(), BackendError>` | 当前为可选能力，默认空实现 |
 
 ### 3.2 逻辑要求
 
@@ -107,7 +105,6 @@ pub trait Media: Send + Sync + 'static {
 
 - `size_bytes()` 和 `DiskConfig.disk_size_bytes` 不一致会直接建盘失败。
 - `write_locked()` 返回 `Ok(())` 的语义必须谨慎；这代表 core 认为这次提交已经成功。
-- `flush()` 目前没有进入 core 主链，宿主不要误以为 core 会自动调用它。
 
 ## 4. `SessionConfig`
 
@@ -530,7 +527,6 @@ pub struct DiskIdentity {
 ## 16. 当前未承诺内容
 
 - `NetworkMedia` 语义细节
-- `flush()` 进入正式提交链
 - 稳定的日志回调接口
 - 稳定的异步 API
 - 稳定的 FFI / C ABI 暴露面
