@@ -2,7 +2,6 @@ mod dense_mem;
 mod disk_io;
 mod stress;
 
-use std::collections::BTreeMap;
 use std::env;
 use std::io;
 use std::io::Write;
@@ -12,6 +11,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use backend_rust::BackendContext;
+use backend_rust::DebugSnapshot;
 use backend_rust::BackendStatsSnapshot;
 use backend_rust::DiskConfig;
 use backend_rust::ManagedDiskSnapshot;
@@ -20,22 +20,12 @@ use backend_rust::YUMEDISK_MAX_USABLE_TARGET_ID;
 use backend_rust::enumerate_visible_yumedisks;
 use backend_rust::make_physical_drive_path;
 use dense_mem::DenseMem;
-use disk_io::DeviceHandle;
 use stress::SmokeConfig;
 use stress::run_smoke;
 
 type AppResult<T> = Result<T, String>;
 
 const DISK_READY_TIMEOUT: Duration = Duration::from_secs(5);
-const MEMORY_COMMIT_TIMEOUT: Duration = Duration::from_secs(2);
-const MEMORY_COMMIT_POLL: Duration = Duration::from_millis(50);
-
-#[derive(Debug, Clone)]
-struct CliDisk {
-    dense_mem: DenseMem,
-    disk_size_bytes: u64,
-    read_only: bool,
-}
 
 #[derive(Debug, Clone, Copy)]
 struct CreateDiskRequest {
@@ -51,13 +41,6 @@ enum LoopControl {
 
 struct CliHost {
     context: BackendContext,
-    disks: BTreeMap<u32, CliDisk>,
-}
-
-struct AlignedRange {
-    aligned_offset: u64,
-    aligned_length: usize,
-    inner_offset: usize,
 }
 
 fn main() {
@@ -108,13 +91,11 @@ impl CliHost {
 
         Ok(Self {
             context,
-            disks: BTreeMap::new(),
         })
     }
 
     fn shutdown(&mut self) {
         self.context.close();
-        self.disks.clear();
     }
 
     fn run_command_loop(&mut self) -> AppResult<()> {
@@ -154,8 +135,8 @@ impl CliHost {
                 print_runtime_help();
                 Ok(LoopControl::Continue)
             }
-            "state" | "query" => {
-                self.print_state();
+            "query" => {
+                self.print_query()?;
                 Ok(LoopControl::Continue)
             }
             "stats" => {
@@ -166,8 +147,8 @@ impl CliHost {
                 self.print_managed_disks();
                 Ok(LoopControl::Continue)
             }
-            "logs" => {
-                self.print_logs(args)?;
+            "debug" => {
+                self.print_debug()?;
                 Ok(LoopControl::Continue)
             }
             "ct" => {
@@ -178,25 +159,14 @@ impl CliHost {
                 self.remove_disk(args)?;
                 Ok(LoopControl::Continue)
             }
-            "rd" | "read" => {
-                self.read_disk_bytes(args)?;
-                Ok(LoopControl::Continue)
-            }
-            "wr" | "write" => {
-                self.write_disk_bytes(args)?;
-                Ok(LoopControl::Continue)
-            }
-            "peek" => {
-                self.peek_memory_bytes(args)?;
-                Ok(LoopControl::Continue)
-            }
             "exit" | "quit" => Ok(LoopControl::Exit),
             other => Err(format!("unknown command: {}", other)),
         }
     }
 
-    fn print_state(&self) {
+    fn print_query(&self) -> AppResult<()> {
         println!("{}", self.context.query_session_state_text());
+        self.print_stats()
     }
 
     fn print_stats(&self) -> AppResult<()> {
@@ -221,6 +191,45 @@ impl CliHost {
             stats.events_dropped,
             stats.disk_count
         );
+        Ok(())
+    }
+
+    fn print_debug(&self) -> AppResult<()> {
+        let mut snapshot = DebugSnapshot::default();
+        let mut error_text = String::new();
+        if !self
+            .context
+            .query_debug_snapshot(&mut snapshot, Some(&mut error_text))
+        {
+            if error_text.is_empty() {
+                error_text = "debug-query-failed".to_string();
+            }
+            return Err(error_text);
+        }
+
+        println!("debug_session {}", snapshot.session_state_text);
+        println!(
+            "debug_stats heartbeat_sent={}, command_failures={}, protocol_failures={}, events_queued={}, events_dropped={}, disk_count={}",
+            snapshot.stats.heartbeat_sent,
+            snapshot.stats.command_failures,
+            snapshot.stats.protocol_failures,
+            snapshot.stats.events_queued,
+            snapshot.stats.events_dropped,
+            snapshot.stats.disk_count
+        );
+        for disk in snapshot.disks {
+            println!(
+                "debug_disk target={}, disk_bytes={}, sector_size={}, read_only={}, lifecycle={}, online={}, visible_path={}, physical_drive={}",
+                disk.target_id,
+                disk.disk_size_bytes,
+                disk.sector_size,
+                bool_to_text(disk.read_only),
+                disk.lifecycle_text,
+                bool_to_text(disk.online),
+                pending_text(&disk.visible_path),
+                pending_text(&disk.physical_drive_path)
+            );
+        }
         Ok(())
     }
 
@@ -255,22 +264,6 @@ impl CliHost {
         }
     }
 
-    fn print_logs(&self, args: &[&str]) -> AppResult<()> {
-        let limit = if args.is_empty() {
-            20usize
-        } else {
-            parse_usize_value(args[0], "log count")?
-        };
-
-        let log_lines = self.context.snapshot_log_lines();
-        let start = log_lines.len().saturating_sub(limit);
-        println!("log_count={}", log_lines.len());
-        for (index, line) in log_lines.iter().enumerate().skip(start) {
-            println!("log[{}]={}", index, line);
-        }
-        Ok(())
-    }
-
     fn create_disk(&mut self, args: &[&str]) -> AppResult<()> {
         let request = parse_create_disk_args(args)?;
         let disk_size_bytes = request
@@ -295,7 +288,7 @@ impl CliHost {
         let mut error_text = String::new();
         if !self.context.create_managed_disk(
             disk_config,
-            Box::new(dense_mem.clone()),
+            Box::new(dense_mem),
             Some(&mut error_text),
         ) {
             if error_text.is_empty() {
@@ -303,15 +296,6 @@ impl CliHost {
             }
             return Err(error_text);
         }
-
-        self.disks.insert(
-            target_id,
-            CliDisk {
-                dense_mem,
-                disk_size_bytes,
-                read_only: request.read_only,
-            },
-        );
 
         let snapshot = self.wait_for_disk_ready(target_id, DISK_READY_TIMEOUT)?;
         println!(
@@ -334,7 +318,6 @@ impl CliHost {
             if !self.context.remove_all_managed_disks() {
                 return Err("remove-all-failed".to_string());
             }
-            self.disks.clear();
             println!("removed_all=true");
             return Ok(());
         }
@@ -351,138 +334,7 @@ impl CliHost {
             return Err(error_text);
         }
 
-        self.disks.remove(&target_id);
         println!("removed target={}", target_id);
-        Ok(())
-    }
-
-    fn read_disk_bytes(&self, args: &[&str]) -> AppResult<()> {
-        if args.len() != 3 {
-            return Err("read requires <target> <offset> <length>".to_string());
-        }
-
-        let target_id = parse_target_value(args[0])?;
-        let offset_bytes = parse_u64_value(args[1], "offset")?;
-        let length = parse_usize_value(args[2], "length")?;
-        if length == 0 {
-            return Err("length must be > 0".to_string());
-        }
-
-        let snapshot = self.wait_for_disk_ready(target_id, DISK_READY_TIMEOUT)?;
-        validate_range(snapshot.disk_size_bytes, offset_bytes, length)?;
-
-        let buffer = read_device_range(
-            &snapshot.physical_drive_path,
-            snapshot.sector_size,
-            offset_bytes,
-            length,
-        )?;
-
-        let memory_match = if let Some(local_disk) = self.disks.get(&target_id) {
-            let expected = local_disk
-                .dense_mem
-                .snapshot_range(offset_bytes, length)
-                .map_err(|error| error.to_string())?;
-            expected == buffer
-        } else {
-            false
-        };
-
-        println!(
-            "read target={}, offset={}, bytes={}, data={}, memory_match={}",
-            target_id,
-            offset_bytes,
-            buffer.len(),
-            encode_hex_bytes(&buffer),
-            bool_to_text(memory_match)
-        );
-        Ok(())
-    }
-
-    fn write_disk_bytes(&self, args: &[&str]) -> AppResult<()> {
-        if args.len() != 3 {
-            return Err("write requires <target> <offset> <hex-bytes>".to_string());
-        }
-
-        let target_id = parse_target_value(args[0])?;
-        let offset_bytes = parse_u64_value(args[1], "offset")?;
-        let data = decode_hex_bytes(args[2])?;
-        if data.is_empty() {
-            return Err("hex-bytes must not be empty".to_string());
-        }
-
-        let local_disk = self
-            .disks
-            .get(&target_id)
-            .ok_or_else(|| format!("target-not-found: {}", target_id))?;
-        if local_disk.read_only {
-            return Err(format!("target-read-only: {}", target_id));
-        }
-
-        let snapshot = self.wait_for_disk_ready(target_id, DISK_READY_TIMEOUT)?;
-        validate_range(snapshot.disk_size_bytes, offset_bytes, data.len())?;
-
-        write_device_range(
-            &snapshot.physical_drive_path,
-            snapshot.sector_size,
-            offset_bytes,
-            &data,
-        )?;
-
-        let read_back = read_device_range(
-            &snapshot.physical_drive_path,
-            snapshot.sector_size,
-            offset_bytes,
-            data.len(),
-        )?;
-        if read_back != data {
-            return Err(format!(
-                "readback-mismatch target={} offset={}",
-                target_id, offset_bytes
-            ));
-        }
-
-        wait_for_dense_mem_match(&local_disk.dense_mem, offset_bytes, &data, MEMORY_COMMIT_TIMEOUT)?;
-
-        println!(
-            "write_ok target={}, offset={}, bytes={}, data={}, readback=ok, memory_commit=ok",
-            target_id,
-            offset_bytes,
-            data.len(),
-            encode_hex_bytes(&data)
-        );
-        Ok(())
-    }
-
-    fn peek_memory_bytes(&self, args: &[&str]) -> AppResult<()> {
-        if args.len() != 3 {
-            return Err("peek requires <target> <offset> <length>".to_string());
-        }
-
-        let target_id = parse_target_value(args[0])?;
-        let offset_bytes = parse_u64_value(args[1], "offset")?;
-        let length = parse_usize_value(args[2], "length")?;
-        if length == 0 {
-            return Err("length must be > 0".to_string());
-        }
-
-        let local_disk = self
-            .disks
-            .get(&target_id)
-            .ok_or_else(|| format!("target-not-found: {}", target_id))?;
-        validate_range(local_disk.disk_size_bytes, offset_bytes, length)?;
-
-        let buffer = local_disk
-            .dense_mem
-            .snapshot_range(offset_bytes, length)
-            .map_err(|error| error.to_string())?;
-        println!(
-            "peek target={}, offset={}, bytes={}, data={}",
-            target_id,
-            offset_bytes,
-            buffer.len(),
-            encode_hex_bytes(&buffer)
-        );
         Ok(())
     }
 
@@ -578,17 +430,14 @@ fn print_usage() {
 fn print_runtime_help() {
     println!("commands:");
     println!("  help                               show this help");
-    println!("  state                              print AppKernel session state");
+    println!("  query                              print AppKernel session state");
     println!("  ct <disk-size-mib> [dense|auto] [true|false] [target]");
     println!("                                     create one denseMem disk");
     println!("  rm <target>                        remove one disk target");
     println!("  rm all                             remove all disk targets");
     println!("  ls                                 list managed targets and visible YumeDisk disks");
     println!("  stats                              print aggregated AppKernel counters");
-    println!("  wr <target> <offset> <hex-bytes>   write bytes through PhysicalDrive and verify commit");
-    println!("  rd <target> <offset> <length>      read bytes through PhysicalDrive");
-    println!("  peek <target> <offset> <length>    read bytes from denseMem backing");
-    println!("  logs [count]                       print recent backend log lines");
+    println!("  debug                              print backend snapshot");
     println!("  exit                               close session and quit");
 }
 
@@ -659,160 +508,6 @@ fn parse_u32_value(text: &str, name: &str) -> AppResult<u32> {
 fn parse_u64_value(text: &str, name: &str) -> AppResult<u64> {
     text.parse::<u64>()
         .map_err(|_| format!("invalid {}: {}", name, text))
-}
-
-fn parse_usize_value(text: &str, name: &str) -> AppResult<usize> {
-    text.parse::<usize>()
-        .map_err(|_| format!("invalid {}: {}", name, text))
-}
-
-fn validate_range(total_bytes: u64, offset_bytes: u64, length: usize) -> AppResult<()> {
-    let end = offset_bytes
-        .checked_add(length as u64)
-        .ok_or_else(|| "range-overflow".to_string())?;
-    if end > total_bytes {
-        return Err(format!(
-            "range-out-of-bounds offset={} length={} total={}",
-            offset_bytes, length, total_bytes
-        ));
-    }
-    Ok(())
-}
-
-fn compute_aligned_range(offset_bytes: u64, length: usize, sector_size: u32) -> AppResult<AlignedRange> {
-    if sector_size == 0 {
-        return Err("sector-size-zero".to_string());
-    }
-
-    let sector_size = u64::from(sector_size);
-    let end_bytes = offset_bytes
-        .checked_add(length as u64)
-        .ok_or_else(|| "range-overflow".to_string())?;
-    let aligned_offset = (offset_bytes / sector_size) * sector_size;
-    let aligned_end = end_bytes
-        .checked_add(sector_size - 1)
-        .ok_or_else(|| "range-overflow".to_string())?
-        / sector_size
-        * sector_size;
-    let aligned_length = usize::try_from(
-        aligned_end
-            .checked_sub(aligned_offset)
-            .ok_or_else(|| "range-overflow".to_string())?,
-    )
-    .map_err(|_| "aligned-range-too-large".to_string())?;
-    let inner_offset = usize::try_from(
-        offset_bytes
-            .checked_sub(aligned_offset)
-            .ok_or_else(|| "range-overflow".to_string())?,
-    )
-    .map_err(|_| "aligned-range-too-large".to_string())?;
-
-    Ok(AlignedRange {
-        aligned_offset,
-        aligned_length,
-        inner_offset,
-    })
-}
-
-fn read_device_range(
-    path: &str,
-    sector_size: u32,
-    offset_bytes: u64,
-    length: usize,
-) -> AppResult<Vec<u8>> {
-    let aligned_range = compute_aligned_range(offset_bytes, length, sector_size)?;
-    let handle = DeviceHandle::open(path, false)?;
-    let mut aligned_buffer = vec![0u8; aligned_range.aligned_length];
-    handle.read_exact_at(aligned_range.aligned_offset, &mut aligned_buffer)?;
-
-    Ok(aligned_buffer
-        [aligned_range.inner_offset..aligned_range.inner_offset + length]
-        .to_vec())
-}
-
-fn write_device_range(
-    path: &str,
-    sector_size: u32,
-    offset_bytes: u64,
-    data: &[u8],
-) -> AppResult<()> {
-    let aligned_range = compute_aligned_range(offset_bytes, data.len(), sector_size)?;
-    let handle = DeviceHandle::open(path, true)?;
-    let mut aligned_buffer = vec![0u8; aligned_range.aligned_length];
-    handle.read_exact_at(aligned_range.aligned_offset, &mut aligned_buffer)?;
-
-    aligned_buffer[aligned_range.inner_offset..aligned_range.inner_offset + data.len()]
-        .copy_from_slice(data);
-    handle.write_all_at(aligned_range.aligned_offset, &aligned_buffer)?;
-    Ok(())
-}
-
-fn wait_for_dense_mem_match(
-    dense_mem: &DenseMem,
-    offset_bytes: u64,
-    data: &[u8],
-    timeout: Duration,
-) -> AppResult<()> {
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .ok_or_else(|| "timeout-overflow".to_string())?;
-
-    loop {
-        let actual = dense_mem
-            .snapshot_range(offset_bytes, data.len())
-            .map_err(|error| error.to_string())?;
-        if actual == data {
-            return Ok(());
-        }
-
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "memory-commit-timeout offset={} bytes={}",
-                offset_bytes,
-                data.len()
-            ));
-        }
-
-        thread::sleep(MEMORY_COMMIT_POLL);
-    }
-}
-
-fn decode_hex_bytes(text: &str) -> AppResult<Vec<u8>> {
-    let compact = text
-        .strip_prefix("0x")
-        .or_else(|| text.strip_prefix("0X"))
-        .unwrap_or(text)
-        .chars()
-        .filter(|ch| !matches!(ch, '_' | '-' | ':' | ' '))
-        .collect::<String>();
-
-    if compact.is_empty() {
-        return Ok(Vec::new());
-    }
-    if compact.len() % 2 != 0 {
-        return Err("hex-bytes must contain an even number of digits".to_string());
-    }
-
-    let mut bytes = Vec::with_capacity(compact.len() / 2);
-    let raw = compact.as_bytes();
-    let mut index = 0usize;
-    while index < raw.len() {
-        let pair = std::str::from_utf8(&raw[index..index + 2])
-            .map_err(|_| "invalid utf8 in hex data".to_string())?;
-        let value = u8::from_str_radix(pair, 16)
-            .map_err(|_| format!("invalid hex byte: {}", pair))?;
-        bytes.push(value);
-        index += 2;
-    }
-    Ok(bytes)
-}
-
-fn encode_hex_bytes(bytes: &[u8]) -> String {
-    let mut text = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        text.push_str(&format!("{:02x}", byte));
-    }
-    text
 }
 
 fn pending_text(text: &str) -> &str {
