@@ -2,22 +2,15 @@ use core::ffi::c_void;
 
 pub type Handle = *mut c_void;
 pub type Hdevinfo = Handle;
-pub type Dword = u32;
-pub type Word = u16;
 pub type Bool = i32;
-pub type Ulong = u32;
-pub type Wchar = u16;
 
 pub const INVALID_HANDLE_VALUE: Handle = -1isize as Handle;
-pub const TRUE_BOOL: Bool = 1;
-pub const FALSE_BOOL: Bool = 0;
 
 pub const CP_UTF8: u32 = 65001;
 pub const CP_ACP: u32 = 0;
 
 pub const ERROR_SUCCESS: u32 = 0;
 pub const ERROR_INVALID_PARAMETER: u32 = 87;
-pub const ERROR_NOT_ENOUGH_MEMORY: u32 = 8;
 pub const ERROR_NO_MORE_ITEMS: u32 = 259;
 
 pub const GENERIC_READ: u32 = 0x8000_0000;

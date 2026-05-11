@@ -31,13 +31,6 @@ impl StagingStore {
         }
     }
 
-    pub fn count_fragments_locked(&self) -> usize {
-        self.writes
-            .values()
-            .map(|entry| entry.fragments.len())
-            .sum()
-    }
-
     pub fn stage_write_locked(
         &mut self,
         op: &appkernel::AkWriteOp,

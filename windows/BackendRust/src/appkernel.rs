@@ -8,11 +8,11 @@ pub const YUMEDISK_MAX_USABLE_TARGET_ID: u32 = 254;
 pub type AkStatus = i32;
 pub const AK_STATUS_SUCCESS: AkStatus = 0x0000_0000;
 pub const AK_STATUS_UNSUCCESSFUL: AkStatus = 0xC000_0001u32 as i32;
-pub const AK_STATUS_TIMEOUT: AkStatus = 0x0000_0102;
 pub const AK_STATUS_NO_MORE_ENTRIES: AkStatus = 0x8000_001Au32 as i32;
 pub const AK_STATUS_INVALID_PARAMETER: AkStatus = 0xC000_000Du32 as i32;
 
 #[repr(C)]
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AkLifecycleState {
     Init = 0,
@@ -25,6 +25,7 @@ pub enum AkLifecycleState {
 }
 
 #[repr(C)]
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AkEventType {
     DiskOnline = 0,
@@ -169,16 +170,10 @@ pub struct AkSessionStats {
 unsafe extern "C" {
     pub fn AkOpen(params: *const AkOpenParams, out_session: *mut *mut AkSession) -> AkStatus;
     pub fn AkClose(session: *mut AkSession);
-    pub fn AkRemoveAllDisks(session: *mut AkSession) -> AkStatus;
     pub fn AkQuerySessionState(session: *mut AkSession, out_state: *mut AkSessionState)
     -> AkStatus;
     pub fn AkQuerySessionStats(session: *mut AkSession, out_stats: *mut AkSessionStats)
     -> AkStatus;
-    pub fn AkWaitEvent(
-        session: *mut AkSession,
-        timeout_ms: u32,
-        out_event: *mut AkEvent,
-    ) -> AkStatus;
     pub fn AkPollEvent(session: *mut AkSession, out_event: *mut AkEvent) -> AkStatus;
     pub fn AkCreateDisk(
         session: *mut AkSession,
