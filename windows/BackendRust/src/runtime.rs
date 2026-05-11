@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::ffi::c_void;
+use std::mem::ManuallyDrop;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
@@ -405,13 +406,14 @@ impl BackendContext {
         }
     }
 
-    fn run_event_loop(self: Arc<Self>) {
+    fn run_event_loop(inner: Arc<Inner>) {
+        let context = ManuallyDrop::new(Self { inner });
         loop {
-            if self.inner.stop.load(Ordering::Relaxed) {
+            if context.inner.stop.load(Ordering::Relaxed) {
                 break;
             }
 
-            let session = *self.inner.session.lock().expect("session poisoned");
+            let session = *context.inner.session.lock().expect("session poisoned");
             if session == 0 {
                 break;
             }
@@ -436,12 +438,16 @@ impl BackendContext {
                 continue;
             }
             if status != appkernel::AK_STATUS_SUCCESS {
-                self.append_log(format!(
+                context.append_log(format!(
                     "[backend] event loop failed, status={}",
                     format_status_hex(status)
                 ));
-                self.inner.stop.store(true, Ordering::Relaxed);
-                let stop_event = *self.inner.stop_event.lock().expect("stop_event poisoned");
+                context.inner.stop.store(true, Ordering::Relaxed);
+                let stop_event = *context
+                    .inner
+                    .stop_event
+                    .lock()
+                    .expect("stop_event poisoned");
                 if stop_event != 0 {
                     // SAFETY: event handle created by CreateEventW.
                     unsafe { win32::SetEvent(stop_event as win32::Handle) };
@@ -449,7 +455,7 @@ impl BackendContext {
                 break;
             }
 
-            self.handle_appkernel_event(&event_record);
+            context.handle_appkernel_event(&event_record);
         }
     }
 
@@ -629,10 +635,8 @@ impl BackendContext {
             session_config.heartbeat_interval_ms, session_config.initial_event_queue_capacity
         ));
 
-        let event_context = Arc::new(Self {
-            inner: Arc::clone(&self.inner),
-        });
-        let thread = std::thread::spawn(move || event_context.run_event_loop());
+        let thread_inner = Arc::clone(&self.inner);
+        let thread = std::thread::spawn(move || Self::run_event_loop(thread_inner));
         *self
             .inner
             .event_thread

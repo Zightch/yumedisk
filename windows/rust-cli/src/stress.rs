@@ -71,7 +71,7 @@ pub fn run_smoke(config: SmokeConfig) -> Result<(), String> {
         if create_error.is_empty() {
             create_error = "create-failed".to_string();
         }
-        std::mem::forget(context);
+        context.close();
         return Err(create_error);
     }
     println!("state=create target={}", target_id);
@@ -108,13 +108,13 @@ pub fn run_smoke(config: SmokeConfig) -> Result<(), String> {
         if remove_error.is_empty() {
             remove_error = "remove-failed".to_string();
         }
-        std::mem::forget(context);
+        context.close();
         return Err(remove_error);
     }
     println!("state=remove target={}", target_id);
 
+    context.close();
     println!("state=exit ok");
-    std::mem::forget(context);
     Ok(())
 }
 
