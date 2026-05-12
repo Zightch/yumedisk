@@ -8,7 +8,12 @@ pub fn run() {
     tauri::Builder::default()
         .manage(state::client_state::ClientState::default())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![commands::session::initialize_client])
+        .invoke_handler(tauri::generate_handler![
+            commands::session::initialize_client,
+            commands::config::query_backend_defaults,
+            commands::config::query_session_config,
+            commands::disk::query_managed_disks
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
