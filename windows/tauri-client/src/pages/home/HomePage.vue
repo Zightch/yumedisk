@@ -126,8 +126,8 @@ async function handleDeleteDisk(diskId: string) {
 </script>
 
 <template>
-  <el-container direction="vertical" style="min-height: 100vh">
-    <el-header height="auto" style="padding: 16px 16px 0 16px">
+  <el-container class="app-shell home-page" direction="vertical">
+    <el-header class="home-page__header" height="auto">
       <AppHeader
         :session-ready="sessionReady"
         @open-memory-create="handleOpenMemoryCreate"
@@ -135,7 +135,7 @@ async function handleDeleteDisk(diskId: string) {
       />
     </el-header>
 
-    <el-main style="padding: 16px; overflow: hidden">
+    <el-main class="home-page__main">
       <DiskListPanel
         :disks="disks"
         :auto-connect-count="autoConnectCount"

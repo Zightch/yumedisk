@@ -36,11 +36,15 @@ onMounted(() => {
 </script>
 
 <template>
-  <InitPage
-    v-if="phase !== 'ready'"
-    :loading="phase === 'initializing'"
-    :error-text="errorText"
-    @retry="handleRetry"
-  />
-  <HomePage v-else :session-ready="sessionSnapshot?.ready ?? false" />
+  <div class="app-root">
+    <div class="app-window">
+      <InitPage
+        v-if="phase !== 'ready'"
+        :loading="phase === 'initializing'"
+        :error-text="errorText"
+        @retry="handleRetry"
+      />
+      <HomePage v-else :session-ready="sessionSnapshot?.ready ?? false" />
+    </div>
+  </div>
 </template>

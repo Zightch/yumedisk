@@ -1,0 +1,135 @@
+.app-root {
+  min-height: 100vh;
+  background: transparent;
+}
+
+.app-window {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  background: var(--bg-window);
+  overflow: hidden;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 16px 16px;
+  background: transparent;
+}
+
+.home-page {
+  gap: 10px;
+}
+
+.home-page__header {
+  height: auto !important;
+  padding: 0 !important;
+  flex: 0 0 auto;
+}
+
+.home-page__main {
+  min-height: 0;
+  padding: 0 !important;
+  overflow: hidden;
+  flex: 1 1 auto;
+}
+
+.init-page__main {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 0 !important;
+}
+
+.init-page__center {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.init-page__panel {
+  width: min(100%, 520px);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-soft);
+}
+
+.init-page__panel .el-card__body {
+  padding: 0;
+}
+
+.init-page__content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 34px 28px 30px;
+  text-align: center;
+}
+
+.init-page__spinner {
+  width: 56px;
+  height: 56px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+}
+
+.init-page__spinner .el-icon {
+  font-size: 28px;
+}
+
+.init-page__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.04;
+  letter-spacing: -0.04em;
+}
+
+.init-page__description {
+  max-width: 320px;
+  margin: -8px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.init-page__alert {
+  width: 100%;
+  text-align: left;
+}
+
+.init-page__actions {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.init-page__retry {
+  min-width: 120px;
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    padding: 8px 12px 12px;
+  }
+
+  .init-page__content {
+    gap: 16px;
+    padding: 28px 20px 24px;
+  }
+
+  .init-page__title {
+    font-size: 24px;
+  }
+}
