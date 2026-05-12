@@ -136,9 +136,7 @@ html {
 
 body {
   font-family: var(--font-family-base);
-  background:
-    radial-gradient(circle at top left, color-mix(in srgb, var(--accent) 10%, transparent), transparent 30%),
-    var(--bg-page);
+  background: var(--bg-page);
   color: var(--text-primary);
   text-rendering: optimizeLegibility;
 }

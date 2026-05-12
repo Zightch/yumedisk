@@ -34,14 +34,10 @@
   border-radius: var(--radius-small);
   background: transparent;
   color: var(--text-secondary);
-  cursor: default;
+  cursor: pointer;
   transition:
     background var(--transition-fast),
     color var(--transition-fast);
-}
-
-.app-header__settings[disabled] {
-  opacity: 1;
 }
 
 .app-header__settings .el-icon {
@@ -189,7 +185,7 @@
   white-space: nowrap;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 440px) {
   .app-header {
     flex-direction: column;
     align-items: stretch;
