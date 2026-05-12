@@ -15,6 +15,13 @@ pub enum FileMediaKind {
     RawFile,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskStatus {
+    Disconnected,
+    Connected,
+    Invalid,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiskMediaConfig {
     Memory {
@@ -34,7 +41,6 @@ pub struct ConfigDiskRecord {
     pub disk_name: String,
     pub auto_connect: bool,
     pub read_only: bool,
-    pub valid: bool,
     pub invalid_reason: Option<String>,
     pub media: DiskMediaConfig,
 }

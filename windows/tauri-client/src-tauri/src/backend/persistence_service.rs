@@ -104,7 +104,6 @@ fn restore_disk_record(
                     disk_name: persisted_disk.disk_name,
                     auto_connect: persisted_disk.auto_connect,
                     read_only: false,
-                    valid: true,
                     invalid_reason: None,
                     media: DiskMediaConfig::Memory {
                         memory_kind,
@@ -132,7 +131,6 @@ fn restore_disk_record(
                             disk_name: persisted_disk.disk_name,
                             auto_connect: persisted_disk.auto_connect,
                             read_only,
-                            valid: true,
                             invalid_reason: None,
                             media: DiskMediaConfig::File {
                                 file_kind,
@@ -149,7 +147,6 @@ fn restore_disk_record(
                         disk_name: persisted_disk.disk_name,
                         auto_connect: persisted_disk.auto_connect,
                         read_only: false,
-                        valid: false,
                         invalid_reason: Some(error.message),
                         media: DiskMediaConfig::File {
                             file_kind,

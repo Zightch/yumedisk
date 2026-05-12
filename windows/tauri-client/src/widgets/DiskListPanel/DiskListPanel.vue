@@ -22,6 +22,22 @@ const emit = defineEmits<{
 }>();
 
 const diskCount = computed(() => props.disks.length);
+
+function resolveStatusType(disk: HomeDiskListItem): "success" | "info" | "danger" {
+  if (disk.status === "invalid") {
+    return "danger";
+  }
+
+  return disk.status === "connected" ? "success" : "info";
+}
+
+function resolveStatusText(disk: HomeDiskListItem): string {
+  if (disk.status === "invalid") {
+    return "无效";
+  }
+
+  return disk.status === "connected" ? "已连接" : "未连接";
+}
 </script>
 
 <template>
@@ -73,9 +89,6 @@ const diskCount = computed(() => props.disks.length);
                     <el-tag v-if="disk.readOnly" size="small" type="warning" effect="plain">
                       只读
                     </el-tag>
-                    <el-tag v-if="!disk.valid" size="small" type="danger" effect="plain">
-                      无效
-                    </el-tag>
                     <el-tag v-if="disk.autoConnect" size="small" type="info" effect="plain">
                       自动连接
                     </el-tag>
@@ -85,15 +98,24 @@ const diskCount = computed(() => props.disks.length);
 
               <el-col :xs="24" :sm="8" style="display: flex; justify-content: flex-end">
                 <el-space wrap>
-                  <el-tag :type="disk.connected ? 'success' : 'info'" round>
-                    {{ disk.connected ? "已连接" : "未连接" }}
+                  <el-tooltip
+                    v-if="disk.status === 'invalid' && disk.invalidReason"
+                    :content="disk.invalidReason"
+                    placement="top"
+                  >
+                    <el-tag :type="resolveStatusType(disk)" round>
+                      {{ resolveStatusText(disk) }}
+                    </el-tag>
+                  </el-tooltip>
+                  <el-tag v-else :type="resolveStatusType(disk)" round>
+                    {{ resolveStatusText(disk) }}
                   </el-tag>
                   <el-button
-                    v-if="!disk.connected"
+                    v-if="disk.status !== 'connected'"
                     type="primary"
                     plain
                     size="small"
-                    :disabled="!disk.valid"
+                    :disabled="disk.status === 'invalid'"
                     :loading="actionLoadingDiskId === disk.diskId"
                     @click="emit('connect', disk.diskId)"
                   >

@@ -15,6 +15,7 @@ use crate::backend::raw_file_media::RawFileMedia;
 use crate::backend::raw_file_media::RawFileMediaError;
 use crate::state::disk_store::ConfigDiskRecord;
 use crate::state::disk_store::DiskMediaConfig;
+use crate::state::disk_store::DiskStatus;
 use crate::state::disk_store::DiskStore;
 use crate::state::disk_store::FileMediaKind;
 use crate::state::disk_store::MemoryMediaKind;
@@ -25,9 +26,8 @@ pub struct HomeDiskListItemSnapshot {
     pub disk_name: String,
     pub auto_connect: bool,
     pub read_only: bool,
-    pub valid: bool,
+    pub status: DiskStatus,
     pub invalid_reason: Option<String>,
-    pub connected: bool,
     pub online: bool,
     pub target_id: Option<u32>,
     pub lifecycle_text: String,
@@ -92,7 +92,7 @@ pub fn connect_disk(
         ));
     }
 
-    if !config_disk.valid {
+    if matches!(resolve_disk_status(&config_disk, None), DiskStatus::Invalid) {
         return Err(ApiError::new(
             "disk-invalid",
             "磁盘当前无效，不能连接",
@@ -211,7 +211,6 @@ pub fn create_memory_disk(
             disk_name: disk_name.to_string(),
             auto_connect: request.auto_connect,
             read_only: false,
-            valid: true,
             invalid_reason: None,
             media: DiskMediaConfig::Memory {
                 memory_kind,
@@ -266,7 +265,6 @@ pub fn create_file_disk(
             disk_name: disk_name.to_string(),
             auto_connect: request.auto_connect,
             read_only,
-            valid: true,
             invalid_reason: None,
             media: DiskMediaConfig::File {
                 file_kind: FileMediaKind::RawFile,
@@ -384,6 +382,7 @@ fn map_home_disk_list_item_snapshot(
     connected_target_id: Option<u32>,
     runtime_by_target: &HashMap<u32, ManagedDiskSnapshot>,
 ) -> HomeDiskListItemSnapshot {
+    let status = resolve_disk_status(&config_disk, connected_target_id);
     let runtime_snapshot = connected_target_id.and_then(|value| runtime_by_target.get(&value));
 
     HomeDiskListItemSnapshot {
@@ -391,9 +390,8 @@ fn map_home_disk_list_item_snapshot(
         disk_name: config_disk.disk_name,
         auto_connect: config_disk.auto_connect,
         read_only: config_disk.read_only,
-        valid: config_disk.valid,
+        status,
         invalid_reason: config_disk.invalid_reason,
-        connected: connected_target_id.is_some(),
         online: runtime_snapshot
             .map(|snapshot| snapshot.online)
             .unwrap_or(false),
@@ -409,6 +407,18 @@ fn map_home_disk_list_item_snapshot(
             .unwrap_or_default(),
         media: config_disk.media,
     }
+}
+
+fn resolve_disk_status(config_disk: &ConfigDiskRecord, connected_target_id: Option<u32>) -> DiskStatus {
+    if config_disk.invalid_reason.is_some() {
+        return DiskStatus::Invalid;
+    }
+
+    if connected_target_id.is_some() {
+        return DiskStatus::Connected;
+    }
+
+    DiskStatus::Disconnected
 }
 
 fn build_disk_config(config_disk: &ConfigDiskRecord) -> DiskConfig {

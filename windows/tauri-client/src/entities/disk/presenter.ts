@@ -15,10 +15,6 @@ export function formatDiskCapacityText(disk: HomeDiskListItem): string {
 }
 
 export function formatDiskDetailText(disk: HomeDiskListItem): string | null {
-  if (!disk.valid) {
-    return disk.invalidReason ?? "当前磁盘无效";
-  }
-
   if (disk.media.kind !== "file") {
     return null;
   }

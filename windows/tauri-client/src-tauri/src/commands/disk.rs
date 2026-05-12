@@ -7,6 +7,7 @@ use crate::backend::disk_service;
 use crate::backend::persistence_service;
 use crate::state::client_state::ClientState;
 use crate::state::disk_store::DiskMediaConfig;
+use crate::state::disk_store::DiskStatus;
 use crate::state::disk_store::FileMediaKind;
 use crate::state::disk_store::MemoryMediaKind;
 
@@ -111,6 +112,14 @@ pub enum FileMediaKindDto {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DiskStatusDto {
+    Disconnected,
+    Connected,
+    Invalid,
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum HomeDiskMediaDto {
     Memory {
@@ -136,9 +145,8 @@ pub struct HomeDiskListItemDto {
     pub disk_name: String,
     pub auto_connect: bool,
     pub read_only: bool,
-    pub valid: bool,
+    pub status: DiskStatusDto,
     pub invalid_reason: Option<String>,
-    pub connected: bool,
     pub online: bool,
     pub target_id: Option<u32>,
     pub lifecycle_text: String,
@@ -203,9 +211,12 @@ fn map_home_disk_list_item_dto(
         disk_name: snapshot.disk_name,
         auto_connect: snapshot.auto_connect,
         read_only: snapshot.read_only,
-        valid: snapshot.valid,
+        status: match snapshot.status {
+            DiskStatus::Disconnected => DiskStatusDto::Disconnected,
+            DiskStatus::Connected => DiskStatusDto::Connected,
+            DiskStatus::Invalid => DiskStatusDto::Invalid,
+        },
         invalid_reason: snapshot.invalid_reason,
-        connected: snapshot.connected,
         online: snapshot.online,
         target_id: snapshot.target_id,
         lifecycle_text: snapshot.lifecycle_text,

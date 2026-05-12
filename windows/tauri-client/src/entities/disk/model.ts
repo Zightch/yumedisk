@@ -1,6 +1,7 @@
 export type MemoryMediaKind = "denseMem" | "sparseMem";
 export type FileMediaKind = "rawFile";
 export type MemoryCreateKind = "auto" | MemoryMediaKind;
+export type DiskStatus = "disconnected" | "connected" | "invalid";
 
 export type HomeDiskMedia =
   | {
@@ -20,9 +21,8 @@ export interface HomeDiskListItem {
   diskName: string;
   autoConnect: boolean;
   readOnly: boolean;
-  valid: boolean;
+  status: DiskStatus;
   invalidReason: string | null;
-  connected: boolean;
   online: boolean;
   targetId: number | null;
   lifecycleText: string;
