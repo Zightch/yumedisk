@@ -71,8 +71,8 @@ impl Default for PersistedClientConfig {
             version: CONFIG_VERSION,
             session_config: PersistedSessionConfig {
                 heartbeat_interval_ms: backend_rust::SessionConfig::default().heartbeat_interval_ms,
-                initial_event_queue_capacity:
-                    backend_rust::SessionConfig::default().initial_event_queue_capacity,
+                initial_event_queue_capacity: backend_rust::SessionConfig::default()
+                    .initial_event_queue_capacity,
             },
             disks: Vec::new(),
         }
@@ -83,9 +83,18 @@ impl Default for PersistedClientConfig {
 pub enum ClientConfigStoreError {
     HomeDirectoryNotFound,
     UnsupportedVersion(u32),
-    CreateDirectoryFailed { path: PathBuf, source: io::Error },
-    ReadFailed { path: PathBuf, source: io::Error },
-    WriteFailed { path: PathBuf, source: io::Error },
+    CreateDirectoryFailed {
+        path: PathBuf,
+        source: io::Error,
+    },
+    ReadFailed {
+        path: PathBuf,
+        source: io::Error,
+    },
+    WriteFailed {
+        path: PathBuf,
+        source: io::Error,
+    },
     ParseFailed {
         path: PathBuf,
         source: serde_json::Error,
@@ -101,16 +110,36 @@ impl fmt::Display for ClientConfigStoreError {
                 write!(formatter, "unsupported config version: {}", version)
             }
             Self::CreateDirectoryFailed { path, source } => {
-                write!(formatter, "create directory failed: {} ({})", path.display(), source)
+                write!(
+                    formatter,
+                    "create directory failed: {} ({})",
+                    path.display(),
+                    source
+                )
             }
             Self::ReadFailed { path, source } => {
-                write!(formatter, "read config failed: {} ({})", path.display(), source)
+                write!(
+                    formatter,
+                    "read config failed: {} ({})",
+                    path.display(),
+                    source
+                )
             }
             Self::WriteFailed { path, source } => {
-                write!(formatter, "write config failed: {} ({})", path.display(), source)
+                write!(
+                    formatter,
+                    "write config failed: {} ({})",
+                    path.display(),
+                    source
+                )
             }
             Self::ParseFailed { path, source } => {
-                write!(formatter, "parse config failed: {} ({})", path.display(), source)
+                write!(
+                    formatter,
+                    "parse config failed: {} ({})",
+                    path.display(),
+                    source
+                )
             }
             Self::SerializeFailed(source) => {
                 write!(formatter, "serialize config failed: {}", source)
@@ -142,9 +171,7 @@ pub fn load_client_config() -> Result<PersistedClientConfig, ClientConfigStoreEr
     Ok(config)
 }
 
-pub fn save_client_config(
-    config: &PersistedClientConfig,
-) -> Result<(), ClientConfigStoreError> {
+pub fn save_client_config(config: &PersistedClientConfig) -> Result<(), ClientConfigStoreError> {
     let path = resolve_client_config_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|source| {
@@ -155,8 +182,8 @@ pub fn save_client_config(
         })?;
     }
 
-    let text = serde_json::to_string_pretty(config)
-        .map_err(ClientConfigStoreError::SerializeFailed)?;
+    let text =
+        serde_json::to_string_pretty(config).map_err(ClientConfigStoreError::SerializeFailed)?;
     fs::write(&path, text).map_err(|source| ClientConfigStoreError::WriteFailed {
         path: path.clone(),
         source,

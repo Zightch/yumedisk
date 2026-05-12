@@ -10,7 +10,10 @@ use backend_rust::Media;
 
 #[derive(Debug)]
 pub enum RawFileMediaError {
-    OpenFailed { read_write: io::Error, read_only: io::Error },
+    OpenFailed {
+        read_write: io::Error,
+        read_only: io::Error,
+    },
     MetadataFailed(io::Error),
     EmptyFile,
 }
@@ -71,7 +74,10 @@ impl Media for RawFileMedia {
             return Ok(());
         }
 
-        let file = self.file.lock().expect("raw file media mutex should not be poisoned");
+        let file = self
+            .file
+            .lock()
+            .expect("raw file media mutex should not be poisoned");
         read_all_at(&file, offset, buffer).map_err(|_| BackendError::InvalidParameter)
     }
 
@@ -84,7 +90,10 @@ impl Media for RawFileMedia {
             return Err(BackendError::InvalidParameter);
         }
 
-        let file = self.file.lock().expect("raw file media mutex should not be poisoned");
+        let file = self
+            .file
+            .lock()
+            .expect("raw file media mutex should not be poisoned");
         write_all_at(&file, offset, data).map_err(|_| BackendError::InvalidParameter)
     }
 }

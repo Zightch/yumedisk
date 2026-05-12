@@ -43,10 +43,7 @@ pub fn load_client_state() -> Result<RestoredClientState, ApiError> {
     })
 }
 
-pub fn save_client_state(
-    backend: &BackendContext,
-    disk_store: &DiskStore,
-) -> Result<(), ApiError> {
+pub fn save_client_state(backend: &BackendContext, disk_store: &DiskStore) -> Result<(), ApiError> {
     let persisted_config = PersistedClientConfig {
         version: 1,
         session_config: map_session_config(backend.session_config()),
@@ -162,14 +159,16 @@ fn map_persisted_disk_record(config_disk: ConfigDiskRecord) -> PersistedDiskReco
                 },
                 capacity_bytes,
             },
-            DiskMediaConfig::File { file_kind, file_path, .. } => {
-                PersistedDiskMediaConfig::File {
-                    file_kind: match file_kind {
-                        FileMediaKind::RawFile => PersistedFileMediaKind::RawFile,
-                    },
-                    file_path,
-                }
-            }
+            DiskMediaConfig::File {
+                file_kind,
+                file_path,
+                ..
+            } => PersistedDiskMediaConfig::File {
+                file_kind: match file_kind {
+                    FileMediaKind::RawFile => PersistedFileMediaKind::RawFile,
+                },
+                file_path,
+            },
         },
     }
 }
@@ -196,14 +195,10 @@ fn open_raw_file_media(file_path: &str) -> Result<RawFileMedia, ApiError> {
         ));
     }
 
-    RawFileMedia::open(&file_path_buf)
-        .map_err(|error| map_raw_file_media_error(error, file_path))
+    RawFileMedia::open(&file_path_buf).map_err(|error| map_raw_file_media_error(error, file_path))
 }
 
-fn map_dense_memory_media_error(
-    error: DenseMemoryMediaError,
-    capacity_bytes: u64,
-) -> ApiError {
+fn map_dense_memory_media_error(error: DenseMemoryMediaError, capacity_bytes: u64) -> ApiError {
     match error {
         DenseMemoryMediaError::SizeExceedsProcessLimit => ApiError::new(
             "dense-memory-size-exceeds-process-limit",
