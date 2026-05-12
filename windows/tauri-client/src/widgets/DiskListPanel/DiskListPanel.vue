@@ -1,11 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { HomeDiskListItem } from "../../entities/disk/model";
-import {
-  formatDiskCapacityText,
-  formatDiskDetailText,
-  formatDiskKindText,
-} from "../../entities/disk/presenter";
+import DiskCard from "../DiskCard/DiskCard.vue";
 
 const props = defineProps<{
   disks: HomeDiskListItem[];
@@ -23,22 +19,6 @@ const emit = defineEmits<{
 }>();
 
 const diskCount = computed(() => props.disks.length);
-
-function resolveStatusType(disk: HomeDiskListItem): "success" | "info" | "danger" {
-  if (disk.status === "invalid") {
-    return "danger";
-  }
-
-  return disk.status === "connected" ? "success" : "info";
-}
-
-function resolveStatusText(disk: HomeDiskListItem): string {
-  if (disk.status === "invalid") {
-    return "无效";
-  }
-
-  return disk.status === "connected" ? "已连接" : "未连接";
-}
 </script>
 
 <template>
@@ -64,95 +44,16 @@ function resolveStatusText(disk: HomeDiskListItem): string {
       </div>
 
       <div v-else-if="disks.length > 0" class="list-panel__content">
-        <el-card
+        <DiskCard
           v-for="disk in disks"
           :key="disk.diskId"
-          shadow="never"
-        >
-          <el-space direction="vertical" fill>
-            <el-row justify="space-between" align="middle" :gutter="16">
-              <el-col :xs="24" :sm="16">
-                <el-space direction="vertical" fill size="small">
-                  <el-text>
-                    <strong>{{ disk.diskName }}</strong>
-                  </el-text>
-                  <el-space wrap size="small">
-                    <el-tag size="small" effect="plain">
-                      {{ formatDiskKindText(disk) }}
-                    </el-tag>
-                    <el-text type="info">{{ formatDiskCapacityText(disk) }}</el-text>
-                    <el-tag v-if="disk.readOnly" size="small" type="warning" effect="plain">
-                      只读
-                    </el-tag>
-                    <el-tag v-if="disk.autoConnect" size="small" type="info" effect="plain">
-                      自动连接
-                    </el-tag>
-                  </el-space>
-                </el-space>
-              </el-col>
-
-              <el-col :xs="24" :sm="8" style="display: flex; justify-content: flex-end">
-                <el-space wrap>
-                  <el-tooltip
-                    v-if="disk.status === 'invalid' && disk.invalidReason"
-                    :content="disk.invalidReason"
-                    placement="top"
-                  >
-                    <el-tag :type="resolveStatusType(disk)" round>
-                      {{ resolveStatusText(disk) }}
-                    </el-tag>
-                  </el-tooltip>
-                  <el-tag v-else :type="resolveStatusType(disk)" round>
-                    {{ resolveStatusText(disk) }}
-                  </el-tag>
-                  <el-button
-                    v-if="disk.status !== 'connected'"
-                    type="primary"
-                    plain
-                    size="small"
-                    :disabled="disk.status === 'invalid'"
-                    :loading="actionLoadingDiskId === disk.diskId"
-                    @click="emit('connect', disk.diskId)"
-                  >
-                    连接
-                  </el-button>
-                  <el-button
-                    v-else
-                    type="danger"
-                    plain
-                    size="small"
-                    :loading="actionLoadingDiskId === disk.diskId"
-                    @click="emit('disconnect', disk.diskId)"
-                  >
-                    断开
-                  </el-button>
-                  <el-button
-                    type="primary"
-                    plain
-                    size="small"
-                    :loading="actionLoadingDiskId === disk.diskId"
-                    @click="emit('edit', disk.diskId)"
-                  >
-                    编辑
-                  </el-button>
-                  <el-button
-                    type="danger"
-                    plain
-                    size="small"
-                    :loading="actionLoadingDiskId === disk.diskId"
-                    @click="emit('delete', disk.diskId)"
-                  >
-                    删除
-                  </el-button>
-                </el-space>
-              </el-col>
-            </el-row>
-
-            <el-text v-if="formatDiskDetailText(disk)" type="info" truncated>
-              {{ formatDiskDetailText(disk) }}
-            </el-text>
-          </el-space>
-        </el-card>
+          :disk="disk"
+          :action-loading="actionLoadingDiskId === disk.diskId"
+          @connect="emit('connect', $event)"
+          @disconnect="emit('disconnect', $event)"
+          @edit="emit('edit', $event)"
+          @delete="emit('delete', $event)"
+        />
       </div>
 
       <el-alert

@@ -14,6 +14,10 @@ export function formatDiskCapacityText(disk: HomeDiskListItem): string {
   return formatBytes(disk.media.capacityBytes);
 }
 
+export function formatDiskSummaryText(disk: HomeDiskListItem): string {
+  return `${formatDiskKindText(disk)} · ${formatDiskCapacityText(disk)}`;
+}
+
 export function formatDiskDetailText(disk: HomeDiskListItem): string | null {
   if (disk.media.kind !== "file") {
     return null;

@@ -1,0 +1,239 @@
+.disk-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  min-height: 72px;
+  padding: 10px 12px;
+  background: var(--bg-surface-selected);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-card);
+  transition:
+    border-color var(--transition-fast),
+    background var(--transition-fast),
+    box-shadow var(--transition-fast);
+}
+
+.disk-card:hover {
+  border-color: var(--border-strong);
+}
+
+.disk-card.is-connected {
+  background:
+    linear-gradient(180deg, var(--bg-surface-selected), var(--bg-surface-selected)),
+    linear-gradient(90deg, var(--accent-soft), rgba(255, 255, 255, 0));
+  border-color: var(--accent-border);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+}
+
+.disk-card.is-connected:hover {
+  border-color: var(--accent-border);
+}
+
+.disk-card__status {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  max-width: 84px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.disk-card__status--connected {
+  color: var(--success);
+}
+
+.disk-card__status--invalid {
+  color: var(--danger);
+}
+
+.disk-card__avatar {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.disk-card__avatar--memory {
+  color: #f7b267;
+}
+
+.disk-card__avatar--file {
+  color: #80b7ff;
+}
+
+.disk-card__main {
+  min-width: 0;
+  min-height: 54px;
+  padding-right: 12px;
+}
+
+.disk-card__topline {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.disk-card__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.disk-card__summary {
+  margin: 4px 0 0;
+  color: var(--accent-strong);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.disk-card__detail {
+  margin: 4px 0 0;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.disk-card__side {
+  min-width: 140px;
+  align-self: stretch;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+}
+
+.disk-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    visibility 160ms ease;
+}
+
+.disk-card:hover .disk-card__actions,
+.disk-card:focus-within .disk-card__actions {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.disk-card__primary-action.el-button {
+  min-width: 56px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: 8px;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: none;
+}
+
+.disk-card__primary-action--connect.el-button {
+  --el-button-bg-color: #3ddc84;
+  --el-button-border-color: #3ddc84;
+  --el-button-hover-bg-color: #4fe890;
+  --el-button-hover-border-color: #4fe890;
+  --el-button-active-bg-color: #33c172;
+  --el-button-active-border-color: #33c172;
+  --el-button-disabled-bg-color: rgba(61, 220, 132, 0.28);
+  --el-button-disabled-border-color: rgba(61, 220, 132, 0.28);
+}
+
+.disk-card__primary-action--disconnect.el-button {
+  --el-button-bg-color: #ff6b6b;
+  --el-button-border-color: #ff6b6b;
+  --el-button-hover-bg-color: #ff8080;
+  --el-button-hover-border-color: #ff8080;
+  --el-button-active-bg-color: #f15f5f;
+  --el-button-active-border-color: #f15f5f;
+}
+
+.disk-card__icon-action {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.disk-card__icon-action:hover:not(:disabled) {
+  background: var(--bg-surface-selected);
+  border-color: var(--border-soft);
+}
+
+.disk-card__icon-action--danger:hover:not(:disabled) {
+  color: var(--danger);
+}
+
+.disk-card__icon-action:disabled {
+  opacity: 0.56;
+  cursor: not-allowed;
+}
+
+.disk-card__icon-action .el-icon {
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .disk-card {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .disk-card__side {
+    grid-column: 2 / -1;
+    min-width: 0;
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 320px) {
+  .disk-card {
+    grid-template-columns: 1fr;
+  }
+
+  .disk-card__avatar {
+    display: none;
+  }
+
+  .disk-card__side {
+    grid-column: auto;
+  }
+}
