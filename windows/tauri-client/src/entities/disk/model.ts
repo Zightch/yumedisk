@@ -44,3 +44,17 @@ export interface CreateMemoryDiskRequest {
 export interface CreateMemoryDiskResponse {
   diskId: string;
 }
+
+export interface CreateFileDiskRequest {
+  diskName: string;
+  filePath: string;
+  autoConnect: boolean;
+}
+
+export interface CreateFileDiskResponse {
+  diskId: string;
+}
+
+export interface PickRawFilePathResponse {
+  filePath: string | null;
+}

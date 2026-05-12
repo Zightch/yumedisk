@@ -1,8 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  CreateFileDiskRequest,
+  CreateFileDiskResponse,
   CreateMemoryDiskRequest,
   CreateMemoryDiskResponse,
   HomeDiskListSnapshot,
+  PickRawFilePathResponse,
 } from "../../entities/disk/model";
 
 export async function queryHomeDiskList(): Promise<HomeDiskListSnapshot> {
@@ -13,4 +16,15 @@ export async function createMemoryDisk(
   request: CreateMemoryDiskRequest,
 ): Promise<CreateMemoryDiskResponse> {
   return invoke<CreateMemoryDiskResponse>("create_memory_disk", { request });
+}
+
+export async function pickRawFilePath(): Promise<string | null> {
+  const response = await invoke<PickRawFilePathResponse>("pick_raw_file_path");
+  return response.filePath;
+}
+
+export async function createFileDisk(
+  request: CreateFileDiskRequest,
+): Promise<CreateFileDiskResponse> {
+  return invoke<CreateFileDiskResponse>("create_file_disk", { request });
 }

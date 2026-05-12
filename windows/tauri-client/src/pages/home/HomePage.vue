@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
 import type { HomeDiskListItem } from "../../entities/disk/model";
+import CreateFileDiskDialog from "../../features/createFileDisk/CreateFileDiskDialog.vue";
 import CreateMemoryDiskDialog from "../../features/createMemoryDisk/CreateMemoryDiskDialog.vue";
 import { queryHomeDiskList } from "../../shared/api/diskClient";
 import { getErrorMessage } from "../../shared/api/sessionClient";
@@ -16,6 +17,7 @@ const autoConnectCount = ref(0);
 const loading = ref(true);
 const errorText = ref<string | null>(null);
 const memoryCreateVisible = ref(false);
+const fileCreateVisible = ref(false);
 
 async function loadHomeDiskList() {
   loading.value = true;
@@ -42,7 +44,15 @@ function handleOpenMemoryCreate() {
   memoryCreateVisible.value = true;
 }
 
+function handleOpenFileCreate() {
+  fileCreateVisible.value = true;
+}
+
 async function handleMemoryDiskCreated() {
+  await loadHomeDiskList();
+}
+
+async function handleFileDiskCreated() {
   await loadHomeDiskList();
 }
 </script>
@@ -53,6 +63,7 @@ async function handleMemoryDiskCreated() {
       <AppHeader
         :session-ready="sessionReady"
         @open-memory-create="handleOpenMemoryCreate"
+        @open-file-create="handleOpenFileCreate"
       />
     </el-header>
 
@@ -69,5 +80,9 @@ async function handleMemoryDiskCreated() {
   <CreateMemoryDiskDialog
     v-model="memoryCreateVisible"
     @created="handleMemoryDiskCreated"
+  />
+  <CreateFileDiskDialog
+    v-model="fileCreateVisible"
+    @created="handleFileDiskCreated"
   />
 </template>

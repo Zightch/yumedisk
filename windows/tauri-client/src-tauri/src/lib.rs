@@ -14,7 +14,9 @@ pub fn run() {
             commands::config::query_session_config,
             commands::disk::query_managed_disks,
             commands::disk::query_home_disk_list,
-            commands::disk::create_memory_disk
+            commands::disk::create_memory_disk,
+            commands::disk::pick_raw_file_path,
+            commands::disk::create_file_disk
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

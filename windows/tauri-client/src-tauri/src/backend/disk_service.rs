@@ -1,16 +1,21 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use backend_rust::BackendContext;
 use backend_rust::Media;
 use backend_rust::ManagedDiskSnapshot;
+use rfd::FileDialog;
 
 use crate::api_error::ApiError;
 use crate::backend::memory_media::DenseMemoryMedia;
 use crate::backend::memory_media::DenseMemoryMediaError;
 use crate::backend::memory_media::SparseMemoryMedia;
+use crate::backend::raw_file_media::RawFileMedia;
+use crate::backend::raw_file_media::RawFileMediaError;
 use crate::state::disk_store::ConfigDiskRecord;
 use crate::state::disk_store::DiskMediaConfig;
 use crate::state::disk_store::DiskStore;
+use crate::state::disk_store::FileMediaKind;
 use crate::state::disk_store::MemoryMediaKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +50,13 @@ pub struct CreateMemoryDiskRequest {
     pub disk_name: String,
     pub capacity_mib: u64,
     pub requested_memory_kind: RequestedMemoryMediaKind,
+    pub auto_connect: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateFileDiskRequest {
+    pub disk_name: String,
+    pub file_path: String,
     pub auto_connect: bool,
 }
 
@@ -103,6 +115,68 @@ pub fn create_memory_disk(
             },
         },
         media,
+    );
+
+    Ok(disk_id)
+}
+
+pub fn pick_raw_file_path() -> Option<String> {
+    FileDialog::new()
+        .set_title("选择 RAW 文件")
+        .pick_file()
+        .map(|path| path.display().to_string())
+}
+
+pub fn create_file_disk(
+    disk_store: &mut DiskStore,
+    request: CreateFileDiskRequest,
+) -> Result<String, ApiError> {
+    let disk_name = request.disk_name.trim();
+    if disk_name.is_empty() {
+        return Err(ApiError::new(
+            "invalid-disk-name",
+            "磁盘名称不能为空",
+            None,
+        ));
+    }
+
+    let file_path = request.file_path.trim();
+    if file_path.is_empty() {
+        return Err(ApiError::new(
+            "invalid-file-path",
+            "文件路径不能为空",
+            None,
+        ));
+    }
+
+    let file_path_buf = PathBuf::from(file_path);
+    if !file_path_buf.is_file() {
+        return Err(ApiError::new(
+            "invalid-file-path",
+            "文件路径必须指向已存在文件",
+            Some(file_path.to_string()),
+        ));
+    }
+
+    let media = RawFileMedia::open(&file_path_buf)
+        .map_err(|error| map_raw_file_media_error(error, file_path))?;
+    let capacity_bytes = media.size_bytes();
+    let read_only = media.read_only();
+    let disk_id = disk_store.allocate_disk_id();
+
+    disk_store.insert_unconnected_disk(
+        ConfigDiskRecord {
+            disk_id: disk_id.clone(),
+            disk_name: disk_name.to_string(),
+            auto_connect: request.auto_connect,
+            read_only,
+            media: DiskMediaConfig::File {
+                file_kind: FileMediaKind::RawFile,
+                file_path: file_path.to_string(),
+                capacity_bytes,
+            },
+        },
+        Box::new(media),
     );
 
     Ok(disk_id)
@@ -184,6 +258,32 @@ fn map_dense_memory_media_error(
             "dense-memory-allocation-failed",
             "denseMem 分配失败",
             Some(capacity_bytes.to_string()),
+        ),
+    }
+}
+
+fn map_raw_file_media_error(error: RawFileMediaError, file_path: &str) -> ApiError {
+    match error {
+        RawFileMediaError::OpenFailed {
+            read_write,
+            read_only,
+        } => ApiError::new(
+            "raw-file-open-failed",
+            "无法打开 RAW 文件",
+            Some(format!(
+                "{} | readWrite={} | readOnly={}",
+                file_path, read_write, read_only
+            )),
+        ),
+        RawFileMediaError::MetadataFailed(io_error) => ApiError::new(
+            "raw-file-metadata-failed",
+            "读取 RAW 文件信息失败",
+            Some(format!("{} | {}", file_path, io_error)),
+        ),
+        RawFileMediaError::EmptyFile => ApiError::new(
+            "raw-file-empty",
+            "RAW 文件大小必须大于 0",
+            Some(file_path.to_string()),
         ),
     }
 }

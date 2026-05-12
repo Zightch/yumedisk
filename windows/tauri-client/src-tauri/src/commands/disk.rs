@@ -45,9 +45,29 @@ pub struct CreateMemoryDiskRequestDto {
     pub auto_connect: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFileDiskRequestDto {
+    pub disk_name: String,
+    pub file_path: String,
+    pub auto_connect: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMemoryDiskResponse {
+    pub disk_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PickRawFilePathResponse {
+    pub file_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateFileDiskResponse {
     pub disk_id: String,
 }
 
@@ -238,4 +258,35 @@ pub fn create_memory_disk(
     };
 
     Ok(CreateMemoryDiskResponse { disk_id })
+}
+
+#[tauri::command]
+pub fn pick_raw_file_path() -> PickRawFilePathResponse {
+    PickRawFilePathResponse {
+        file_path: disk_service::pick_raw_file_path(),
+    }
+}
+
+#[tauri::command]
+pub fn create_file_disk(
+    state: State<'_, ClientState>,
+    request: CreateFileDiskRequestDto,
+) -> Result<CreateFileDiskResponse, ApiError> {
+    let disk_id = {
+        let mut disk_store = state
+            .disk_store
+            .lock()
+            .expect("disk store mutex should not be poisoned");
+
+        disk_service::create_file_disk(
+            &mut disk_store,
+            disk_service::CreateFileDiskRequest {
+                disk_name: request.disk_name,
+                file_path: request.file_path,
+                auto_connect: request.auto_connect,
+            },
+        )?
+    };
+
+    Ok(CreateFileDiskResponse { disk_id })
 }

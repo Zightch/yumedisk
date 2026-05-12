@@ -8,6 +8,7 @@ defineProps<{
 
 const emit = defineEmits<{
   openMemoryCreate: [];
+  openFileCreate: [];
 }>();
 
 const addPopoverVisible = ref(false);
@@ -15,6 +16,11 @@ const addPopoverVisible = ref(false);
 function handleOpenMemoryCreate() {
   addPopoverVisible.value = false;
   emit("openMemoryCreate");
+}
+
+function handleOpenFileCreate() {
+  addPopoverVisible.value = false;
+  emit("openFileCreate");
 }
 </script>
 
@@ -49,7 +55,7 @@ function handleOpenMemoryCreate() {
             <el-button :icon="Wallet" plain @click="handleOpenMemoryCreate">
               内存盘
             </el-button>
-            <el-button :icon="FolderOpened" plain disabled>
+            <el-button :icon="FolderOpened" plain @click="handleOpenFileCreate">
               文件盘
             </el-button>
             <el-button :icon="Link" plain disabled>
