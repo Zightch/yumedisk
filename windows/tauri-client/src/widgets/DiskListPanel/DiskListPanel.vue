@@ -42,34 +42,28 @@ function resolveStatusText(disk: HomeDiskListItem): string {
 </script>
 
 <template>
-  <el-card shadow="never" style="height: 100%">
+  <el-card class="list-panel" shadow="never">
     <template #header>
-      <el-row justify="space-between" align="middle" :gutter="16">
-        <el-col :xs="24" :sm="12">
-          <el-space wrap>
-            <el-text>
-              <strong>磁盘列表</strong>
-            </el-text>
-            <el-tag size="small" round>{{ diskCount }}</el-tag>
-          </el-space>
-        </el-col>
+      <div class="list-panel__header">
+        <div class="list-panel__title-group">
+          <h2 class="list-panel__title">磁盘列表</h2>
+          <span class="list-panel__count">{{ diskCount }}</span>
+        </div>
 
-        <el-col :xs="24" :sm="12" style="display: flex; justify-content: flex-end">
-          <el-space wrap>
-            <el-text type="info">自动连接</el-text>
-            <el-text>{{ autoConnectCount }} / {{ diskCount }}</el-text>
-          </el-space>
-        </el-col>
-      </el-row>
+        <div class="list-panel__summary">
+          <span class="list-panel__summary-label">自动连接</span>
+          <span class="list-panel__summary-value">{{ autoConnectCount }} / {{ diskCount }}</span>
+        </div>
+      </div>
     </template>
 
-    <el-scrollbar style="height: 100%">
-      <el-space v-if="loading" direction="vertical" fill>
+    <el-scrollbar class="list-panel__scroll">
+      <div v-if="loading" class="list-panel__content list-panel__loading">
         <el-skeleton :rows="3" animated />
         <el-skeleton :rows="3" animated />
-      </el-space>
+      </div>
 
-      <el-space v-else-if="disks.length > 0" direction="vertical" fill>
+      <div v-else-if="disks.length > 0" class="list-panel__content">
         <el-card
           v-for="disk in disks"
           :key="disk.diskId"
@@ -159,17 +153,18 @@ function resolveStatusText(disk: HomeDiskListItem): string {
             </el-text>
           </el-space>
         </el-card>
-      </el-space>
+      </div>
 
       <el-alert
         v-else-if="errorText"
+        class="list-panel__error"
         :title="errorText"
         type="error"
         :closable="false"
         show-icon
       />
 
-      <el-empty v-else description="当前还没有磁盘配置" />
+      <el-empty v-else class="list-panel__empty" description="当前还没有磁盘配置" />
     </el-scrollbar>
   </el-card>
 </template>
