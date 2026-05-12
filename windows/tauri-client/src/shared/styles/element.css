@@ -1,0 +1,140 @@
+body {
+  --el-font-family: var(--font-family-base);
+  --el-color-primary: var(--accent);
+  --el-color-primary-dark-2: color-mix(in srgb, var(--accent) 82%, black);
+  --el-color-primary-light-3: color-mix(in srgb, var(--accent) 76%, white);
+  --el-color-primary-light-5: color-mix(in srgb, var(--accent) 62%, white);
+  --el-color-primary-light-7: color-mix(in srgb, var(--accent) 44%, white);
+  --el-color-primary-light-8: color-mix(in srgb, var(--accent) 34%, white);
+  --el-color-primary-light-9: color-mix(in srgb, var(--accent) 18%, white);
+  --el-color-success: var(--success);
+  --el-color-warning: var(--warning);
+  --el-color-danger: var(--danger);
+  --el-text-color-primary: var(--text-primary);
+  --el-text-color-regular: var(--text-regular);
+  --el-text-color-secondary: var(--text-secondary);
+  --el-text-color-placeholder: var(--text-muted);
+  --el-border-color: var(--border-soft);
+  --el-border-color-light: var(--border-soft);
+  --el-border-color-lighter: var(--border-soft);
+  --el-border-color-extra-light: var(--border-soft);
+  --el-border-color-dark: var(--border-strong);
+  --el-border-color-darker: var(--border-strong);
+  --el-fill-color: var(--bg-surface);
+  --el-fill-color-light: var(--bg-surface-selected);
+  --el-fill-color-lighter: var(--bg-surface-selected);
+  --el-fill-color-extra-light: var(--bg-surface-selected);
+  --el-fill-color-dark: var(--bg-surface);
+  --el-fill-color-darker: var(--bg-window);
+  --el-fill-color-blank: var(--bg-window);
+  --el-bg-color: var(--bg-surface);
+  --el-bg-color-page: var(--bg-window);
+  --el-bg-color-overlay: var(--bg-surface-elevated);
+  --el-mask-color: var(--bg-overlay);
+  --el-mask-color-extra-light: var(--bg-overlay);
+  --el-overlay-color: var(--bg-overlay);
+  --el-overlay-color-light: var(--bg-overlay);
+  --el-overlay-color-lighter: var(--bg-overlay);
+  --el-box-shadow: var(--shadow-soft);
+  --el-box-shadow-light: var(--shadow-soft);
+  --el-box-shadow-dark: var(--shadow-elevated);
+  --el-border-radius-base: var(--radius-control);
+  --el-border-radius-small: var(--radius-small);
+  --el-border-radius-round: var(--radius-pill);
+  --el-border-radius-circle: 50%;
+  --el-disabled-bg-color: var(--bg-surface-selected);
+  --el-disabled-text-color: var(--text-muted);
+  --el-disabled-border-color: var(--border-soft);
+}
+
+body .el-container,
+body .el-header,
+body .el-main,
+body .el-footer {
+  background: transparent;
+}
+
+body .el-card,
+body .el-dialog,
+body .el-popover.el-popper,
+body .el-message,
+body .el-notification {
+  background: var(--bg-surface-elevated);
+  border-color: var(--border-soft);
+  box-shadow: var(--shadow-soft);
+}
+
+body .el-card {
+  --el-card-border-color: var(--border-soft);
+  --el-card-border-radius: var(--radius-panel);
+  --el-card-bg-color: var(--bg-surface);
+}
+
+body .el-dialog {
+  --el-dialog-bg-color: var(--bg-surface-elevated);
+  --el-dialog-border-radius: var(--radius-panel);
+}
+
+body .el-popover.el-popper {
+  padding: 8px;
+  border-radius: 14px;
+}
+
+body .el-button {
+  font-weight: 500;
+}
+
+body .el-button:not(.is-text):not(.is-link) {
+  --el-button-hover-border-color: var(--accent-border);
+  --el-button-active-border-color: color-mix(in srgb, var(--accent) 68%, black);
+  box-shadow: none;
+}
+
+body .el-button--primary {
+  --el-button-bg-color: var(--accent);
+  --el-button-border-color: var(--accent);
+  --el-button-hover-bg-color: var(--accent-strong);
+  --el-button-hover-border-color: var(--accent-strong);
+  --el-button-active-bg-color: color-mix(in srgb, var(--accent) 78%, black);
+  --el-button-active-border-color: color-mix(in srgb, var(--accent) 78%, black);
+  --el-button-disabled-bg-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  --el-button-disabled-border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+body .el-button.is-plain {
+  --el-button-hover-text-color: var(--accent);
+  --el-button-hover-bg-color: var(--accent-soft);
+  --el-button-hover-border-color: var(--accent-border);
+}
+
+body .el-tag {
+  --el-tag-border-radius: var(--radius-pill);
+}
+
+body .el-tag.el-tag--info {
+  --el-tag-bg-color: var(--bg-surface-selected);
+  --el-tag-border-color: var(--border-soft);
+  --el-tag-text-color: var(--text-secondary);
+}
+
+body .el-input__wrapper,
+body .el-textarea__inner,
+body .el-select__wrapper {
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 1px var(--border-soft) inset;
+}
+
+body .el-input__wrapper.is-focus,
+body .el-textarea__inner:focus,
+body .el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--accent-border) inset;
+}
+
+body .el-divider {
+  border-color: var(--border-soft);
+}
+
+body .el-empty__description,
+body .el-alert__description {
+  color: var(--text-secondary);
+}
