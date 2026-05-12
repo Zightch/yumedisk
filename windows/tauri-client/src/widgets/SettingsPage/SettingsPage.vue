@@ -27,18 +27,6 @@ const themeColorOptions: Array<{ value: ThemeColor; label: string }> = [
   { value: "twilightPurple", label: "暮光紫" },
 ];
 
-const recoveryItems = [
-  { label: "启动时自动恢复磁盘", value: "开启" },
-  { label: "内存盘恢复语义提示", value: "显示" },
-  { label: "通知显示时长", value: "3.5 秒" },
-];
-
-const defaultCreateItems = [
-  { label: "默认一级类型", value: "内存" },
-  { label: "默认内存选择策略", value: "自动" },
-  { label: "默认文件实现", value: "rawFile" },
-];
-
 function handleClose() {
   emit("update:modelValue", false);
 }
@@ -125,44 +113,6 @@ function handleThemeColorChange(value: string | number | boolean | undefined) {
                   {{ option.label }}
                 </ElRadioButton>
               </ElRadioGroup>
-            </div>
-          </ElCard>
-
-          <ElCard class="settings-section" shadow="never">
-            <template #header>
-              <div class="settings-section__header">
-                <h3 class="settings-section__title">恢复策略</h3>
-              </div>
-            </template>
-
-            <div class="settings-list">
-              <div
-                v-for="item in recoveryItems"
-                :key="item.label"
-                class="settings-list-item"
-              >
-                <span class="settings-list-item__label">{{ item.label }}</span>
-                <strong class="settings-list-item__value">{{ item.value }}</strong>
-              </div>
-            </div>
-          </ElCard>
-
-          <ElCard class="settings-section" shadow="never">
-            <template #header>
-              <div class="settings-section__header">
-                <h3 class="settings-section__title">默认创建行为</h3>
-              </div>
-            </template>
-
-            <div class="settings-list">
-              <div
-                v-for="item in defaultCreateItems"
-                :key="item.label"
-                class="settings-list-item"
-              >
-                <span class="settings-list-item__label">{{ item.label }}</span>
-                <strong class="settings-list-item__value">{{ item.value }}</strong>
-              </div>
             </div>
           </ElCard>
         </div>

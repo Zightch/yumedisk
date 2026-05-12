@@ -190,6 +190,8 @@
 .app-dialog-tabs.el-tabs .el-tabs__header {
   margin: 0;
   padding: 12px 16px 0;
+  display: flex;
+  justify-content: center;
 }
 
 .app-dialog-tabs.el-tabs .el-tabs__nav-wrap::after {
@@ -198,15 +200,21 @@
 
 .app-dialog-tabs.el-tabs .el-tabs__nav-wrap {
   padding: 0;
+  display: flex;
+  justify-content: center;
 }
 
 .app-dialog-tabs.el-tabs .el-tabs__nav-scroll {
+  width: 100%;
+  display: flex;
+  justify-content: center;
   overflow: visible;
 }
 
 .app-dialog-tabs.el-tabs .el-tabs__nav {
   gap: 4px;
   border: 0;
+  margin: 0 auto;
 }
 
 .app-dialog-tabs.el-tabs .el-tabs__item {
@@ -250,7 +258,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--border-soft);
+  border: 2px solid color-mix(in srgb, var(--border-strong) 64%, transparent);
   border-radius: 8px;
   background: var(--bg-surface);
   box-shadow: none;
@@ -266,7 +274,7 @@
 
 .app-dialog-chips.el-radio-group .el-radio-button__original-radio:checked + .el-radio-button__inner {
   background: var(--accent-soft);
-  border-color: var(--accent-border);
+  border-color: color-mix(in srgb, var(--accent-border) 80%, transparent);
   box-shadow: none;
   color: var(--accent-strong);
 }

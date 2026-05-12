@@ -89,6 +89,7 @@
 .list-panel__scroll {
   flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
 }
 
 .list-panel__scroll .el-scrollbar__wrap {
