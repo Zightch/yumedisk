@@ -25,6 +25,8 @@ pub struct HomeDiskListItemSnapshot {
     pub disk_name: String,
     pub auto_connect: bool,
     pub read_only: bool,
+    pub valid: bool,
+    pub invalid_reason: Option<String>,
     pub connected: bool,
     pub online: bool,
     pub target_id: Option<u32>,
@@ -37,6 +39,11 @@ pub struct HomeDiskListItemSnapshot {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HomeDiskListSnapshot {
     pub disks: Vec<HomeDiskListItemSnapshot>,
+}
+
+pub struct DeletedDiskState {
+    pub config_disk: ConfigDiskRecord,
+    pub media: Option<Box<dyn Media>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +89,14 @@ pub fn connect_disk(
             "disk-already-connected",
             "磁盘已经处于连接状态",
             Some(disk_id.to_string()),
+        ));
+    }
+
+    if !config_disk.valid {
+        return Err(ApiError::new(
+            "disk-invalid",
+            "磁盘当前无效，不能连接",
+            config_disk.invalid_reason.clone(),
         ));
     }
 
@@ -134,6 +149,33 @@ pub fn disconnect_disk(
     Ok(())
 }
 
+pub fn delete_disk(
+    backend: &BackendContext,
+    disk_store: &mut DiskStore,
+    disk_id: &str,
+) -> Result<DeletedDiskState, ApiError> {
+    let config_disk = disk_store.find_config_disk(disk_id).ok_or_else(|| {
+        ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string()))
+    })?;
+    let connected_record = disk_store.find_connected_disk(disk_id);
+    let mut reclaimed_media = None;
+
+    if let Some(connected_record) = connected_record.clone() {
+        let mut error_text = String::new();
+        let media = backend
+            .remove_managed_disk_with_media(connected_record.target_id, Some(&mut error_text))
+            .ok_or_else(|| {
+                ApiError::new("delete-disk-failed", "删除磁盘失败", Some(error_text))
+            })?;
+        let _ = disk_store.remove_connected_disk(disk_id);
+        reclaimed_media = Some(media);
+    }
+
+    let media = reclaimed_media.or_else(|| disk_store.take_held_media(disk_id));
+    let _ = disk_store.remove_config_disk(disk_id);
+    Ok(DeletedDiskState { config_disk, media })
+}
+
 pub fn create_memory_disk(
     disk_store: &mut DiskStore,
     request: CreateMemoryDiskRequest,
@@ -169,6 +211,8 @@ pub fn create_memory_disk(
             disk_name: disk_name.to_string(),
             auto_connect: request.auto_connect,
             read_only: false,
+            valid: true,
+            invalid_reason: None,
             media: DiskMediaConfig::Memory {
                 memory_kind,
                 capacity_bytes,
@@ -222,6 +266,8 @@ pub fn create_file_disk(
             disk_name: disk_name.to_string(),
             auto_connect: request.auto_connect,
             read_only,
+            valid: true,
+            invalid_reason: None,
             media: DiskMediaConfig::File {
                 file_kind: FileMediaKind::RawFile,
                 file_path: file_path.to_string(),
@@ -345,6 +391,8 @@ fn map_home_disk_list_item_snapshot(
         disk_name: config_disk.disk_name,
         auto_connect: config_disk.auto_connect,
         read_only: config_disk.read_only,
+        valid: config_disk.valid,
+        invalid_reason: config_disk.invalid_reason,
         connected: connected_target_id.is_some(),
         online: runtime_snapshot
             .map(|snapshot| snapshot.online)

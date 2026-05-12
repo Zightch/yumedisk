@@ -30,11 +30,6 @@ defineEmits<{
                 </el-text>
               </el-space>
 
-              <el-steps :active="0" align-center finish-status="success">
-                <el-step title="打开 Session" />
-                <el-step title="进入主页" />
-              </el-steps>
-
               <el-alert
                 v-if="errorText"
                 :title="errorText"

@@ -18,6 +18,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   connect: [diskId: string];
   disconnect: [diskId: string];
+  delete: [diskId: string];
 }>();
 
 const diskCount = computed(() => props.disks.length);
@@ -72,6 +73,9 @@ const diskCount = computed(() => props.disks.length);
                     <el-tag v-if="disk.readOnly" size="small" type="warning" effect="plain">
                       只读
                     </el-tag>
+                    <el-tag v-if="!disk.valid" size="small" type="danger" effect="plain">
+                      无效
+                    </el-tag>
                     <el-tag v-if="disk.autoConnect" size="small" type="info" effect="plain">
                       自动连接
                     </el-tag>
@@ -89,6 +93,7 @@ const diskCount = computed(() => props.disks.length);
                     type="primary"
                     plain
                     size="small"
+                    :disabled="!disk.valid"
                     :loading="actionLoadingDiskId === disk.diskId"
                     @click="emit('connect', disk.diskId)"
                   >
@@ -103,6 +108,15 @@ const diskCount = computed(() => props.disks.length);
                     @click="emit('disconnect', disk.diskId)"
                   >
                     断开
+                  </el-button>
+                  <el-button
+                    type="danger"
+                    plain
+                    size="small"
+                    :loading="actionLoadingDiskId === disk.diskId"
+                    @click="emit('delete', disk.diskId)"
+                  >
+                    删除
                   </el-button>
                 </el-space>
               </el-col>

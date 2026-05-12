@@ -20,6 +20,8 @@ export interface HomeDiskListItem {
   diskName: string;
   autoConnect: boolean;
   readOnly: boolean;
+  valid: boolean;
+  invalidReason: string | null;
   connected: boolean;
   online: boolean;
   targetId: number | null;
@@ -64,6 +66,10 @@ export interface ConnectDiskResponse {
 }
 
 export interface DisconnectDiskRequest {
+  diskId: string;
+}
+
+export interface DeleteDiskRequest {
   diskId: string;
 }
 

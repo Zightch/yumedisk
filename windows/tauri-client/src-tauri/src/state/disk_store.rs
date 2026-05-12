@@ -34,6 +34,8 @@ pub struct ConfigDiskRecord {
     pub disk_name: String,
     pub auto_connect: bool,
     pub read_only: bool,
+    pub valid: bool,
+    pub invalid_reason: Option<String>,
     pub media: DiskMediaConfig,
 }
 
@@ -76,15 +78,17 @@ impl DiskStore {
         disk_id
     }
 
-    pub fn insert_unconnected_disk(
-        &mut self,
-        config_disk: ConfigDiskRecord,
-        media: Box<dyn Media>,
-    ) {
+    pub fn insert_disk_record(&mut self, config_disk: ConfigDiskRecord, media: Option<Box<dyn Media>>) {
         let disk_id = config_disk.disk_id.clone();
         self.bump_next_disk_number_from_disk_id(&disk_id);
-        self.held_media_by_disk_id.insert(disk_id, media);
+        if let Some(media) = media {
+            self.held_media_by_disk_id.insert(disk_id, media);
+        }
         self.config_disks.push(config_disk);
+    }
+
+    pub fn insert_unconnected_disk(&mut self, config_disk: ConfigDiskRecord, media: Box<dyn Media>) {
+        self.insert_disk_record(config_disk, Some(media));
     }
 
     pub fn find_config_disk(&self, disk_id: &str) -> Option<ConfigDiskRecord> {
@@ -121,6 +125,27 @@ impl DiskStore {
             .iter()
             .find(|disk| disk.disk_id == disk_id)
             .cloned()
+    }
+
+    pub fn remove_config_disk(&mut self, disk_id: &str) -> Option<ConfigDiskRecord> {
+        let index = self
+            .config_disks
+            .iter()
+            .position(|disk| disk.disk_id == disk_id)?;
+        Some(self.config_disks.remove(index))
+    }
+
+    pub fn restore_disk_record(
+        &mut self,
+        config_disk: ConfigDiskRecord,
+        connected_record: Option<ConnectedDiskRecord>,
+        media: Option<Box<dyn Media>>,
+    ) {
+        let disk_id = config_disk.disk_id.clone();
+        self.insert_disk_record(config_disk, media);
+        if let Some(connected_record) = connected_record {
+            self.insert_connected_disk(disk_id, connected_record.target_id);
+        }
     }
 
     pub fn remove_unconnected_disk(&mut self, disk_id: &str) -> bool {

@@ -72,16 +72,21 @@ fn build_restored_disk_store(
             ));
         }
 
-        let (config_disk, media) = restore_disk_record(persisted_disk)?;
-        disk_store.insert_unconnected_disk(config_disk, media);
+        let restored_record = restore_disk_record(persisted_disk)?;
+        disk_store.insert_disk_record(restored_record.config_disk, restored_record.media);
     }
 
     Ok(disk_store)
 }
 
+struct RestoredDiskRecord {
+    config_disk: ConfigDiskRecord,
+    media: Option<Box<dyn Media>>,
+}
+
 fn restore_disk_record(
     persisted_disk: PersistedDiskRecord,
-) -> Result<(ConfigDiskRecord, Box<dyn Media>), ApiError> {
+) -> Result<RestoredDiskRecord, ApiError> {
     match persisted_disk.media {
         PersistedDiskMediaConfig::Memory {
             memory_kind,
@@ -93,19 +98,21 @@ fn restore_disk_record(
             };
             let media = create_memory_media(memory_kind, capacity_bytes)?;
 
-            Ok((
-                ConfigDiskRecord {
+            Ok(RestoredDiskRecord {
+                config_disk: ConfigDiskRecord {
                     disk_id: persisted_disk.disk_id,
                     disk_name: persisted_disk.disk_name,
                     auto_connect: persisted_disk.auto_connect,
                     read_only: false,
+                    valid: true,
+                    invalid_reason: None,
                     media: DiskMediaConfig::Memory {
                         memory_kind,
                         capacity_bytes,
                     },
                 },
-                media,
-            ))
+                media: Some(media),
+            })
         }
         PersistedDiskMediaConfig::File {
             file_kind,
@@ -114,24 +121,45 @@ fn restore_disk_record(
             let file_kind = match file_kind {
                 PersistedFileMediaKind::RawFile => FileMediaKind::RawFile,
             };
-            let raw_file_media = open_raw_file_media(&file_path)?;
-            let capacity_bytes = raw_file_media.size_bytes();
-            let read_only = raw_file_media.read_only();
+            match open_raw_file_media(&file_path) {
+                Ok(raw_file_media) => {
+                    let capacity_bytes = raw_file_media.size_bytes();
+                    let read_only = raw_file_media.read_only();
 
-            Ok((
-                ConfigDiskRecord {
-                    disk_id: persisted_disk.disk_id,
-                    disk_name: persisted_disk.disk_name,
-                    auto_connect: persisted_disk.auto_connect,
-                    read_only,
-                    media: DiskMediaConfig::File {
-                        file_kind,
-                        file_path,
-                        capacity_bytes,
+                    Ok(RestoredDiskRecord {
+                        config_disk: ConfigDiskRecord {
+                            disk_id: persisted_disk.disk_id,
+                            disk_name: persisted_disk.disk_name,
+                            auto_connect: persisted_disk.auto_connect,
+                            read_only,
+                            valid: true,
+                            invalid_reason: None,
+                            media: DiskMediaConfig::File {
+                                file_kind,
+                                file_path,
+                                capacity_bytes,
+                            },
+                        },
+                        media: Some(Box::new(raw_file_media)),
+                    })
+                }
+                Err(error) => Ok(RestoredDiskRecord {
+                    config_disk: ConfigDiskRecord {
+                        disk_id: persisted_disk.disk_id,
+                        disk_name: persisted_disk.disk_name,
+                        auto_connect: persisted_disk.auto_connect,
+                        read_only: false,
+                        valid: false,
+                        invalid_reason: Some(error.message),
+                        media: DiskMediaConfig::File {
+                            file_kind,
+                            file_path,
+                            capacity_bytes: 0,
+                        },
                     },
-                },
-                Box::new(raw_file_media),
-            ))
+                    media: None,
+                }),
+            }
         }
     }
 }

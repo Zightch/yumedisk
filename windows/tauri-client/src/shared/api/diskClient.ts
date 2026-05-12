@@ -6,6 +6,7 @@ import type {
   CreateFileDiskResponse,
   CreateMemoryDiskRequest,
   CreateMemoryDiskResponse,
+  DeleteDiskRequest,
   DisconnectDiskRequest,
   HomeDiskListSnapshot,
   PickRawFilePathResponse,
@@ -42,4 +43,10 @@ export async function disconnectDisk(
   request: DisconnectDiskRequest,
 ): Promise<void> {
   return invoke<void>("disconnect_disk", { request });
+}
+
+export async function deleteDisk(
+  request: DeleteDiskRequest,
+): Promise<void> {
+  return invoke<void>("delete_disk", { request });
 }

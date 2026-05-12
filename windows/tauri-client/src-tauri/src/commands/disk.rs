@@ -91,6 +91,12 @@ pub struct DisconnectDiskRequestDto {
     pub disk_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteDiskRequestDto {
+    pub disk_id: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MemoryMediaKindDto {
@@ -130,6 +136,8 @@ pub struct HomeDiskListItemDto {
     pub disk_name: String,
     pub auto_connect: bool,
     pub read_only: bool,
+    pub valid: bool,
+    pub invalid_reason: Option<String>,
     pub connected: bool,
     pub online: bool,
     pub target_id: Option<u32>,
@@ -195,6 +203,8 @@ fn map_home_disk_list_item_dto(
         disk_name: snapshot.disk_name,
         auto_connect: snapshot.auto_connect,
         read_only: snapshot.read_only,
+        valid: snapshot.valid,
+        invalid_reason: snapshot.invalid_reason,
         connected: snapshot.connected,
         online: snapshot.online,
         target_id: snapshot.target_id,
@@ -365,4 +375,24 @@ pub fn disconnect_disk(
         .expect("disk store mutex should not be poisoned");
 
     disk_service::disconnect_disk(&state.backend, &mut disk_store, &request.disk_id)
+}
+
+#[tauri::command]
+pub fn delete_disk(
+    state: State<'_, ClientState>,
+    request: DeleteDiskRequestDto,
+) -> Result<(), ApiError> {
+    let mut disk_store = state
+        .disk_store
+        .lock()
+        .expect("disk store mutex should not be poisoned");
+
+    let deleted_state = disk_service::delete_disk(&state.backend, &mut disk_store, &request.disk_id)?;
+
+    if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_store) {
+        disk_store.restore_disk_record(deleted_state.config_disk, None, deleted_state.media);
+        return Err(error);
+    }
+
+    Ok(())
 }

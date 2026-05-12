@@ -31,6 +31,7 @@ const dialogVisible = computed({
 const submitting = ref(false);
 const browsing = ref(false);
 const errorText = ref<string | null>(null);
+const activeTab = ref("pickExisting");
 const form = reactive<FileDiskFormModel>({
   diskName: "",
   filePath: "",
@@ -42,6 +43,7 @@ watch(
   (visible) => {
     if (visible) {
       resetForm();
+      activeTab.value = "pickExisting";
       errorText.value = null;
     }
   },
@@ -113,36 +115,49 @@ async function handleSubmit() {
 
 <template>
   <el-dialog v-model="dialogVisible" title="新建文件盘" width="520">
-    <el-form label-position="top">
-      <el-form-item label="名称">
-        <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
-      </el-form-item>
+    <el-tabs v-model="activeTab">
+      <el-tab-pane label="选择现有文件" name="pickExisting">
+        <el-form label-position="top">
+          <el-form-item label="名称">
+            <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
+          </el-form-item>
 
-      <el-form-item label="RAW 文件路径">
-        <el-input v-model="form.filePath" placeholder="选择现有 RAW 文件">
-          <template #append>
-            <el-button :loading="browsing" @click="handleBrowse">浏览</el-button>
-          </template>
-        </el-input>
-      </el-form-item>
+          <el-form-item label="RAW 文件路径">
+            <el-input v-model="form.filePath" placeholder="选择现有 RAW 文件">
+              <template #append>
+                <el-button :loading="browsing" @click="handleBrowse">浏览</el-button>
+              </template>
+            </el-input>
+          </el-form-item>
 
-      <el-form-item label="启动自动连接">
-        <el-switch v-model="form.autoConnect" />
-      </el-form-item>
+          <el-form-item label="启动自动连接">
+            <el-switch v-model="form.autoConnect" />
+          </el-form-item>
+        </el-form>
+      </el-tab-pane>
 
-      <el-alert
-        v-if="errorText"
-        :title="errorText"
-        type="error"
-        :closable="false"
-        show-icon
-      />
-    </el-form>
+      <el-tab-pane label="创建文件" name="createNew">
+        <el-empty description="当前阶段暂不支持创建文件" />
+      </el-tab-pane>
+    </el-tabs>
+
+    <el-alert
+      v-if="errorText"
+      :title="errorText"
+      type="error"
+      :closable="false"
+      show-icon
+    />
 
     <template #footer>
       <el-space>
         <el-button @click="handleCancel">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">
+        <el-button
+          type="primary"
+          :loading="submitting"
+          :disabled="activeTab !== 'pickExisting'"
+          @click="handleSubmit"
+        >
           创建
         </el-button>
       </el-space>

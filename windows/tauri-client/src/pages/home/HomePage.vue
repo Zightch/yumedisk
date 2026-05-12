@@ -6,6 +6,7 @@ import CreateFileDiskDialog from "../../features/createFileDisk/CreateFileDiskDi
 import CreateMemoryDiskDialog from "../../features/createMemoryDisk/CreateMemoryDiskDialog.vue";
 import {
   connectDisk,
+  deleteDisk,
   disconnectDisk,
   queryHomeDiskList,
 } from "../../shared/api/diskClient";
@@ -89,6 +90,20 @@ async function handleDisconnectDisk(diskId: string) {
     actionLoadingDiskId.value = null;
   }
 }
+
+async function handleDeleteDisk(diskId: string) {
+  actionLoadingDiskId.value = diskId;
+
+  try {
+    await deleteDisk({ diskId });
+    ElMessage.success("磁盘已删除");
+    await loadHomeDiskList();
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error));
+  } finally {
+    actionLoadingDiskId.value = null;
+  }
+}
 </script>
 
 <template>
@@ -110,6 +125,7 @@ async function handleDisconnectDisk(diskId: string) {
         :action-loading-disk-id="actionLoadingDiskId"
         @connect="handleConnectDisk"
         @disconnect="handleDisconnectDisk"
+        @delete="handleDeleteDisk"
       />
     </el-main>
   </el-container>
