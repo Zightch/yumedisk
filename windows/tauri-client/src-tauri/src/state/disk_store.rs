@@ -1,5 +1,9 @@
 #![allow(dead_code)]
 
+use std::collections::BTreeMap;
+
+use backend_rust::Media;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryMediaKind {
     DenseMem,
@@ -39,10 +43,22 @@ pub struct ConnectedDiskRecord {
     pub target_id: u32,
 }
 
-#[derive(Debug, Default)]
 pub struct DiskStore {
+    next_disk_number: u64,
     config_disks: Vec<ConfigDiskRecord>,
     connected_disks: Vec<ConnectedDiskRecord>,
+    held_media_by_disk_id: BTreeMap<String, Box<dyn Media>>,
+}
+
+impl Default for DiskStore {
+    fn default() -> Self {
+        Self {
+            next_disk_number: 1,
+            config_disks: Vec::new(),
+            connected_disks: Vec::new(),
+            held_media_by_disk_id: BTreeMap::new(),
+        }
+    }
 }
 
 impl DiskStore {
@@ -52,5 +68,21 @@ impl DiskStore {
 
     pub fn connected_disks_snapshot(&self) -> Vec<ConnectedDiskRecord> {
         self.connected_disks.clone()
+    }
+
+    pub fn allocate_disk_id(&mut self) -> String {
+        let disk_id = format!("disk-{}", self.next_disk_number);
+        self.next_disk_number += 1;
+        disk_id
+    }
+
+    pub fn insert_unconnected_disk(
+        &mut self,
+        config_disk: ConfigDiskRecord,
+        media: Box<dyn Media>,
+    ) {
+        let disk_id = config_disk.disk_id.clone();
+        self.held_media_by_disk_id.insert(disk_id, media);
+        self.config_disks.push(config_disk);
     }
 }

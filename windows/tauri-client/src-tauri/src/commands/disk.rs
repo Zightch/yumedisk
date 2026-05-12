@@ -1,6 +1,8 @@
+use serde::Deserialize;
 use serde::Serialize;
 use tauri::State;
 
+use crate::api_error::ApiError;
 use crate::backend::disk_service;
 use crate::state::client_state::ClientState;
 use crate::state::disk_store::DiskMediaConfig;
@@ -24,6 +26,29 @@ pub struct ManagedDiskSnapshotDto {
 #[serde(rename_all = "camelCase")]
 pub struct QueryManagedDisksResponse {
     pub disks: Vec<ManagedDiskSnapshotDto>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RequestedMemoryMediaKindDto {
+    Auto,
+    DenseMem,
+    SparseMem,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMemoryDiskRequestDto {
+    pub disk_name: String,
+    pub capacity_mib: u64,
+    pub requested_memory_kind: RequestedMemoryMediaKindDto,
+    pub auto_connect: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMemoryDiskResponse {
+    pub disk_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,6 +165,20 @@ fn map_home_disk_list_item_dto(
     }
 }
 
+fn map_requested_memory_media_kind(
+    requested_kind: RequestedMemoryMediaKindDto,
+) -> disk_service::RequestedMemoryMediaKind {
+    match requested_kind {
+        RequestedMemoryMediaKindDto::Auto => disk_service::RequestedMemoryMediaKind::Auto,
+        RequestedMemoryMediaKindDto::DenseMem => {
+            disk_service::RequestedMemoryMediaKind::DenseMem
+        }
+        RequestedMemoryMediaKindDto::SparseMem => {
+            disk_service::RequestedMemoryMediaKind::SparseMem
+        }
+    }
+}
+
 #[tauri::command]
 pub fn query_managed_disks(state: State<'_, ClientState>) -> QueryManagedDisksResponse {
     let disks = disk_service::query_managed_disks(&state.backend)
@@ -172,4 +211,31 @@ pub fn query_home_disk_list(state: State<'_, ClientState>) -> QueryHomeDiskListR
         disks,
         auto_connect_count,
     }
+}
+
+#[tauri::command]
+pub fn create_memory_disk(
+    state: State<'_, ClientState>,
+    request: CreateMemoryDiskRequestDto,
+) -> Result<CreateMemoryDiskResponse, ApiError> {
+    let disk_id = {
+        let mut disk_store = state
+            .disk_store
+            .lock()
+            .expect("disk store mutex should not be poisoned");
+
+        disk_service::create_memory_disk(
+            &mut disk_store,
+            disk_service::CreateMemoryDiskRequest {
+                disk_name: request.disk_name,
+                capacity_mib: request.capacity_mib,
+                requested_memory_kind: map_requested_memory_media_kind(
+                    request.requested_memory_kind,
+                ),
+                auto_connect: request.auto_connect,
+            },
+        )?
+    };
+
+    Ok(CreateMemoryDiskResponse { disk_id })
 }

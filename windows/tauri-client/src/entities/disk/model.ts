@@ -1,5 +1,6 @@
 export type MemoryMediaKind = "denseMem" | "sparseMem";
 export type FileMediaKind = "rawFile";
+export type MemoryCreateKind = "auto" | MemoryMediaKind;
 
 export type HomeDiskMedia =
   | {
@@ -31,4 +32,15 @@ export interface HomeDiskListItem {
 export interface HomeDiskListSnapshot {
   disks: HomeDiskListItem[];
   autoConnectCount: number;
+}
+
+export interface CreateMemoryDiskRequest {
+  diskName: string;
+  capacityMiB: number;
+  requestedMemoryKind: MemoryCreateKind;
+  autoConnect: boolean;
+}
+
+export interface CreateMemoryDiskResponse {
+  diskId: string;
 }

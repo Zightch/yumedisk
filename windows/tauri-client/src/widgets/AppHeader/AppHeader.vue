@@ -1,9 +1,21 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import { FolderOpened, Link, Plus, Setting, Wallet } from "@element-plus/icons-vue";
 
 defineProps<{
   sessionReady: boolean;
 }>();
+
+const emit = defineEmits<{
+  openMemoryCreate: [];
+}>();
+
+const addPopoverVisible = ref(false);
+
+function handleOpenMemoryCreate() {
+  addPopoverVisible.value = false;
+  emit("openMemoryCreate");
+}
 </script>
 
 <template>
@@ -23,13 +35,18 @@ defineProps<{
           {{ sessionReady ? "会话正常" : "会话未就绪" }}
         </el-tag>
 
-        <el-popover placement="bottom-end" trigger="click" :width="220">
+        <el-popover
+          v-model:visible="addPopoverVisible"
+          placement="bottom-end"
+          trigger="click"
+          :width="220"
+        >
           <template #reference>
             <el-button :icon="Plus" circle type="primary" />
           </template>
 
           <el-space direction="vertical" fill>
-            <el-button :icon="Wallet" plain disabled>
+            <el-button :icon="Wallet" plain @click="handleOpenMemoryCreate">
               内存盘
             </el-button>
             <el-button :icon="FolderOpened" plain disabled>
