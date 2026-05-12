@@ -104,53 +104,76 @@ async function handleSubmit() {
 </script>
 
 <template>
-  <el-dialog v-model="dialogVisible" title="新建内存盘" width="520">
-    <el-form label-position="top">
-      <el-form-item label="名称">
-        <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
-      </el-form-item>
+  <el-dialog
+    v-model="dialogVisible"
+    class="app-dialog app-dialog--memory"
+    modal-class="app-dialog-overlay"
+    width="392px"
+    align-center
+    :show-close="false"
+  >
+    <template #header>
+      <div class="app-dialog__header">
+        <h3 class="app-dialog__title">创建内存盘</h3>
+        <button class="app-dialog__close" type="button" aria-label="关闭" @click="handleCancel">
+          ×
+        </button>
+      </div>
+    </template>
 
-      <el-form-item label="容量 (MiB)">
-        <el-input-number
-          v-model="form.capacityMiB"
-          :min="1"
-          :step="1"
-          style="width: 100%"
-        />
-      </el-form-item>
+    <div class="app-dialog__content">
+      <el-form class="app-dialog-form" label-position="top">
+        <el-form-item label="名称">
+          <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
+        </el-form-item>
 
-      <el-form-item label="介质选择">
-        <el-select
-          v-model="form.requestedMemoryKind"
-          placeholder="选择介质策略"
-          style="width: 100%"
-        >
-          <el-option label="自动" value="auto" />
-          <el-option label="稠密" value="denseMem" />
-          <el-option label="稀疏" value="sparseMem" />
-        </el-select>
-      </el-form-item>
+        <el-form-item label="容量 (MiB)">
+          <el-input-number
+            v-model="form.capacityMiB"
+            :min="1"
+            :step="1"
+            :precision="0"
+            controls-position="right"
+          />
+        </el-form-item>
 
-      <el-form-item label="启动自动连接">
-        <el-switch v-model="form.autoConnect" />
-      </el-form-item>
+        <el-form-item label="介质选择">
+          <el-radio-group v-model="form.requestedMemoryKind" class="app-dialog-chips">
+            <el-radio-button value="auto">自动</el-radio-button>
+            <el-radio-button value="denseMem">稠密</el-radio-button>
+            <el-radio-button value="sparseMem">稀疏</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+
+        <el-form-item class="app-dialog-form__switch" label="启动自动连接">
+          <el-switch v-model="form.autoConnect" />
+        </el-form-item>
+      </el-form>
 
       <el-alert
         v-if="errorText"
+        class="app-dialog__alert"
         :title="errorText"
         type="error"
         :closable="false"
         show-icon
       />
-    </el-form>
+    </div>
 
     <template #footer>
-      <el-space>
-        <el-button @click="handleCancel">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">
+      <div class="app-dialog__footer">
+        <el-button class="app-dialog__button app-dialog__button--secondary" @click="handleCancel">
+          取消
+        </el-button>
+        <el-button
+          class="app-dialog__button"
+          type="primary"
+          :loading="submitting"
+          @click="handleSubmit"
+        >
           创建
         </el-button>
-      </el-space>
+      </div>
     </template>
   </el-dialog>
 </template>

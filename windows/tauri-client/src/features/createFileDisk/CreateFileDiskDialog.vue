@@ -220,93 +220,129 @@ async function handleCreateNewFileSubmit() {
 </script>
 
 <template>
-  <el-dialog v-model="dialogVisible" title="新建文件盘" width="520">
-    <el-tabs v-model="activeTab">
+  <el-dialog
+    v-model="dialogVisible"
+    class="app-dialog app-dialog--file"
+    modal-class="app-dialog-overlay"
+    width="456px"
+    align-center
+    :show-close="false"
+  >
+    <template #header>
+      <div class="app-dialog__header">
+        <h3 class="app-dialog__title">创建文件盘</h3>
+        <button class="app-dialog__close" type="button" aria-label="关闭" @click="handleCancel">
+          ×
+        </button>
+      </div>
+    </template>
+
+    <el-tabs v-model="activeTab" class="app-dialog-tabs">
       <el-tab-pane label="选择现有文件" name="pickExisting">
-        <el-form label-position="top">
-          <el-form-item label="名称">
-            <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
-          </el-form-item>
+        <div class="app-dialog__content app-dialog__content--tabbed">
+          <el-form class="app-dialog-form" label-position="top">
+            <el-form-item label="名称">
+              <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
+            </el-form-item>
 
-          <el-form-item label="RAW 文件路径">
-            <el-input v-model="form.filePath" placeholder="选择现有 RAW 文件">
-              <template #append>
-                <el-button :loading="browsing" @click="handleBrowse">浏览</el-button>
-              </template>
-            </el-input>
-          </el-form-item>
+            <el-form-item label="RAW 文件路径">
+              <el-input v-model="form.filePath" placeholder="选择现有 RAW 文件">
+                <template #append>
+                  <el-button
+                    class="app-dialog-form__append-button"
+                    :loading="browsing"
+                    @click="handleBrowse"
+                  >
+                    浏览
+                  </el-button>
+                </template>
+              </el-input>
+            </el-form-item>
 
-          <el-form-item label="启动自动连接">
-            <el-switch v-model="form.autoConnect" />
-          </el-form-item>
-        </el-form>
+            <el-form-item class="app-dialog-form__switch" label="启动自动连接">
+              <el-switch v-model="form.autoConnect" />
+            </el-form-item>
+          </el-form>
+        </div>
       </el-tab-pane>
 
       <el-tab-pane label="创建文件" name="createNew">
-        <el-form label-position="top">
-          <el-form-item label="名称">
-            <el-input v-model="newFileForm.diskName" placeholder="输入磁盘名称" />
-          </el-form-item>
+        <div class="app-dialog__content app-dialog__content--tabbed">
+          <el-form class="app-dialog-form" label-position="top">
+            <el-form-item label="名称">
+              <el-input v-model="newFileForm.diskName" placeholder="输入磁盘名称" />
+            </el-form-item>
 
-          <el-form-item label="文件路径">
-            <el-input v-model="newFileForm.filePath" placeholder="输入要创建的 RAW 文件路径">
-              <template #append>
-                <el-button :loading="browsing" @click="handleBrowseNewFilePath">
-                  浏览
-                </el-button>
-              </template>
-            </el-input>
-          </el-form-item>
+            <el-form-item label="文件路径">
+              <el-input v-model="newFileForm.filePath" placeholder="输入要创建的 RAW 文件路径">
+                <template #append>
+                  <el-button
+                    class="app-dialog-form__append-button"
+                    :loading="browsing"
+                    @click="handleBrowseNewFilePath"
+                  >
+                    浏览
+                  </el-button>
+                </template>
+              </el-input>
+            </el-form-item>
 
-          <el-form-item label="容量（MiB）">
-            <el-input-number
-              v-model="newFileForm.capacityMiB"
-              :min="1"
-              :step="1"
-              :precision="0"
-              controls-position="right"
-              style="width: 100%"
-            />
-          </el-form-item>
-
-          <el-form-item label="文件格式">
-            <el-select v-model="newFileForm.fileFormat" style="width: 100%">
-              <el-option
-                v-for="item in createFileFormats"
-                :key="item.value"
-                :label="item.label"
-                :value="item.value"
-                :disabled="item.disabled"
+            <el-form-item label="容量 (MiB)">
+              <el-input-number
+                v-model="newFileForm.capacityMiB"
+                :min="1"
+                :step="1"
+                :precision="0"
+                controls-position="right"
               />
-            </el-select>
-          </el-form-item>
+            </el-form-item>
 
-          <el-form-item label="启动自动连接">
-            <el-switch v-model="newFileForm.autoConnect" />
-          </el-form-item>
-        </el-form>
+            <el-form-item label="文件格式">
+              <el-radio-group v-model="newFileForm.fileFormat" class="app-dialog-chips">
+                <el-radio-button
+                  v-for="item in createFileFormats"
+                  :key="item.value"
+                  :value="item.value"
+                  :disabled="item.disabled"
+                >
+                  {{ item.label }}
+                </el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+
+            <el-form-item class="app-dialog-form__switch" label="启动自动连接">
+              <el-switch v-model="newFileForm.autoConnect" />
+            </el-form-item>
+          </el-form>
+        </div>
       </el-tab-pane>
     </el-tabs>
 
-    <el-alert
-      v-if="errorText"
-      :title="errorText"
-      type="error"
-      :closable="false"
-      show-icon
-    />
+    <div class="app-dialog__content">
+      <el-alert
+        v-if="errorText"
+        class="app-dialog__alert"
+        :title="errorText"
+        type="error"
+        :closable="false"
+        show-icon
+      />
+    </div>
 
     <template #footer>
-      <el-space>
-        <el-button @click="handleCancel">取消</el-button>
+      <div class="app-dialog__footer">
+        <el-button class="app-dialog__button app-dialog__button--secondary" @click="handleCancel">
+          取消
+        </el-button>
         <el-button
+          class="app-dialog__button"
           type="primary"
           :loading="submitting"
           @click="activeTab === 'pickExisting' ? handleSubmit() : handleCreateNewFileSubmit()"
         >
           创建
         </el-button>
-      </el-space>
+      </div>
     </template>
   </el-dialog>
 </template>

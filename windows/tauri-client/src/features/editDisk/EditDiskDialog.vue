@@ -90,32 +90,58 @@ async function handleSubmit() {
 </script>
 
 <template>
-  <el-dialog v-model="dialogVisible" title="编辑磁盘" width="520">
-    <el-form label-position="top">
-      <el-form-item label="名称">
-        <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
-      </el-form-item>
+  <el-dialog
+    v-model="dialogVisible"
+    class="app-dialog app-dialog--edit"
+    modal-class="app-dialog-overlay"
+    width="392px"
+    align-center
+    :show-close="false"
+  >
+    <template #header>
+      <div class="app-dialog__header">
+        <h3 class="app-dialog__title">编辑磁盘</h3>
+        <button class="app-dialog__close" type="button" aria-label="关闭" @click="handleCancel">
+          ×
+        </button>
+      </div>
+    </template>
 
-      <el-form-item label="启动自动连接">
-        <el-switch v-model="form.autoConnect" />
-      </el-form-item>
+    <div class="app-dialog__content">
+      <el-form class="app-dialog-form" label-position="top">
+        <el-form-item label="名称">
+          <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
+        </el-form-item>
+
+        <el-form-item class="app-dialog-form__switch" label="启动自动连接">
+          <el-switch v-model="form.autoConnect" />
+        </el-form-item>
+      </el-form>
 
       <el-alert
         v-if="errorText"
+        class="app-dialog__alert"
         :title="errorText"
         type="error"
         :closable="false"
         show-icon
       />
-    </el-form>
+    </div>
 
     <template #footer>
-      <el-space>
-        <el-button @click="handleCancel">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">
+      <div class="app-dialog__footer">
+        <el-button class="app-dialog__button app-dialog__button--secondary" @click="handleCancel">
+          取消
+        </el-button>
+        <el-button
+          class="app-dialog__button"
+          type="primary"
+          :loading="submitting"
+          @click="handleSubmit"
+        >
           保存
         </el-button>
-      </el-space>
+      </div>
     </template>
   </el-dialog>
 </template>
