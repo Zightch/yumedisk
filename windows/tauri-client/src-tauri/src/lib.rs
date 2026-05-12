@@ -21,7 +21,8 @@ pub fn run() {
             commands::disk::create_new_file_disk,
             commands::disk::connect_disk,
             commands::disk::disconnect_disk,
-            commands::disk::delete_disk
+            commands::disk::delete_disk,
+            commands::disk::update_disk
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

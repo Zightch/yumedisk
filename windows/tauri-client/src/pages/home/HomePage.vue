@@ -4,6 +4,7 @@ import { onMounted, ref } from "vue";
 import type { HomeDiskListItem } from "../../entities/disk/model";
 import CreateFileDiskDialog from "../../features/createFileDisk/CreateFileDiskDialog.vue";
 import CreateMemoryDiskDialog from "../../features/createMemoryDisk/CreateMemoryDiskDialog.vue";
+import EditDiskDialog from "../../features/editDisk/EditDiskDialog.vue";
 import {
   connectDisk,
   deleteDisk,
@@ -24,6 +25,8 @@ const loading = ref(true);
 const errorText = ref<string | null>(null);
 const memoryCreateVisible = ref(false);
 const fileCreateVisible = ref(false);
+const editDiskVisible = ref(false);
+const editingDisk = ref<HomeDiskListItem | null>(null);
 const actionLoadingDiskId = ref<string | null>(null);
 
 async function loadHomeDiskList() {
@@ -60,6 +63,22 @@ async function handleMemoryDiskCreated() {
 }
 
 async function handleFileDiskCreated() {
+  await loadHomeDiskList();
+}
+
+function handleEditDisk(diskId: string) {
+  const disk = disks.value.find((item) => item.diskId === diskId) ?? null;
+  if (disk === null) {
+    ElMessage.error("磁盘不存在");
+    return;
+  }
+
+  editingDisk.value = disk;
+  editDiskVisible.value = true;
+}
+
+async function handleDiskUpdated() {
+  editingDisk.value = null;
   await loadHomeDiskList();
 }
 
@@ -125,6 +144,7 @@ async function handleDeleteDisk(diskId: string) {
         :action-loading-disk-id="actionLoadingDiskId"
         @connect="handleConnectDisk"
         @disconnect="handleDisconnectDisk"
+        @edit="handleEditDisk"
         @delete="handleDeleteDisk"
       />
     </el-main>
@@ -137,5 +157,10 @@ async function handleDeleteDisk(diskId: string) {
   <CreateFileDiskDialog
     v-model="fileCreateVisible"
     @created="handleFileDiskCreated"
+  />
+  <EditDiskDialog
+    v-model="editDiskVisible"
+    :disk="editingDisk"
+    @updated="handleDiskUpdated"
   />
 </template>

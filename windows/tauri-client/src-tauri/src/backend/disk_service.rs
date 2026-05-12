@@ -47,6 +47,10 @@ pub struct DeletedDiskState {
     pub media: Option<Box<dyn Media>>,
 }
 
+pub struct UpdatedDiskState {
+    pub previous_config_disk: ConfigDiskRecord,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestedMemoryMediaKind {
     Auto,
@@ -85,6 +89,13 @@ pub struct CreateNewFileDiskRequest {
     pub file_path: String,
     pub capacity_mib: u64,
     pub file_format: CreateFileFormat,
+    pub auto_connect: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpdateDiskRequest {
+    pub disk_id: String,
+    pub disk_name: String,
     pub auto_connect: bool,
 }
 
@@ -194,6 +205,30 @@ pub fn delete_disk(
     let media = reclaimed_media.or_else(|| disk_store.take_held_media(disk_id));
     let _ = disk_store.remove_config_disk(disk_id);
     Ok(DeletedDiskState { config_disk, media })
+}
+
+pub fn update_disk(
+    disk_store: &mut DiskStore,
+    request: UpdateDiskRequest,
+) -> Result<UpdatedDiskState, ApiError> {
+    let disk_name = request.disk_name.trim();
+    if disk_name.is_empty() {
+        return Err(ApiError::new("invalid-disk-name", "磁盘名称不能为空", None));
+    }
+
+    let previous_config_disk = disk_store
+        .update_config_disk(&request.disk_id, disk_name.to_string(), request.auto_connect)
+        .ok_or_else(|| {
+            ApiError::new(
+                "disk-not-found",
+                "磁盘不存在",
+                Some(request.disk_id.to_string()),
+            )
+        })?;
+
+    Ok(UpdatedDiskState {
+        previous_config_disk,
+    })
 }
 
 pub fn create_memory_disk(

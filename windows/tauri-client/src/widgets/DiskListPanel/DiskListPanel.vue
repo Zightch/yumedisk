@@ -19,6 +19,7 @@ const emit = defineEmits<{
   connect: [diskId: string];
   disconnect: [diskId: string];
   delete: [diskId: string];
+  edit: [diskId: string];
 }>();
 
 const diskCount = computed(() => props.disks.length);
@@ -130,6 +131,15 @@ function resolveStatusText(disk: HomeDiskListItem): string {
                     @click="emit('disconnect', disk.diskId)"
                   >
                     断开
+                  </el-button>
+                  <el-button
+                    type="primary"
+                    plain
+                    size="small"
+                    :loading="actionLoadingDiskId === disk.diskId"
+                    @click="emit('edit', disk.diskId)"
+                  >
+                    编辑
                   </el-button>
                   <el-button
                     type="danger"

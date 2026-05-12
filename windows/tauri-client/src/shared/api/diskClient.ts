@@ -12,6 +12,7 @@ import type {
   DisconnectDiskRequest,
   HomeDiskListSnapshot,
   PickRawFilePathResponse,
+  UpdateDiskRequest,
 } from "../../entities/disk/model";
 
 export async function queryHomeDiskList(): Promise<HomeDiskListSnapshot> {
@@ -62,4 +63,10 @@ export async function deleteDisk(
   request: DeleteDiskRequest,
 ): Promise<void> {
   return invoke<void>("delete_disk", { request });
+}
+
+export async function updateDisk(
+  request: UpdateDiskRequest,
+): Promise<void> {
+  return invoke<void>("update_disk", { request });
 }

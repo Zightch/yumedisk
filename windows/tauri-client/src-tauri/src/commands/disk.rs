@@ -120,6 +120,14 @@ pub struct DeleteDiskRequestDto {
     pub disk_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateDiskRequestDto {
+    pub disk_id: String,
+    pub disk_name: String,
+    pub auto_connect: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MemoryMediaKindDto {
@@ -482,6 +490,43 @@ pub fn delete_disk(
     if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_store) {
         disk_store.restore_disk_record(deleted_state.config_disk, None, deleted_state.media);
         return Err(error);
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_disk(
+    state: State<'_, ClientState>,
+    request: UpdateDiskRequestDto,
+) -> Result<(), ApiError> {
+    let previous_config_disk = {
+        let mut disk_store = state
+            .disk_store
+            .lock()
+            .expect("disk store mutex should not be poisoned");
+
+        disk_service::update_disk(
+            &mut disk_store,
+            disk_service::UpdateDiskRequest {
+                disk_id: request.disk_id,
+                disk_name: request.disk_name,
+                auto_connect: request.auto_connect,
+            },
+        )?
+        .previous_config_disk
+    };
+
+    {
+        let mut disk_store = state
+            .disk_store
+            .lock()
+            .expect("disk store mutex should not be poisoned");
+
+        if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_store) {
+            let _ = disk_store.restore_config_disk(previous_config_disk);
+            return Err(error);
+        }
     }
 
     Ok(())

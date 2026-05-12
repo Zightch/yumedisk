@@ -86,6 +86,12 @@ export interface DeleteDiskRequest {
   diskId: string;
 }
 
+export interface UpdateDiskRequest {
+  diskId: string;
+  diskName: string;
+  autoConnect: boolean;
+}
+
 export interface PickRawFilePathResponse {
   filePath: string | null;
 }

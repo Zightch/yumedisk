@@ -162,6 +162,32 @@ impl DiskStore {
         previous_count != self.config_disks.len()
     }
 
+    pub fn update_config_disk(
+        &mut self,
+        disk_id: &str,
+        disk_name: String,
+        auto_connect: bool,
+    ) -> Option<ConfigDiskRecord> {
+        let disk = self.config_disks.iter_mut().find(|disk| disk.disk_id == disk_id)?;
+        let previous = disk.clone();
+        disk.disk_name = disk_name;
+        disk.auto_connect = auto_connect;
+        Some(previous)
+    }
+
+    pub fn restore_config_disk(&mut self, config_disk: ConfigDiskRecord) -> bool {
+        let Some(disk) = self
+            .config_disks
+            .iter_mut()
+            .find(|disk| disk.disk_id == config_disk.disk_id)
+        else {
+            return false;
+        };
+
+        *disk = config_disk;
+        true
+    }
+
     fn bump_next_disk_number_from_disk_id(&mut self, disk_id: &str) {
         let Some(number_text) = disk_id.strip_prefix("disk-") else {
             return;
