@@ -82,7 +82,30 @@ impl DiskStore {
         media: Box<dyn Media>,
     ) {
         let disk_id = config_disk.disk_id.clone();
+        self.bump_next_disk_number_from_disk_id(&disk_id);
         self.held_media_by_disk_id.insert(disk_id, media);
         self.config_disks.push(config_disk);
+    }
+
+    pub fn remove_unconnected_disk(&mut self, disk_id: &str) -> bool {
+        let previous_count = self.config_disks.len();
+        self.config_disks.retain(|disk| disk.disk_id != disk_id);
+        self.connected_disks.retain(|disk| disk.disk_id != disk_id);
+        self.held_media_by_disk_id.remove(disk_id);
+        previous_count != self.config_disks.len()
+    }
+
+    fn bump_next_disk_number_from_disk_id(&mut self, disk_id: &str) {
+        let Some(number_text) = disk_id.strip_prefix("disk-") else {
+            return;
+        };
+
+        let Ok(number) = number_text.parse::<u64>() else {
+            return;
+        };
+
+        if number >= self.next_disk_number {
+            self.next_disk_number = number + 1;
+        }
     }
 }

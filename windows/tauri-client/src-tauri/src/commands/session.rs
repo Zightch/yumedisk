@@ -22,7 +22,7 @@ pub struct InitializeClientResponse {
 pub fn initialize_client(
     state: State<'_, ClientState>,
 ) -> Result<InitializeClientResponse, ApiError> {
-    let session = session_service::initialize_client(&state.backend)?;
+    let session = session_service::initialize_client(&state)?;
 
     Ok(InitializeClientResponse {
         session: SessionSnapshotDto {

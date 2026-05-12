@@ -4,6 +4,7 @@ use tauri::State;
 
 use crate::api_error::ApiError;
 use crate::backend::disk_service;
+use crate::backend::persistence_service;
 use crate::state::client_state::ClientState;
 use crate::state::disk_store::DiskMediaConfig;
 use crate::state::disk_store::FileMediaKind;
@@ -255,7 +256,20 @@ pub fn create_memory_disk(
                 auto_connect: request.auto_connect,
             },
         )?
+        .to_string()
     };
+
+    {
+        let mut disk_store = state
+            .disk_store
+            .lock()
+            .expect("disk store mutex should not be poisoned");
+
+        if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_store) {
+            let _ = disk_store.remove_unconnected_disk(&disk_id);
+            return Err(error);
+        }
+    }
 
     Ok(CreateMemoryDiskResponse { disk_id })
 }
@@ -286,7 +300,20 @@ pub fn create_file_disk(
                 auto_connect: request.auto_connect,
             },
         )?
+        .to_string()
     };
+
+    {
+        let mut disk_store = state
+            .disk_store
+            .lock()
+            .expect("disk store mutex should not be poisoned");
+
+        if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_store) {
+            let _ = disk_store.remove_unconnected_disk(&disk_id);
+            return Err(error);
+        }
+    }
 
     Ok(CreateFileDiskResponse { disk_id })
 }

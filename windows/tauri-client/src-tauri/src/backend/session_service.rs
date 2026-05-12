@@ -1,7 +1,6 @@
-use backend_rust::BackendContext;
-use backend_rust::SessionConfig;
-
 use crate::api_error::ApiError;
+use crate::backend::persistence_service;
+use crate::state::client_state::ClientState;
 
 #[derive(Debug, Clone)]
 pub struct SessionSnapshot {
@@ -9,9 +8,14 @@ pub struct SessionSnapshot {
     pub state_text: String,
 }
 
-pub fn initialize_client(backend: &BackendContext) -> Result<SessionSnapshot, ApiError> {
-    backend
-        .set_session_config(SessionConfig::default())
+pub fn initialize_client(state: &ClientState) -> Result<SessionSnapshot, ApiError> {
+    state.backend.close();
+
+    let restored_state = persistence_service::load_client_state()?;
+
+    state
+        .backend
+        .set_session_config(restored_state.session_config)
         .map_err(|error| {
             ApiError::new(
                 "invalid-session-config",
@@ -20,16 +24,24 @@ pub fn initialize_client(backend: &BackendContext) -> Result<SessionSnapshot, Ap
             )
         })?;
 
-    if !backend.open() {
+    if !state.backend.open() {
         return Err(ApiError::new(
             "backend-session-open-failed",
             "打开 BackendRust session 失败",
-            Some(backend.query_session_state_text()),
+            Some(state.backend.query_session_state_text()),
         ));
+    }
+
+    {
+        let mut disk_store = state
+            .disk_store
+            .lock()
+            .expect("disk store mutex should not be poisoned");
+        *disk_store = restored_state.disk_store;
     }
 
     Ok(SessionSnapshot {
         ready: true,
-        state_text: backend.query_session_state_text(),
+        state_text: state.backend.query_session_state_text(),
     })
 }
