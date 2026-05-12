@@ -56,6 +56,28 @@ pub struct CreateFileDiskRequestDto {
     pub auto_connect: bool,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CreateFileFormatDto {
+    Raw,
+    Vmdk,
+    Vhd,
+    Vhdx,
+    Vdi,
+    Qcow2,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateNewFileDiskRequestDto {
+    pub disk_name: String,
+    pub file_path: String,
+    #[serde(rename = "capacityMiB")]
+    pub capacity_mib: u64,
+    pub file_format: CreateFileFormatDto,
+    pub auto_connect: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMemoryDiskResponse {
@@ -236,6 +258,17 @@ fn map_requested_memory_media_kind(
     }
 }
 
+fn map_create_file_format(file_format: CreateFileFormatDto) -> disk_service::CreateFileFormat {
+    match file_format {
+        CreateFileFormatDto::Raw => disk_service::CreateFileFormat::Raw,
+        CreateFileFormatDto::Vmdk => disk_service::CreateFileFormat::Vmdk,
+        CreateFileFormatDto::Vhd => disk_service::CreateFileFormat::Vhd,
+        CreateFileFormatDto::Vhdx => disk_service::CreateFileFormat::Vhdx,
+        CreateFileFormatDto::Vdi => disk_service::CreateFileFormat::Vdi,
+        CreateFileFormatDto::Qcow2 => disk_service::CreateFileFormat::Qcow2,
+    }
+}
+
 #[tauri::command]
 pub fn query_managed_disks(state: State<'_, ClientState>) -> QueryManagedDisksResponse {
     let disks = disk_service::query_managed_disks(&state.backend)
@@ -337,6 +370,45 @@ pub fn create_file_disk(
             disk_service::CreateFileDiskRequest {
                 disk_name: request.disk_name,
                 file_path: request.file_path,
+                auto_connect: request.auto_connect,
+            },
+        )?
+        .to_string()
+    };
+
+    {
+        let mut disk_store = state
+            .disk_store
+            .lock()
+            .expect("disk store mutex should not be poisoned");
+
+        if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_store) {
+            let _ = disk_store.remove_unconnected_disk(&disk_id);
+            return Err(error);
+        }
+    }
+
+    Ok(CreateFileDiskResponse { disk_id })
+}
+
+#[tauri::command]
+pub fn create_new_file_disk(
+    state: State<'_, ClientState>,
+    request: CreateNewFileDiskRequestDto,
+) -> Result<CreateFileDiskResponse, ApiError> {
+    let disk_id = {
+        let mut disk_store = state
+            .disk_store
+            .lock()
+            .expect("disk store mutex should not be poisoned");
+
+        disk_service::create_new_file_disk(
+            &mut disk_store,
+            disk_service::CreateNewFileDiskRequest {
+                disk_name: request.disk_name,
+                file_path: request.file_path,
+                capacity_mib: request.capacity_mib,
+                file_format: map_create_file_format(request.file_format),
                 auto_connect: request.auto_connect,
             },
         )?

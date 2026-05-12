@@ -1,9 +1,14 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
 import { computed, reactive, ref, watch } from "vue";
-import type { CreateFileDiskRequest } from "../../entities/disk/model";
+import type {
+  CreateFileDiskRequest,
+  CreateFileFormat,
+  CreateNewFileDiskRequest,
+} from "../../entities/disk/model";
 import {
   createFileDisk,
+  createNewFileDisk,
   pickRawFilePath,
 } from "../../shared/api/diskClient";
 import { getErrorMessage } from "../../shared/api/sessionClient";
@@ -11,6 +16,14 @@ import { getErrorMessage } from "../../shared/api/sessionClient";
 interface FileDiskFormModel {
   diskName: string;
   filePath: string;
+  autoConnect: boolean;
+}
+
+interface NewFileDiskFormModel {
+  diskName: string;
+  filePath: string;
+  capacityMiB: number | null;
+  fileFormat: CreateFileFormat;
   autoConnect: boolean;
 }
 
@@ -37,6 +50,26 @@ const form = reactive<FileDiskFormModel>({
   filePath: "",
   autoConnect: false,
 });
+const newFileForm = reactive<NewFileDiskFormModel>({
+  diskName: "",
+  filePath: "",
+  capacityMiB: null,
+  fileFormat: "raw",
+  autoConnect: false,
+});
+
+const createFileFormats: Array<{
+  label: string;
+  value: CreateFileFormat;
+  disabled: boolean;
+}> = [
+  { label: "RAW", value: "raw", disabled: false },
+  { label: "VMDK", value: "vmdk", disabled: true },
+  { label: "VHD", value: "vhd", disabled: true },
+  { label: "VHDX", value: "vhdx", disabled: true },
+  { label: "VDI", value: "vdi", disabled: true },
+  { label: "QCOW2", value: "qcow2", disabled: true },
+];
 
 watch(
   () => props.modelValue,
@@ -53,6 +86,11 @@ function resetForm() {
   form.diskName = "";
   form.filePath = "";
   form.autoConnect = false;
+  newFileForm.diskName = "";
+  newFileForm.filePath = "";
+  newFileForm.capacityMiB = null;
+  newFileForm.fileFormat = "raw";
+  newFileForm.autoConnect = false;
 }
 
 function handleCancel() {
@@ -66,6 +104,30 @@ function validateRequest(): string | null {
 
   if (form.filePath.trim().length === 0) {
     return "文件路径不能为空";
+  }
+
+  return null;
+}
+
+function validateNewFileRequest(): string | null {
+  if (newFileForm.diskName.trim().length === 0) {
+    return "磁盘名称不能为空";
+  }
+
+  if (newFileForm.filePath.trim().length === 0) {
+    return "文件路径不能为空";
+  }
+
+  if (
+    newFileForm.capacityMiB === null ||
+    !Number.isInteger(newFileForm.capacityMiB) ||
+    newFileForm.capacityMiB <= 0
+  ) {
+    return "容量必须是大于 0 的 MiB 整数";
+  }
+
+  if (newFileForm.fileFormat !== "raw") {
+    return "当前阶段只支持 RAW";
   }
 
   return null;
@@ -111,6 +173,34 @@ async function handleSubmit() {
     submitting.value = false;
   }
 }
+
+async function handleCreateNewFileSubmit() {
+  errorText.value = validateNewFileRequest();
+  if (errorText.value) {
+    return;
+  }
+
+  const request: CreateNewFileDiskRequest = {
+    diskName: newFileForm.diskName.trim(),
+    filePath: newFileForm.filePath.trim(),
+    capacityMiB: newFileForm.capacityMiB ?? 0,
+    fileFormat: newFileForm.fileFormat,
+    autoConnect: newFileForm.autoConnect,
+  };
+
+  submitting.value = true;
+
+  try {
+    await createNewFileDisk(request);
+    ElMessage.success("文件盘已创建");
+    emit("created");
+    dialogVisible.value = false;
+  } catch (error) {
+    errorText.value = getErrorMessage(error);
+  } finally {
+    submitting.value = false;
+  }
+}
 </script>
 
 <template>
@@ -137,7 +227,45 @@ async function handleSubmit() {
       </el-tab-pane>
 
       <el-tab-pane label="创建文件" name="createNew">
-        <el-empty description="当前阶段暂不支持创建文件" />
+        <el-form label-position="top">
+          <el-form-item label="名称">
+            <el-input v-model="newFileForm.diskName" placeholder="输入磁盘名称" />
+          </el-form-item>
+
+          <el-form-item label="文件路径">
+            <el-input
+              v-model="newFileForm.filePath"
+              placeholder="输入要创建的 RAW 文件路径"
+            />
+          </el-form-item>
+
+          <el-form-item label="容量（MiB）">
+            <el-input-number
+              v-model="newFileForm.capacityMiB"
+              :min="1"
+              :step="1"
+              :precision="0"
+              controls-position="right"
+              style="width: 100%"
+            />
+          </el-form-item>
+
+          <el-form-item label="文件格式">
+            <el-select v-model="newFileForm.fileFormat" style="width: 100%">
+              <el-option
+                v-for="item in createFileFormats"
+                :key="item.value"
+                :label="item.label"
+                :value="item.value"
+                :disabled="item.disabled"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item label="启动自动连接">
+            <el-switch v-model="newFileForm.autoConnect" />
+          </el-form-item>
+        </el-form>
       </el-tab-pane>
     </el-tabs>
 
@@ -155,8 +283,7 @@ async function handleSubmit() {
         <el-button
           type="primary"
           :loading="submitting"
-          :disabled="activeTab !== 'pickExisting'"
-          @click="handleSubmit"
+          @click="activeTab === 'pickExisting' ? handleSubmit() : handleCreateNewFileSubmit()"
         >
           创建
         </el-button>

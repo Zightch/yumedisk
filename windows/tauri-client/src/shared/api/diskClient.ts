@@ -4,6 +4,8 @@ import type {
   ConnectDiskResponse,
   CreateFileDiskRequest,
   CreateFileDiskResponse,
+  CreateNewFileDiskRequest,
+  CreateNewFileDiskResponse,
   CreateMemoryDiskRequest,
   CreateMemoryDiskResponse,
   DeleteDiskRequest,
@@ -31,6 +33,12 @@ export async function createFileDisk(
   request: CreateFileDiskRequest,
 ): Promise<CreateFileDiskResponse> {
   return invoke<CreateFileDiskResponse>("create_file_disk", { request });
+}
+
+export async function createNewFileDisk(
+  request: CreateNewFileDiskRequest,
+): Promise<CreateNewFileDiskResponse> {
+  return invoke<CreateNewFileDiskResponse>("create_new_file_disk", { request });
 }
 
 export async function connectDisk(

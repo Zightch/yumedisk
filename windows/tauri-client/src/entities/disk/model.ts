@@ -1,5 +1,6 @@
 export type MemoryMediaKind = "denseMem" | "sparseMem";
 export type FileMediaKind = "rawFile";
+export type CreateFileFormat = "raw" | "vmdk" | "vhd" | "vhdx" | "vdi" | "qcow2";
 export type MemoryCreateKind = "auto" | MemoryMediaKind;
 export type DiskStatus = "disconnected" | "connected" | "invalid";
 
@@ -54,6 +55,18 @@ export interface CreateFileDiskRequest {
 }
 
 export interface CreateFileDiskResponse {
+  diskId: string;
+}
+
+export interface CreateNewFileDiskRequest {
+  diskName: string;
+  filePath: string;
+  capacityMiB: number;
+  fileFormat: CreateFileFormat;
+  autoConnect: boolean;
+}
+
+export interface CreateNewFileDiskResponse {
   diskId: string;
 }
 

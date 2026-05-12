@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs::OpenOptions;
 use std::path::PathBuf;
 
 use backend_rust::BackendContext;
@@ -65,6 +66,25 @@ pub struct CreateMemoryDiskRequest {
 pub struct CreateFileDiskRequest {
     pub disk_name: String,
     pub file_path: String,
+    pub auto_connect: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateFileFormat {
+    Raw,
+    Vmdk,
+    Vhd,
+    Vhdx,
+    Vdi,
+    Qcow2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateNewFileDiskRequest {
+    pub disk_name: String,
+    pub file_path: String,
+    pub capacity_mib: u64,
+    pub file_format: CreateFileFormat,
     pub auto_connect: bool,
 }
 
@@ -278,6 +298,87 @@ pub fn create_file_disk(
     Ok(disk_id)
 }
 
+pub fn create_new_file_disk(
+    disk_store: &mut DiskStore,
+    request: CreateNewFileDiskRequest,
+) -> Result<String, ApiError> {
+    let disk_name = request.disk_name.trim();
+    if disk_name.is_empty() {
+        return Err(ApiError::new("invalid-disk-name", "磁盘名称不能为空", None));
+    }
+
+    let file_path = request.file_path.trim();
+    if file_path.is_empty() {
+        return Err(ApiError::new("invalid-file-path", "文件路径不能为空", None));
+    }
+
+    if request.capacity_mib == 0 {
+        return Err(ApiError::new(
+            "invalid-disk-capacity",
+            "容量必须是大于 0 的 MiB 整数",
+            None,
+        ));
+    }
+
+    if request.file_format != CreateFileFormat::Raw {
+        return Err(ApiError::new(
+            "unsupported-file-format",
+            "当前阶段只支持 RAW",
+            None,
+        ));
+    }
+
+    let capacity_bytes = request.capacity_mib.checked_mul(MIB_BYTES).ok_or_else(|| {
+        ApiError::new(
+            "invalid-disk-capacity",
+            "容量必须是大于 0 的 MiB 整数",
+            None,
+        )
+    })?;
+
+    let file_path_buf = PathBuf::from(file_path);
+    let parent_path = file_path_buf.parent().ok_or_else(|| {
+        ApiError::new(
+            "invalid-file-path",
+            "文件路径必须包含父目录",
+            Some(file_path.to_string()),
+        )
+    })?;
+
+    if !parent_path.is_dir() {
+        return Err(ApiError::new(
+            "invalid-file-path",
+            "目标目录不存在",
+            Some(parent_path.display().to_string()),
+        ));
+    }
+
+    if file_path_buf.exists() {
+        return Err(ApiError::new(
+            "file-already-exists",
+            "目标文件已存在",
+            Some(file_path.to_string()),
+        ));
+    }
+
+    create_raw_file(&file_path_buf, capacity_bytes)?;
+
+    match create_file_disk(
+        disk_store,
+        CreateFileDiskRequest {
+            disk_name: request.disk_name,
+            file_path: request.file_path,
+            auto_connect: request.auto_connect,
+        },
+    ) {
+        Ok(disk_id) => Ok(disk_id),
+        Err(error) => {
+            let _ = std::fs::remove_file(&file_path_buf);
+            Err(error)
+        }
+    }
+}
+
 pub fn query_home_disk_list(
     backend: &BackendContext,
     disk_store: &DiskStore,
@@ -349,6 +450,28 @@ fn map_dense_memory_media_error(error: DenseMemoryMediaError, capacity_bytes: u6
             Some(capacity_bytes.to_string()),
         ),
     }
+}
+
+fn create_raw_file(file_path: &PathBuf, capacity_bytes: u64) -> Result<(), ApiError> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(file_path)
+        .map_err(|io_error| {
+            ApiError::new(
+                "create-file-open-failed",
+                "创建目标文件失败",
+                Some(format!("{} | {}", file_path.display(), io_error)),
+            )
+        })?;
+
+    file.set_len(capacity_bytes).map_err(|io_error| {
+        ApiError::new(
+            "create-file-size-failed",
+            "设置目标文件大小失败",
+            Some(format!("{} | {}", file_path.display(), io_error)),
+        )
+    })
 }
 
 fn map_raw_file_media_error(error: RawFileMediaError, file_path: &str) -> ApiError {
