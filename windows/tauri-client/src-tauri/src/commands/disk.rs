@@ -41,6 +41,7 @@ pub enum RequestedMemoryMediaKindDto {
 #[serde(rename_all = "camelCase")]
 pub struct CreateMemoryDiskRequestDto {
     pub disk_name: String,
+    #[serde(rename = "capacityMiB")]
     pub capacity_mib: u64,
     pub requested_memory_kind: RequestedMemoryMediaKindDto,
     pub auto_connect: bool,
