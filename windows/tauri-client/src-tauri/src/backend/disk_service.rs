@@ -250,6 +250,14 @@ pub fn pick_raw_file_path() -> Option<String> {
         .map(|path| path.display().to_string())
 }
 
+pub fn pick_new_raw_file_path() -> Option<String> {
+    FileDialog::new()
+        .set_title("选择新 RAW 文件位置")
+        .add_filter("RAW", &["raw"])
+        .save_file()
+        .map(|path| path.display().to_string())
+}
+
 pub fn create_file_disk(
     disk_store: &mut DiskStore,
     request: CreateFileDiskRequest,

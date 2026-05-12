@@ -9,6 +9,7 @@ import type {
 import {
   createFileDisk,
   createNewFileDisk,
+  pickNewRawFilePath,
   pickRawFilePath,
 } from "../../shared/api/diskClient";
 import { getErrorMessage } from "../../shared/api/sessionClient";
@@ -148,6 +149,21 @@ async function handleBrowse() {
   }
 }
 
+async function handleBrowseNewFilePath() {
+  browsing.value = true;
+
+  try {
+    const filePath = await pickNewRawFilePath();
+    if (filePath) {
+      newFileForm.filePath = filePath;
+    }
+  } catch (error) {
+    errorText.value = getErrorMessage(error);
+  } finally {
+    browsing.value = false;
+  }
+}
+
 async function handleSubmit() {
   errorText.value = validateRequest();
   if (errorText.value) {
@@ -233,10 +249,13 @@ async function handleCreateNewFileSubmit() {
           </el-form-item>
 
           <el-form-item label="文件路径">
-            <el-input
-              v-model="newFileForm.filePath"
-              placeholder="输入要创建的 RAW 文件路径"
-            />
+            <el-input v-model="newFileForm.filePath" placeholder="输入要创建的 RAW 文件路径">
+              <template #append>
+                <el-button :loading="browsing" @click="handleBrowseNewFilePath">
+                  浏览
+                </el-button>
+              </template>
+            </el-input>
           </el-form-item>
 
           <el-form-item label="容量（MiB）">

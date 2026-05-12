@@ -29,6 +29,11 @@ export async function pickRawFilePath(): Promise<string | null> {
   return response.filePath;
 }
 
+export async function pickNewRawFilePath(): Promise<string | null> {
+  const response = await invoke<PickRawFilePathResponse>("pick_new_raw_file_path");
+  return response.filePath;
+}
+
 export async function createFileDisk(
   request: CreateFileDiskRequest,
 ): Promise<CreateFileDiskResponse> {

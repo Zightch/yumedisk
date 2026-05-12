@@ -355,6 +355,13 @@ pub fn pick_raw_file_path() -> PickRawFilePathResponse {
 }
 
 #[tauri::command]
+pub fn pick_new_raw_file_path() -> PickRawFilePathResponse {
+    PickRawFilePathResponse {
+        file_path: disk_service::pick_new_raw_file_path(),
+    }
+}
+
+#[tauri::command]
 pub fn create_file_disk(
     state: State<'_, ClientState>,
     request: CreateFileDiskRequestDto,

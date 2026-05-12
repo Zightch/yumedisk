@@ -16,6 +16,7 @@ pub fn run() {
             commands::disk::query_home_disk_list,
             commands::disk::create_memory_disk,
             commands::disk::pick_raw_file_path,
+            commands::disk::pick_new_raw_file_path,
             commands::disk::create_file_disk,
             commands::disk::create_new_file_disk,
             commands::disk::connect_disk,
