@@ -55,6 +55,18 @@ export interface CreateFileDiskResponse {
   diskId: string;
 }
 
+export interface ConnectDiskRequest {
+  diskId: string;
+}
+
+export interface ConnectDiskResponse {
+  targetId: number;
+}
+
+export interface DisconnectDiskRequest {
+  diskId: string;
+}
+
 export interface PickRawFilePathResponse {
   filePath: string | null;
 }

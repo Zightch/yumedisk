@@ -2,8 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use backend_rust::BackendContext;
-use backend_rust::Media;
+use backend_rust::DiskConfig;
 use backend_rust::ManagedDiskSnapshot;
+use backend_rust::Media;
 use rfd::FileDialog;
 
 use crate::api_error::ApiError;
@@ -67,17 +68,79 @@ pub fn query_managed_disks(backend: &BackendContext) -> Vec<ManagedDiskSnapshot>
     backend.snapshot_managed_disks()
 }
 
+pub fn connect_disk(
+    backend: &BackendContext,
+    disk_store: &mut DiskStore,
+    disk_id: &str,
+) -> Result<u32, ApiError> {
+    let config_disk = disk_store
+        .find_config_disk(disk_id)
+        .ok_or_else(|| ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string())))?;
+
+    if disk_store.find_connected_disk(disk_id).is_some() {
+        return Err(ApiError::new(
+            "disk-already-connected",
+            "磁盘已经处于连接状态",
+            Some(disk_id.to_string()),
+        ));
+    }
+
+    let media = disk_store.take_held_media(disk_id).ok_or_else(|| {
+        ApiError::new(
+            "held-media-not-found",
+            "宿主未持有当前磁盘介质实例",
+            Some(disk_id.to_string()),
+        )
+    })?;
+
+    let disk_config = build_disk_config(&config_disk);
+    let mut error_text = String::new();
+    match backend.try_create_managed_disk(disk_config, media, Some(&mut error_text)) {
+        Ok(target_id) => {
+            disk_store.insert_connected_disk(disk_id.to_string(), target_id);
+            Ok(target_id)
+        }
+        Err(media) => {
+            disk_store.put_held_media(disk_id.to_string(), media);
+            Err(ApiError::new(
+                "connect-disk-failed",
+                "连接磁盘失败",
+                Some(error_text),
+            ))
+        }
+    }
+}
+
+pub fn disconnect_disk(
+    backend: &BackendContext,
+    disk_store: &mut DiskStore,
+    disk_id: &str,
+) -> Result<(), ApiError> {
+    let connected_record = disk_store.find_connected_disk(disk_id).ok_or_else(|| {
+        ApiError::new(
+            "disk-not-connected",
+            "磁盘当前未连接",
+            Some(disk_id.to_string()),
+        )
+    })?;
+
+    let mut error_text = String::new();
+    let media = backend
+        .remove_managed_disk_with_media(connected_record.target_id, Some(&mut error_text))
+        .ok_or_else(|| ApiError::new("disconnect-disk-failed", "断开磁盘失败", Some(error_text)))?;
+
+    let _ = disk_store.remove_connected_disk(disk_id);
+    disk_store.put_held_media(disk_id.to_string(), media);
+    Ok(())
+}
+
 pub fn create_memory_disk(
     disk_store: &mut DiskStore,
     request: CreateMemoryDiskRequest,
 ) -> Result<String, ApiError> {
     let disk_name = request.disk_name.trim();
     if disk_name.is_empty() {
-        return Err(ApiError::new(
-            "invalid-disk-name",
-            "磁盘名称不能为空",
-            None,
-        ));
+        return Err(ApiError::new("invalid-disk-name", "磁盘名称不能为空", None));
     }
 
     if request.capacity_mib == 0 {
@@ -88,16 +151,13 @@ pub fn create_memory_disk(
         ));
     }
 
-    let capacity_bytes = request
-        .capacity_mib
-        .checked_mul(MIB_BYTES)
-        .ok_or_else(|| {
-            ApiError::new(
-                "invalid-disk-capacity",
-                "容量必须是大于 0 的 MiB 整数",
-                None,
-            )
-        })?;
+    let capacity_bytes = request.capacity_mib.checked_mul(MIB_BYTES).ok_or_else(|| {
+        ApiError::new(
+            "invalid-disk-capacity",
+            "容量必须是大于 0 的 MiB 整数",
+            None,
+        )
+    })?;
 
     let memory_kind = resolve_memory_kind(request.requested_memory_kind, capacity_bytes);
     let media = create_memory_media(memory_kind, capacity_bytes)?;
@@ -133,20 +193,12 @@ pub fn create_file_disk(
 ) -> Result<String, ApiError> {
     let disk_name = request.disk_name.trim();
     if disk_name.is_empty() {
-        return Err(ApiError::new(
-            "invalid-disk-name",
-            "磁盘名称不能为空",
-            None,
-        ));
+        return Err(ApiError::new("invalid-disk-name", "磁盘名称不能为空", None));
     }
 
     let file_path = request.file_path.trim();
     if file_path.is_empty() {
-        return Err(ApiError::new(
-            "invalid-file-path",
-            "文件路径不能为空",
-            None,
-        ));
+        return Err(ApiError::new("invalid-file-path", "文件路径不能为空", None));
     }
 
     let file_path_buf = PathBuf::from(file_path);
@@ -204,11 +256,7 @@ pub fn query_home_disk_list(
         .map(|config_disk| {
             let connected_target_id = connected_by_disk_id.get(&config_disk.disk_id).copied();
 
-            map_home_disk_list_item_snapshot(
-                config_disk,
-                connected_target_id,
-                &runtime_by_target,
-            )
+            map_home_disk_list_item_snapshot(config_disk, connected_target_id, &runtime_by_target)
         })
         .collect();
 
@@ -244,10 +292,7 @@ fn create_memory_media(
     }
 }
 
-fn map_dense_memory_media_error(
-    error: DenseMemoryMediaError,
-    capacity_bytes: u64,
-) -> ApiError {
+fn map_dense_memory_media_error(error: DenseMemoryMediaError, capacity_bytes: u64) -> ApiError {
     match error {
         DenseMemoryMediaError::SizeExceedsProcessLimit => ApiError::new(
             "dense-memory-size-exceeds-process-limit",
@@ -301,7 +346,9 @@ fn map_home_disk_list_item_snapshot(
         auto_connect: config_disk.auto_connect,
         read_only: config_disk.read_only,
         connected: connected_target_id.is_some(),
-        online: runtime_snapshot.map(|snapshot| snapshot.online).unwrap_or(false),
+        online: runtime_snapshot
+            .map(|snapshot| snapshot.online)
+            .unwrap_or(false),
         target_id: connected_target_id,
         lifecycle_text: runtime_snapshot
             .map(|snapshot| snapshot.lifecycle_text.clone())
@@ -313,5 +360,16 @@ fn map_home_disk_list_item_snapshot(
             .map(|snapshot| snapshot.physical_drive_path.clone())
             .unwrap_or_default(),
         media: config_disk.media,
+    }
+}
+
+fn build_disk_config(config_disk: &ConfigDiskRecord) -> DiskConfig {
+    DiskConfig {
+        disk_size_bytes: match &config_disk.media {
+            DiskMediaConfig::Memory { capacity_bytes, .. } => *capacity_bytes,
+            DiskMediaConfig::File { capacity_bytes, .. } => *capacity_bytes,
+        },
+        read_only: config_disk.read_only,
+        ..DiskConfig::default()
     }
 }

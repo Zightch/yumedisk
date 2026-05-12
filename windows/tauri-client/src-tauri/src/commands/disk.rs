@@ -72,6 +72,24 @@ pub struct CreateFileDiskResponse {
     pub disk_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectDiskRequestDto {
+    pub disk_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectDiskResponse {
+    pub target_id: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisconnectDiskRequestDto {
+    pub disk_id: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MemoryMediaKindDto {
@@ -191,12 +209,8 @@ fn map_requested_memory_media_kind(
 ) -> disk_service::RequestedMemoryMediaKind {
     match requested_kind {
         RequestedMemoryMediaKindDto::Auto => disk_service::RequestedMemoryMediaKind::Auto,
-        RequestedMemoryMediaKindDto::DenseMem => {
-            disk_service::RequestedMemoryMediaKind::DenseMem
-        }
-        RequestedMemoryMediaKindDto::SparseMem => {
-            disk_service::RequestedMemoryMediaKind::SparseMem
-        }
+        RequestedMemoryMediaKindDto::DenseMem => disk_service::RequestedMemoryMediaKind::DenseMem,
+        RequestedMemoryMediaKindDto::SparseMem => disk_service::RequestedMemoryMediaKind::SparseMem,
     }
 }
 
@@ -221,7 +235,11 @@ pub fn query_home_disk_list(state: State<'_, ClientState>) -> QueryHomeDiskListR
         disk_service::query_home_disk_list(&state.backend, &disk_store)
     };
 
-    let auto_connect_count = snapshot.disks.iter().filter(|disk| disk.auto_connect).count() as u32;
+    let auto_connect_count = snapshot
+        .disks
+        .iter()
+        .filter(|disk| disk.auto_connect)
+        .count() as u32;
     let disks = snapshot
         .disks
         .into_iter()
@@ -316,4 +334,34 @@ pub fn create_file_disk(
     }
 
     Ok(CreateFileDiskResponse { disk_id })
+}
+
+#[tauri::command]
+pub fn connect_disk(
+    state: State<'_, ClientState>,
+    request: ConnectDiskRequestDto,
+) -> Result<ConnectDiskResponse, ApiError> {
+    let target_id = {
+        let mut disk_store = state
+            .disk_store
+            .lock()
+            .expect("disk store mutex should not be poisoned");
+
+        disk_service::connect_disk(&state.backend, &mut disk_store, &request.disk_id)?
+    };
+
+    Ok(ConnectDiskResponse { target_id })
+}
+
+#[tauri::command]
+pub fn disconnect_disk(
+    state: State<'_, ClientState>,
+    request: DisconnectDiskRequestDto,
+) -> Result<(), ApiError> {
+    let mut disk_store = state
+        .disk_store
+        .lock()
+        .expect("disk store mutex should not be poisoned");
+
+    disk_service::disconnect_disk(&state.backend, &mut disk_store, &request.disk_id)
 }

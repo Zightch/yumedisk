@@ -12,6 +12,12 @@ const props = defineProps<{
   autoConnectCount: number;
   loading: boolean;
   errorText: string | null;
+  actionLoadingDiskId: string | null;
+}>();
+
+const emit = defineEmits<{
+  connect: [diskId: string];
+  disconnect: [diskId: string];
 }>();
 
 const diskCount = computed(() => props.disks.length);
@@ -74,9 +80,31 @@ const diskCount = computed(() => props.disks.length);
               </el-col>
 
               <el-col :xs="24" :sm="8" style="display: flex; justify-content: flex-end">
-                <el-tag :type="disk.connected ? 'success' : 'info'" round>
-                  {{ disk.connected ? "已连接" : "未连接" }}
-                </el-tag>
+                <el-space wrap>
+                  <el-tag :type="disk.connected ? 'success' : 'info'" round>
+                    {{ disk.connected ? "已连接" : "未连接" }}
+                  </el-tag>
+                  <el-button
+                    v-if="!disk.connected"
+                    type="primary"
+                    plain
+                    size="small"
+                    :loading="actionLoadingDiskId === disk.diskId"
+                    @click="emit('connect', disk.diskId)"
+                  >
+                    连接
+                  </el-button>
+                  <el-button
+                    v-else
+                    type="danger"
+                    plain
+                    size="small"
+                    :loading="actionLoadingDiskId === disk.diskId"
+                    @click="emit('disconnect', disk.diskId)"
+                  >
+                    断开
+                  </el-button>
+                </el-space>
               </el-col>
             </el-row>
 

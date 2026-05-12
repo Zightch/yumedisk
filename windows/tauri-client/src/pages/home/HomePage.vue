@@ -1,9 +1,14 @@
 <script setup lang="ts">
+import { ElMessage } from "element-plus";
 import { onMounted, ref } from "vue";
 import type { HomeDiskListItem } from "../../entities/disk/model";
 import CreateFileDiskDialog from "../../features/createFileDisk/CreateFileDiskDialog.vue";
 import CreateMemoryDiskDialog from "../../features/createMemoryDisk/CreateMemoryDiskDialog.vue";
-import { queryHomeDiskList } from "../../shared/api/diskClient";
+import {
+  connectDisk,
+  disconnectDisk,
+  queryHomeDiskList,
+} from "../../shared/api/diskClient";
 import { getErrorMessage } from "../../shared/api/sessionClient";
 import AppHeader from "../../widgets/AppHeader/AppHeader.vue";
 import DiskListPanel from "../../widgets/DiskListPanel/DiskListPanel.vue";
@@ -18,6 +23,7 @@ const loading = ref(true);
 const errorText = ref<string | null>(null);
 const memoryCreateVisible = ref(false);
 const fileCreateVisible = ref(false);
+const actionLoadingDiskId = ref<string | null>(null);
 
 async function loadHomeDiskList() {
   loading.value = true;
@@ -55,6 +61,34 @@ async function handleMemoryDiskCreated() {
 async function handleFileDiskCreated() {
   await loadHomeDiskList();
 }
+
+async function handleConnectDisk(diskId: string) {
+  actionLoadingDiskId.value = diskId;
+
+  try {
+    await connectDisk({ diskId });
+    ElMessage.success("磁盘已连接");
+    await loadHomeDiskList();
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error));
+  } finally {
+    actionLoadingDiskId.value = null;
+  }
+}
+
+async function handleDisconnectDisk(diskId: string) {
+  actionLoadingDiskId.value = diskId;
+
+  try {
+    await disconnectDisk({ diskId });
+    ElMessage.success("磁盘已断开");
+    await loadHomeDiskList();
+  } catch (error) {
+    ElMessage.error(getErrorMessage(error));
+  } finally {
+    actionLoadingDiskId.value = null;
+  }
+}
 </script>
 
 <template>
@@ -73,6 +107,9 @@ async function handleFileDiskCreated() {
         :auto-connect-count="autoConnectCount"
         :loading="loading"
         :error-text="errorText"
+        :action-loading-disk-id="actionLoadingDiskId"
+        @connect="handleConnectDisk"
+        @disconnect="handleDisconnectDisk"
       />
     </el-main>
   </el-container>

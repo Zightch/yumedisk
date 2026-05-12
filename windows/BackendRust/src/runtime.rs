@@ -803,18 +803,18 @@ impl BackendContext {
         types::YUMEDISK_MAX_TARGETS
     }
 
-    pub fn create_managed_disk(
+    pub fn try_create_managed_disk(
         &self,
         mut disk_config: types::DiskConfig,
         media: Box<dyn Media>,
         out_error_text: Option<&mut String>,
-    ) -> bool {
+    ) -> Result<u32, Box<dyn Media>> {
         let session = *self.inner.session.lock().expect("session poisoned");
         if session == 0 {
             if let Some(out_error_text) = out_error_text {
                 *out_error_text = String::from("session-not-open");
             }
-            return false;
+            return Err(media);
         }
 
         if disk_config.target_id == types::YUMEDISK_MAX_TARGETS {
@@ -823,7 +823,7 @@ impl BackendContext {
                 if let Some(out_error_text) = out_error_text {
                     *out_error_text = String::from("no-free-target");
                 }
-                return false;
+                return Err(media);
             }
         }
 
@@ -832,14 +832,14 @@ impl BackendContext {
             if let Some(out_error_text) = out_error_text {
                 *out_error_text = String::from(error.as_code());
             }
-            return false;
+            return Err(media);
         }
 
         if self.disk_runtime_exists(disk_config.target_id) {
             if let Some(out_error_text) = out_error_text {
                 *out_error_text = String::from("target-already-exists");
             }
-            return false;
+            return Err(media);
         }
 
         let visible_disks_before_create = scan::enumerate_visible_yumedisks();
@@ -865,11 +865,15 @@ impl BackendContext {
         };
         if status != appkernel::AK_STATUS_SUCCESS {
             self.erase_disk_runtime(disk_config.target_id);
-            {
+            let media = {
                 let mut runtime_guard = runtime.write().expect("disk runtime poisoned");
                 runtime_guard.staging.clear_locked();
-                runtime_guard.media.instance = None;
-            }
+                runtime_guard
+                    .media
+                    .instance
+                    .take()
+                    .expect("runtime media should exist on create failure")
+            };
             if let Some(out_error_text) = out_error_text {
                 *out_error_text = format_status_hex(status);
             }
@@ -878,7 +882,7 @@ impl BackendContext {
                 disk_config.target_id,
                 format_status_hex(status)
             ));
-            return false;
+            return Err(media);
         }
 
         {
@@ -918,23 +922,37 @@ impl BackendContext {
             ));
         }
 
-        true
+        Ok(disk_config.target_id)
     }
 
-    pub fn remove_managed_disk(&self, target_id: u32, out_error_text: Option<&mut String>) -> bool {
+    pub fn create_managed_disk(
+        &self,
+        disk_config: types::DiskConfig,
+        media: Box<dyn Media>,
+        out_error_text: Option<&mut String>,
+    ) -> bool {
+        self.try_create_managed_disk(disk_config, media, out_error_text)
+            .is_ok()
+    }
+
+    pub fn remove_managed_disk_with_media(
+        &self,
+        target_id: u32,
+        out_error_text: Option<&mut String>,
+    ) -> Option<Box<dyn Media>> {
         let session = *self.inner.session.lock().expect("session poisoned");
         if session == 0 {
             if let Some(out_error_text) = out_error_text {
                 *out_error_text = String::from("session-not-open");
             }
-            return false;
+            return None;
         }
 
         let Some(runtime) = self.find_disk_runtime(target_id) else {
             if let Some(out_error_text) = out_error_text {
                 *out_error_text = String::from("target-not-found");
             }
-            return false;
+            return None;
         };
 
         let handle = runtime
@@ -942,40 +960,48 @@ impl BackendContext {
             .expect("disk runtime poisoned")
             .lifecycle
             .handle;
-        if handle == 0 {
-            {
-                let mut runtime_guard = runtime.write().expect("disk runtime poisoned");
-                runtime_guard.staging.clear_locked();
-                runtime_guard.media.instance = None;
+        if handle != 0 {
+            // SAFETY: valid disk handle.
+            let status = unsafe { appkernel::AkRemoveDisk(handle as *mut appkernel::AkDisk) };
+            if status != appkernel::AK_STATUS_SUCCESS {
+                if let Some(out_error_text) = out_error_text {
+                    *out_error_text = format_status_hex(status);
+                }
+                self.append_log(format!(
+                    "[backend] remove failed, target={}, status={}",
+                    target_id,
+                    format_status_hex(status)
+                ));
+                return None;
             }
-            self.erase_disk_runtime(target_id);
-            self.append_log(format!("[backend] removed target={}", target_id));
-            return true;
         }
 
-        // SAFETY: valid disk handle.
-        let status = unsafe { appkernel::AkRemoveDisk(handle as *mut appkernel::AkDisk) };
-        if status != appkernel::AK_STATUS_SUCCESS {
-            if let Some(out_error_text) = out_error_text {
-                *out_error_text = format_status_hex(status);
-            }
-            self.append_log(format!(
-                "[backend] remove failed, target={}, status={}",
-                target_id,
-                format_status_hex(status)
-            ));
-            return false;
-        }
-
-        {
+        let media = {
             let mut runtime_guard = runtime.write().expect("disk runtime poisoned");
             runtime_guard.lifecycle.handle = 0;
             runtime_guard.staging.clear_locked();
-            runtime_guard.media.instance = None;
-        }
+            runtime_guard.media.instance.take()
+        };
         self.erase_disk_runtime(target_id);
+
+        let Some(media) = media else {
+            if let Some(out_error_text) = out_error_text {
+                *out_error_text = String::from("media-not-available");
+            }
+            self.append_log(format!(
+                "[backend] remove failed, target={}, media-not-available",
+                target_id
+            ));
+            return None;
+        };
+
         self.append_log(format!("[backend] removed target={}", target_id));
-        true
+        Some(media)
+    }
+
+    pub fn remove_managed_disk(&self, target_id: u32, out_error_text: Option<&mut String>) -> bool {
+        self.remove_managed_disk_with_media(target_id, out_error_text)
+            .is_some()
     }
 
     pub fn remove_all_managed_disks(&self) -> bool {

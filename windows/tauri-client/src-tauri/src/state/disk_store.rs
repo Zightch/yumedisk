@@ -87,6 +87,42 @@ impl DiskStore {
         self.config_disks.push(config_disk);
     }
 
+    pub fn find_config_disk(&self, disk_id: &str) -> Option<ConfigDiskRecord> {
+        self.config_disks
+            .iter()
+            .find(|disk| disk.disk_id == disk_id)
+            .cloned()
+    }
+
+    pub fn take_held_media(&mut self, disk_id: &str) -> Option<Box<dyn Media>> {
+        self.held_media_by_disk_id.remove(disk_id)
+    }
+
+    pub fn put_held_media(&mut self, disk_id: String, media: Box<dyn Media>) {
+        self.held_media_by_disk_id.insert(disk_id, media);
+    }
+
+    pub fn insert_connected_disk(&mut self, disk_id: String, target_id: u32) {
+        self.connected_disks.retain(|disk| disk.disk_id != disk_id);
+        self.connected_disks
+            .push(ConnectedDiskRecord { disk_id, target_id });
+    }
+
+    pub fn remove_connected_disk(&mut self, disk_id: &str) -> Option<ConnectedDiskRecord> {
+        let index = self
+            .connected_disks
+            .iter()
+            .position(|disk| disk.disk_id == disk_id)?;
+        Some(self.connected_disks.remove(index))
+    }
+
+    pub fn find_connected_disk(&self, disk_id: &str) -> Option<ConnectedDiskRecord> {
+        self.connected_disks
+            .iter()
+            .find(|disk| disk.disk_id == disk_id)
+            .cloned()
+    }
+
     pub fn remove_unconnected_disk(&mut self, disk_id: &str) -> bool {
         let previous_count = self.config_disks.len();
         self.config_disks.retain(|disk| disk.disk_id != disk_id);
