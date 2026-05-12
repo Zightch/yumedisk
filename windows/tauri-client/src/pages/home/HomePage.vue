@@ -5,6 +5,7 @@ import type { HomeDiskListItem } from "../../entities/disk/model";
 import CreateFileDiskDialog from "../../features/createFileDisk/CreateFileDiskDialog.vue";
 import CreateMemoryDiskDialog from "../../features/createMemoryDisk/CreateMemoryDiskDialog.vue";
 import EditDiskDialog from "../../features/editDisk/EditDiskDialog.vue";
+import { DEFAULT_THEME, applyTheme, type AppTheme } from "../../shared/theme/theme";
 import {
   connectDisk,
   deleteDisk,
@@ -14,6 +15,7 @@ import {
 import { getErrorMessage } from "../../shared/api/sessionClient";
 import AppHeader from "../../widgets/AppHeader/AppHeader.vue";
 import DiskListPanel from "../../widgets/DiskListPanel/DiskListPanel.vue";
+import SettingsPage from "../../widgets/SettingsPage/SettingsPage.vue";
 
 defineProps<{
   sessionReady: boolean;
@@ -26,8 +28,10 @@ const errorText = ref<string | null>(null);
 const memoryCreateVisible = ref(false);
 const fileCreateVisible = ref(false);
 const editDiskVisible = ref(false);
+const settingsVisible = ref(false);
 const editingDisk = ref<HomeDiskListItem | null>(null);
 const actionLoadingDiskId = ref<string | null>(null);
+const currentTheme = ref<AppTheme>({ ...DEFAULT_THEME });
 
 async function loadHomeDiskList() {
   loading.value = true;
@@ -56,6 +60,10 @@ function handleOpenMemoryCreate() {
 
 function handleOpenFileCreate() {
   fileCreateVisible.value = true;
+}
+
+function handleOpenSettings() {
+  settingsVisible.value = true;
 }
 
 async function handleMemoryDiskCreated() {
@@ -123,6 +131,11 @@ async function handleDeleteDisk(diskId: string) {
     actionLoadingDiskId.value = null;
   }
 }
+
+function handleThemeChanged(theme: AppTheme) {
+  currentTheme.value = theme;
+  applyTheme(theme);
+}
 </script>
 
 <template>
@@ -130,6 +143,7 @@ async function handleDeleteDisk(diskId: string) {
     <el-header class="home-page__header" height="auto">
       <AppHeader
         :session-ready="sessionReady"
+        @open-settings="handleOpenSettings"
         @open-memory-create="handleOpenMemoryCreate"
         @open-file-create="handleOpenFileCreate"
       />
@@ -150,6 +164,11 @@ async function handleDeleteDisk(diskId: string) {
     </el-main>
   </el-container>
 
+  <SettingsPage
+    v-model="settingsVisible"
+    :theme="currentTheme"
+    @update:theme="handleThemeChanged"
+  />
   <CreateMemoryDiskDialog
     v-model="memoryCreateVisible"
     @created="handleMemoryDiskCreated"

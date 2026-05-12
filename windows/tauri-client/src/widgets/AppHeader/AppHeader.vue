@@ -7,6 +7,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  openSettings: [];
   openMemoryCreate: [];
   openFileCreate: [];
 }>();
@@ -28,7 +29,12 @@ function handleOpenFileCreate() {
   <header class="app-header">
     <div class="app-header__brand">
       <h1 class="app-header__title">YumeDisk</h1>
-      <button class="app-header__settings" type="button" disabled aria-label="设置">
+      <button
+        class="app-header__settings"
+        type="button"
+        aria-label="设置"
+        @click="emit('openSettings')"
+      >
         <el-icon>
           <Setting />
         </el-icon>
