@@ -202,10 +202,12 @@
   padding: 0;
   display: flex;
   justify-content: center;
+  flex: 0 0 auto;
 }
 
 .app-dialog-tabs.el-tabs .el-tabs__nav-scroll {
-  width: 100%;
+  width: auto;
+  flex: 0 0 auto;
   display: flex;
   justify-content: center;
   overflow: visible;
@@ -215,11 +217,13 @@
   gap: 4px;
   border: 0;
   margin: 0 auto;
+  flex: 0 0 auto;
 }
 
 .app-dialog-tabs.el-tabs .el-tabs__item {
   height: 36px;
   padding: 0 14px;
+  flex: 0 0 auto;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -258,7 +262,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid color-mix(in srgb, var(--border-strong) 64%, transparent);
+  border: 2px solid color-mix(in srgb, var(--border-strong) 40%, transparent);
   border-radius: 8px;
   background: var(--bg-surface);
   box-shadow: none;
@@ -274,7 +278,7 @@
 
 .app-dialog-chips.el-radio-group .el-radio-button__original-radio:checked + .el-radio-button__inner {
   background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent-border) 80%, transparent);
+  border-color: color-mix(in srgb, var(--accent-border) 64%, transparent);
   box-shadow: none;
   color: var(--accent-strong);
 }

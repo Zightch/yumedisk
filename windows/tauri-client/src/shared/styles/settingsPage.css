@@ -129,8 +129,8 @@
   align-items: center;
   justify-content: center;
   background: var(--bg-window);
-  border: 2px solid color-mix(in srgb, var(--border-strong) 64%, transparent);
-  border-left: 2px solid color-mix(in srgb, var(--border-strong) 64%, transparent);
+  border: 2px solid color-mix(in srgb, var(--border-strong) 40%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--border-strong) 40%, transparent);
   border-radius: 10px;
   color: var(--text-secondary);
   font-size: 12px;
@@ -145,7 +145,7 @@
 
 .settings-chip-group .el-radio-button__original-radio:checked + .el-radio-button__inner {
   background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent-border) 80%, transparent);
+  border-color: color-mix(in srgb, var(--accent-border) 64%, transparent);
   color: var(--accent-strong);
   box-shadow: none;
 }
