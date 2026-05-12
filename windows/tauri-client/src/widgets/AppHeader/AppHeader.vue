@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { FolderOpened, Link, Plus, Setting, Wallet } from "@element-plus/icons-vue";
+import { Plus, Setting } from "@element-plus/icons-vue";
 
-defineProps<{
+const props = defineProps<{
   sessionReady: boolean;
 }>();
 
@@ -25,45 +25,62 @@ function handleOpenFileCreate() {
 </script>
 
 <template>
-  <el-row justify="space-between" align="middle" style="width: 100%" :gutter="16">
-    <el-col :xs="24" :sm="12">
-      <el-space wrap>
-        <el-text size="large">
-          <strong>YumeDisk</strong>
-        </el-text>
-        <el-button :icon="Setting" circle disabled />
-      </el-space>
-    </el-col>
+  <header class="app-header">
+    <div class="app-header__brand">
+      <h1 class="app-header__title">YumeDisk</h1>
+      <button class="app-header__settings" type="button" disabled aria-label="设置">
+        <el-icon>
+          <Setting />
+        </el-icon>
+      </button>
+    </div>
 
-    <el-col :xs="24" :sm="12" style="display: flex; justify-content: flex-end">
-      <el-space wrap alignment="center">
-        <el-tag :type="sessionReady ? 'success' : 'info'" round>
-          {{ sessionReady ? "会话正常" : "会话未就绪" }}
-        </el-tag>
+    <div class="app-header__tools">
+      <div class="app-header__status" :class="{ 'is-ready': props.sessionReady }">
+        <span class="app-header__status-dot"></span>
+        <span class="app-header__status-text">
+          {{ props.sessionReady ? "会话正常" : "会话未就绪" }}
+        </span>
+      </div>
 
-        <el-popover
-          v-model:visible="addPopoverVisible"
-          placement="bottom-end"
-          trigger="click"
-          :width="220"
-        >
-          <template #reference>
-            <el-button :icon="Plus" circle type="primary" />
-          </template>
+      <el-popover
+        v-model:visible="addPopoverVisible"
+        popper-class="app-header__add-popover"
+        placement="bottom-end"
+        trigger="click"
+        :show-arrow="false"
+        :width="248"
+        :offset="8"
+      >
+        <template #reference>
+          <button class="app-header__add" type="button" aria-label="添加磁盘">
+            <el-icon>
+              <Plus />
+            </el-icon>
+          </button>
+        </template>
 
-          <el-space direction="vertical" fill>
-            <el-button :icon="Wallet" plain @click="handleOpenMemoryCreate">
-              内存盘
-            </el-button>
-            <el-button :icon="FolderOpened" plain @click="handleOpenFileCreate">
-              文件盘
-            </el-button>
-            <el-button :icon="Link" plain disabled>
-              网络盘
-            </el-button>
-          </el-space>
-        </el-popover>
-      </el-space>
-    </el-col>
-  </el-row>
+        <div class="app-header__add-options">
+          <button class="app-header__add-option" type="button" @click="handleOpenMemoryCreate">
+            <span class="app-header__add-option-icon app-header__add-option-icon--memory">
+              M
+            </span>
+            <span class="app-header__add-option-title">内存盘</span>
+          </button>
+
+          <button class="app-header__add-option" type="button" @click="handleOpenFileCreate">
+            <span class="app-header__add-option-icon app-header__add-option-icon--file">F</span>
+            <span class="app-header__add-option-title">文件盘</span>
+          </button>
+
+          <button class="app-header__add-option" type="button" disabled>
+            <span class="app-header__add-option-icon app-header__add-option-icon--network">
+              N
+            </span>
+            <span class="app-header__add-option-title">网络盘</span>
+          </button>
+        </div>
+      </el-popover>
+    </div>
+  </header>
 </template>
