@@ -12,7 +12,8 @@ pub fn run() {
             commands::session::initialize_client,
             commands::config::query_backend_defaults,
             commands::config::query_session_config,
-            commands::disk::query_managed_disks
+            commands::disk::query_managed_disks,
+            commands::disk::query_home_disk_list
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

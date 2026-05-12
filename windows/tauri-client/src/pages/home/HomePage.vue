@@ -1,10 +1,40 @@
 <script setup lang="ts">
+import { onMounted, ref } from "vue";
+import type { HomeDiskListItem } from "../../entities/disk/model";
+import { queryHomeDiskList } from "../../shared/api/diskClient";
+import { getErrorMessage } from "../../shared/api/sessionClient";
 import AppHeader from "../../widgets/AppHeader/AppHeader.vue";
 import DiskListPanel from "../../widgets/DiskListPanel/DiskListPanel.vue";
 
 defineProps<{
   sessionReady: boolean;
 }>();
+
+const disks = ref<HomeDiskListItem[]>([]);
+const autoConnectCount = ref(0);
+const loading = ref(true);
+const errorText = ref<string | null>(null);
+
+async function loadHomeDiskList() {
+  loading.value = true;
+  errorText.value = null;
+
+  try {
+    const snapshot = await queryHomeDiskList();
+    disks.value = snapshot.disks;
+    autoConnectCount.value = snapshot.autoConnectCount;
+  } catch (error) {
+    disks.value = [];
+    autoConnectCount.value = 0;
+    errorText.value = getErrorMessage(error);
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(() => {
+  void loadHomeDiskList();
+});
 </script>
 
 <template>
@@ -14,7 +44,12 @@ defineProps<{
     </el-header>
 
     <el-main style="padding: 16px; overflow: hidden">
-      <DiskListPanel :disk-count="0" :auto-connect-count="0" />
+      <DiskListPanel
+        :disks="disks"
+        :auto-connect-count="autoConnectCount"
+        :loading="loading"
+        :error-text="errorText"
+      />
     </el-main>
   </el-container>
 </template>
