@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import HomePage from "../pages/home/HomePage.vue";
 import InitPage from "../pages/init/InitPage.vue";
 import type { SessionSnapshot } from "../entities/session/model";
@@ -30,8 +30,26 @@ function handleRetry() {
   void startInitialization();
 }
 
+function handleWindowKeydown(event: KeyboardEvent) {
+  const isRefreshKey = event.key === "F5";
+  const isReloadShortcut =
+    (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "r";
+
+  if (!isRefreshKey && !isReloadShortcut) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+}
+
 onMounted(() => {
+  window.addEventListener("keydown", handleWindowKeydown, true);
   void startInitialization();
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", handleWindowKeydown, true);
 });
 </script>
 
