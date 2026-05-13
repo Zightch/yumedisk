@@ -72,6 +72,8 @@ const createFileFormats: Array<{
   { label: "QCOW2", value: "qcow2", disabled: true },
 ];
 
+const isPickExistingTab = computed(() => activeTab.value === "pickExisting");
+
 watch(
   () => props.modelValue,
   (visible) => {
@@ -237,9 +239,14 @@ async function handleCreateNewFileSubmit() {
       </div>
     </template>
 
-    <el-tabs v-model="activeTab" class="app-dialog-tabs">
-      <el-tab-pane label="选择现有文件" name="pickExisting">
-        <div class="app-dialog__content app-dialog__content--tabbed">
+    <div class="app-dialog__body app-dialog__body--tabbed">
+      <el-tabs v-model="activeTab" class="app-dialog-tabs">
+        <el-tab-pane label="选择现有文件" name="pickExisting" />
+        <el-tab-pane label="创建文件" name="createNew" />
+      </el-tabs>
+
+      <div class="app-dialog__viewport app-dialog__viewport--tabbed">
+        <div v-if="isPickExistingTab" class="app-dialog__content app-dialog__content--tabbed">
           <el-form class="app-dialog-form" label-position="top">
             <el-form-item label="名称">
               <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
@@ -263,11 +270,35 @@ async function handleCreateNewFileSubmit() {
               <el-switch v-model="form.autoConnect" />
             </el-form-item>
           </el-form>
-        </div>
-      </el-tab-pane>
 
-      <el-tab-pane label="创建文件" name="createNew">
-        <div class="app-dialog__content app-dialog__content--tabbed">
+          <el-alert
+            v-if="errorText"
+            class="app-dialog__alert"
+            :title="errorText"
+            type="error"
+            :closable="false"
+            show-icon
+          />
+
+          <div class="app-dialog__footer app-dialog__footer--embedded">
+            <el-button
+              class="app-dialog__button app-dialog__button--secondary"
+              @click="handleCancel"
+            >
+              取消
+            </el-button>
+            <el-button
+              class="app-dialog__button"
+              type="primary"
+              :loading="submitting"
+              @click="handleSubmit"
+            >
+              创建
+            </el-button>
+          </div>
+        </div>
+
+        <div v-else class="app-dialog__content app-dialog__content--tabbed">
           <el-form class="app-dialog-form" label-position="top">
             <el-form-item label="名称">
               <el-input v-model="newFileForm.diskName" placeholder="输入磁盘名称" />
@@ -314,35 +345,34 @@ async function handleCreateNewFileSubmit() {
               <el-switch v-model="newFileForm.autoConnect" />
             </el-form-item>
           </el-form>
+
+          <el-alert
+            v-if="errorText"
+            class="app-dialog__alert"
+            :title="errorText"
+            type="error"
+            :closable="false"
+            show-icon
+          />
+
+          <div class="app-dialog__footer app-dialog__footer--embedded">
+            <el-button
+              class="app-dialog__button app-dialog__button--secondary"
+              @click="handleCancel"
+            >
+              取消
+            </el-button>
+            <el-button
+              class="app-dialog__button"
+              type="primary"
+              :loading="submitting"
+              @click="handleCreateNewFileSubmit"
+            >
+              创建
+            </el-button>
+          </div>
         </div>
-      </el-tab-pane>
-    </el-tabs>
-
-    <div class="app-dialog__content">
-      <el-alert
-        v-if="errorText"
-        class="app-dialog__alert"
-        :title="errorText"
-        type="error"
-        :closable="false"
-        show-icon
-      />
-    </div>
-
-    <template #footer>
-      <div class="app-dialog__footer">
-        <el-button class="app-dialog__button app-dialog__button--secondary" @click="handleCancel">
-          取消
-        </el-button>
-        <el-button
-          class="app-dialog__button"
-          type="primary"
-          :loading="submitting"
-          @click="activeTab === 'pickExisting' ? handleSubmit() : handleCreateNewFileSubmit()"
-        >
-          创建
-        </el-button>
       </div>
-    </template>
+    </div>
   </el-dialog>
 </template>

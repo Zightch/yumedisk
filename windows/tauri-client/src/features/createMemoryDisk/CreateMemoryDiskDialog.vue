@@ -121,59 +121,64 @@ async function handleSubmit() {
       </div>
     </template>
 
-    <div class="app-dialog__content">
-      <el-form class="app-dialog-form" label-position="top">
-        <el-form-item label="名称">
-          <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
-        </el-form-item>
+    <div class="app-dialog__body">
+      <div class="app-dialog__viewport">
+        <div class="app-dialog__content">
+          <el-form class="app-dialog-form" label-position="top">
+            <el-form-item label="名称">
+              <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
+            </el-form-item>
 
-        <el-form-item label="容量 (MiB)">
-          <el-input-number
-            v-model="form.capacityMiB"
-            :min="1"
-            :step="1"
-            :precision="0"
-            controls-position="right"
+            <el-form-item label="容量 (MiB)">
+              <el-input-number
+                v-model="form.capacityMiB"
+                :min="1"
+                :step="1"
+                :precision="0"
+                controls-position="right"
+              />
+            </el-form-item>
+
+            <el-form-item label="介质选择">
+              <el-radio-group v-model="form.requestedMemoryKind" class="app-dialog-chips">
+                <el-radio-button value="auto">自动</el-radio-button>
+                <el-radio-button value="denseMem">稠密</el-radio-button>
+                <el-radio-button value="sparseMem">稀疏</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+
+            <el-form-item class="app-dialog-form__switch" label="启动自动连接">
+              <el-switch v-model="form.autoConnect" />
+            </el-form-item>
+          </el-form>
+
+          <el-alert
+            v-if="errorText"
+            class="app-dialog__alert"
+            :title="errorText"
+            type="error"
+            :closable="false"
+            show-icon
           />
-        </el-form-item>
 
-        <el-form-item label="介质选择">
-          <el-radio-group v-model="form.requestedMemoryKind" class="app-dialog-chips">
-            <el-radio-button value="auto">自动</el-radio-button>
-            <el-radio-button value="denseMem">稠密</el-radio-button>
-            <el-radio-button value="sparseMem">稀疏</el-radio-button>
-          </el-radio-group>
-        </el-form-item>
-
-        <el-form-item class="app-dialog-form__switch" label="启动自动连接">
-          <el-switch v-model="form.autoConnect" />
-        </el-form-item>
-      </el-form>
-
-      <el-alert
-        v-if="errorText"
-        class="app-dialog__alert"
-        :title="errorText"
-        type="error"
-        :closable="false"
-        show-icon
-      />
-    </div>
-
-    <template #footer>
-      <div class="app-dialog__footer">
-        <el-button class="app-dialog__button app-dialog__button--secondary" @click="handleCancel">
-          取消
-        </el-button>
-        <el-button
-          class="app-dialog__button"
-          type="primary"
-          :loading="submitting"
-          @click="handleSubmit"
-        >
-          创建
-        </el-button>
+          <div class="app-dialog__footer app-dialog__footer--embedded">
+            <el-button
+              class="app-dialog__button app-dialog__button--secondary"
+              @click="handleCancel"
+            >
+              取消
+            </el-button>
+            <el-button
+              class="app-dialog__button"
+              type="primary"
+              :loading="submitting"
+              @click="handleSubmit"
+            >
+              创建
+            </el-button>
+          </div>
+        </div>
       </div>
-    </template>
+    </div>
   </el-dialog>
 </template>
