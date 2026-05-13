@@ -46,26 +46,31 @@
   line-height: 1.2;
 }
 
-.app-dialog__close {
+.app-dialog__close.el-button {
   width: 28px;
   height: 28px;
   padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: var(--text-secondary);
   font-size: 18px;
   line-height: 1;
-  cursor: pointer;
+  box-shadow: none;
   transition:
     background var(--transition-fast),
     color var(--transition-fast);
 }
 
-.app-dialog__close:hover {
+.app-dialog__close.el-button.is-text,
+.app-dialog__close.el-button.is-text:not(.is-disabled):hover,
+.app-dialog__close.el-button.is-text:not(.is-disabled):focus {
+  background: transparent;
+  border: 0;
+}
+
+.app-dialog__close.el-button:hover,
+.app-dialog__close.el-button:focus-visible {
   background: var(--bg-surface-selected);
   color: var(--text-primary);
 }
@@ -96,6 +101,7 @@
   border-radius: 8px;
   font-size: 12px;
   font-weight: 600;
+  box-shadow: none;
 }
 
 .app-dialog__button--secondary.el-button:not(.is-text):not(.is-link) {
@@ -108,6 +114,21 @@
   --el-button-active-bg-color: var(--bg-surface-selected);
   --el-button-active-border-color: transparent;
   --el-button-active-text-color: var(--text-primary);
+}
+
+.app-dialog__button.el-button:not(.app-dialog__button--secondary) {
+  --el-button-bg-color: var(--accent);
+  --el-button-border-color: var(--accent);
+  --el-button-text-color: #ffffff;
+  --el-button-hover-bg-color: var(--accent-strong);
+  --el-button-hover-border-color: var(--accent-strong);
+  --el-button-hover-text-color: #ffffff;
+  --el-button-active-bg-color: color-mix(in srgb, var(--accent) 78%, black);
+  --el-button-active-border-color: color-mix(in srgb, var(--accent) 78%, black);
+  --el-button-active-text-color: #ffffff;
+  --el-button-disabled-bg-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  --el-button-disabled-border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  --el-button-disabled-text-color: color-mix(in srgb, #ffffff 64%, transparent);
 }
 
 .app-dialog-form .el-form-item {
@@ -222,21 +243,13 @@
 .app-dialog-tabs.el-tabs .el-tabs__item {
   height: 36px;
   flex: 0 0 auto;
-  padding: 0 14px;
+  padding: 0 14px !important;
   border: 0;
   border-radius: 8px;
   background: transparent;
   color: var(--text-secondary);
   font-size: 12px;
   font-weight: 500;
-}
-
-.app-dialog-tabs.el-tabs .el-tabs__header .el-tabs__item:nth-child(2) {
-  padding-left: 14px;
-}
-
-.app-dialog-tabs.el-tabs .el-tabs__header .el-tabs__item:last-child {
-  padding-right: 14px;
 }
 
 .app-dialog-tabs.el-tabs .el-tabs__item:hover {

@@ -20,6 +20,8 @@
 - [Windows驱动问题排查笔记](./Windows驱动问题排查笔记.md)
 - [执行工作流](./workflow.md)
 - [进度归档](./progress/README.md)
+- [Tauri Client Element 落地说明](./tauri-client-element-grounding-notes.md)
+- [Tauri Client UI 规范](./tauri-client-ui-guidelines.md)
 
 最终方案的核心原则：
 

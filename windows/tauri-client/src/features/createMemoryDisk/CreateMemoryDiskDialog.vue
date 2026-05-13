@@ -115,9 +115,9 @@ async function handleSubmit() {
     <template #header>
       <div class="app-dialog__header">
         <h3 class="app-dialog__title">创建内存盘</h3>
-        <button class="app-dialog__close" type="button" aria-label="关闭" @click="handleCancel">
+        <el-button class="app-dialog__close" text circle aria-label="关闭" @click="handleCancel">
           ×
-        </button>
+        </el-button>
       </div>
     </template>
 

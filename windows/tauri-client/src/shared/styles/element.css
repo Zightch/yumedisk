@@ -80,33 +80,6 @@ body .el-popover.el-popper {
   border-radius: 14px;
 }
 
-body .el-button {
-  font-weight: 500;
-}
-
-body .el-button:not(.is-text):not(.is-link) {
-  --el-button-hover-border-color: var(--accent-border);
-  --el-button-active-border-color: color-mix(in srgb, var(--accent) 68%, black);
-  box-shadow: none;
-}
-
-body .el-button--primary {
-  --el-button-bg-color: var(--accent);
-  --el-button-border-color: var(--accent);
-  --el-button-hover-bg-color: var(--accent-strong);
-  --el-button-hover-border-color: var(--accent-strong);
-  --el-button-active-bg-color: color-mix(in srgb, var(--accent) 78%, black);
-  --el-button-active-border-color: color-mix(in srgb, var(--accent) 78%, black);
-  --el-button-disabled-bg-color: color-mix(in srgb, var(--accent) 40%, transparent);
-  --el-button-disabled-border-color: color-mix(in srgb, var(--accent) 40%, transparent);
-}
-
-body .el-button.is-plain {
-  --el-button-hover-text-color: var(--accent-text);
-  --el-button-hover-bg-color: var(--accent-soft);
-  --el-button-hover-border-color: var(--accent-border);
-}
-
 body .el-tag {
   --el-tag-border-radius: var(--radius-pill);
 }

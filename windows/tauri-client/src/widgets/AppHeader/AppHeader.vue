@@ -29,16 +29,17 @@ function handleOpenFileCreate() {
   <header class="app-header">
     <div class="app-header__brand">
       <h1 class="app-header__title">YumeDisk</h1>
-      <button
+      <el-button
         class="app-header__settings"
-        type="button"
+        text
+        circle
         aria-label="设置"
         @click="emit('openSettings')"
       >
         <el-icon>
           <Setting />
         </el-icon>
-      </button>
+      </el-button>
     </div>
 
     <div class="app-header__tools">
@@ -59,32 +60,32 @@ function handleOpenFileCreate() {
         :offset="8"
       >
         <template #reference>
-          <button class="app-header__add" type="button" aria-label="添加磁盘">
+          <el-button class="app-header__add" circle aria-label="添加磁盘">
             <el-icon>
               <Plus />
             </el-icon>
-          </button>
+          </el-button>
         </template>
 
         <div class="app-header__add-options">
-          <button class="app-header__add-option" type="button" @click="handleOpenMemoryCreate">
+          <el-button class="app-header__add-option" @click="handleOpenMemoryCreate">
             <span class="app-header__add-option-icon app-header__add-option-icon--memory">
               M
             </span>
             <span class="app-header__add-option-title">内存盘</span>
-          </button>
+          </el-button>
 
-          <button class="app-header__add-option" type="button" @click="handleOpenFileCreate">
+          <el-button class="app-header__add-option" @click="handleOpenFileCreate">
             <span class="app-header__add-option-icon app-header__add-option-icon--file">F</span>
             <span class="app-header__add-option-title">文件盘</span>
-          </button>
+          </el-button>
 
-          <button class="app-header__add-option" type="button" disabled>
+          <el-button class="app-header__add-option" disabled>
             <span class="app-header__add-option-icon app-header__add-option-icon--network">
               N
             </span>
             <span class="app-header__add-option-title">网络盘</span>
-          </button>
+          </el-button>
         </div>
       </el-popover>
     </div>

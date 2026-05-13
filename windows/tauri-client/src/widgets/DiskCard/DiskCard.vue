@@ -125,9 +125,8 @@ function handleDelete(): void {
           {{ primaryActionText }}
         </el-button>
 
-        <button
+        <el-button
           class="disk-card__icon-action"
-          type="button"
           aria-label="编辑"
           :disabled="actionLoading"
           @click="handleEdit"
@@ -135,11 +134,10 @@ function handleDelete(): void {
           <el-icon>
             <Edit />
           </el-icon>
-        </button>
+        </el-button>
 
-        <button
+        <el-button
           class="disk-card__icon-action disk-card__icon-action--danger"
-          type="button"
           aria-label="删除"
           :disabled="actionLoading"
           @click="handleDelete"
@@ -147,7 +145,7 @@ function handleDelete(): void {
           <el-icon>
             <Delete />
           </el-icon>
-        </button>
+        </el-button>
       </div>
     </div>
   </article>

@@ -212,36 +212,43 @@
   --el-button-disabled-text-color: var(--el-disabled-text-color);
 }
 
-.disk-card__icon-action {
+.disk-card__icon-action.el-button {
   width: 26px;
   height: 26px;
   padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   border: 1px solid transparent;
   border-radius: 8px;
   background: var(--bg-surface);
   color: var(--text-secondary);
-  cursor: pointer;
+  box-shadow: none;
   transition:
     background var(--transition-fast),
     border-color var(--transition-fast),
     color var(--transition-fast);
 }
 
-.disk-card__icon-action:hover:not(:disabled) {
+.disk-card__icon-action.el-button:hover:not(.is-disabled),
+.disk-card__icon-action.el-button:focus-visible:not(.is-disabled) {
   background: var(--bg-surface-selected);
   border-color: var(--border-soft);
+  color: var(--text-primary);
 }
 
-.disk-card__icon-action--danger:hover:not(:disabled) {
-  color: var(--danger);
-}
-
-.disk-card__icon-action:disabled {
+.disk-card__icon-action.el-button.is-disabled,
+.disk-card__icon-action.el-button.is-disabled:hover {
   opacity: 0.56;
-  cursor: not-allowed;
+  background: var(--bg-surface);
+  border-color: transparent;
+  color: var(--text-muted);
+}
+
+.disk-card__icon-action.el-button.is-disabled:focus-visible {
+  box-shadow: none;
+}
+
+.disk-card__icon-action--danger.el-button:hover:not(.is-disabled),
+.disk-card__icon-action--danger.el-button:focus-visible:not(.is-disabled) {
+  color: var(--danger);
 }
 
 .disk-card__icon-action .el-icon {
