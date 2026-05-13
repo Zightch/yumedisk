@@ -198,7 +198,7 @@ pub fn create_file_disk(
     let disk_id = runtime_store.allocate_disk_id();
 
     let runtime = match persistence_service::probe_raw_file_media(file_path) {
-        Ok(probe) => DiskRuntime::new_file_disconnected(
+        Ok(probe) => DiskRuntime::new_file(
             disk_id.clone(),
             disk_name.to_string(),
             request.auto_connect,
@@ -206,14 +206,21 @@ pub fn create_file_disk(
             file_path.to_string(),
             probe.capacity_bytes,
             probe.read_only,
+            DiskRuntimeStatus::Disconnected,
+            None,
         ),
-        Err(_) => DiskRuntime::new_file_invalid(
+        Err(_) => DiskRuntime::new_file(
             disk_id.clone(),
             disk_name.to_string(),
             request.auto_connect,
             FileMediaKind::RawFile,
             file_path.to_string(),
-            INVALID_FILE_REASON.to_string(),
+            0,
+            false,
+            DiskRuntimeStatus::Invalid {
+                reason: INVALID_FILE_REASON.to_string(),
+            },
+            None,
         ),
     };
 
@@ -327,49 +334,41 @@ pub fn connect_disk(
         ));
     }
 
+    if runtime.media.is_none() {
+        let file_path = runtime.file_path().ok_or_else(|| {
+            ApiError::new(
+                "held-media-not-found",
+                "宿主未持有当前磁盘介质实例",
+                Some(disk_id.to_string()),
+            )
+        })?;
+        let media = persistence_service::open_raw_file_media(file_path)
+            .map(|media| Box::new(media) as Box<dyn Media>)?;
+        runtime.restore_media(media);
+    }
+
     let disk_config = build_disk_config(runtime);
     let mut error_text = String::new();
+    let media = runtime.take_media().ok_or_else(|| {
+        ApiError::new(
+            "held-media-not-found",
+            "宿主未持有当前磁盘介质实例",
+            Some(disk_id.to_string()),
+        )
+    })?;
 
-    match runtime {
-        DiskRuntime::Memory(memory_runtime) => {
-            let media = memory_runtime.held_media.take().ok_or_else(|| {
-                ApiError::new(
-                    "held-media-not-found",
-                    "宿主未持有当前磁盘介质实例",
-                    Some(disk_id.to_string()),
-                )
-            })?;
-
-            match backend.try_create_managed_disk(disk_config, media, Some(&mut error_text)) {
-                Ok(target_id) => {
-                    memory_runtime.state = DiskRuntimeStatus::Connected { target_id };
-                    Ok(target_id)
-                }
-                Err(media) => {
-                    memory_runtime.held_media = Some(media);
-                    Err(ApiError::new(
-                        "connect-disk-failed",
-                        "连接磁盘失败",
-                        Some(error_text),
-                    ))
-                }
-            }
+    match backend.try_create_managed_disk(disk_config, media, Some(&mut error_text)) {
+        Ok(target_id) => {
+            runtime.set_connected(target_id);
+            Ok(target_id)
         }
-        DiskRuntime::File(file_runtime) => {
-            let media = persistence_service::open_raw_file_media(&file_runtime.file_path)
-                .map(|media| Box::new(media) as Box<dyn Media>)?;
-
-            match backend.try_create_managed_disk(disk_config, media, Some(&mut error_text)) {
-                Ok(target_id) => {
-                    file_runtime.state = DiskRuntimeStatus::Connected { target_id };
-                    Ok(target_id)
-                }
-                Err(_) => Err(ApiError::new(
-                    "connect-disk-failed",
-                    "连接磁盘失败",
-                    Some(error_text),
-                )),
-            }
+        Err(media) => {
+            runtime.restore_media(media);
+            Err(ApiError::new(
+                "connect-disk-failed",
+                "连接磁盘失败",
+                Some(error_text),
+            ))
         }
     }
 }
@@ -396,27 +395,24 @@ pub fn disconnect_disk(
         .remove_managed_disk_with_media(target_id, Some(&mut error_text))
         .ok_or_else(|| ApiError::new("disconnect-disk-failed", "断开磁盘失败", Some(error_text)))?;
 
-    match runtime {
-        DiskRuntime::Memory(memory_runtime) => {
-            memory_runtime.held_media = Some(media);
-            memory_runtime.state = DiskRuntimeStatus::Disconnected;
+    if runtime.is_memory() {
+        runtime.restore_media(media);
+        runtime.set_disconnected();
+        return Ok(());
+    }
+
+    drop(media);
+    runtime.media = None;
+
+    let file_path = runtime.file_path().ok_or_else(|| {
+        ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string()))
+    })?;
+    match persistence_service::probe_raw_file_media(file_path) {
+        Ok(probe) => {
+            runtime.set_file_disconnected(probe.capacity_bytes, probe.read_only);
         }
-        DiskRuntime::File(file_runtime) => {
-            drop(media);
-            match persistence_service::probe_raw_file_media(&file_runtime.file_path) {
-                Ok(probe) => {
-                    file_runtime.capacity_bytes = probe.capacity_bytes;
-                    file_runtime.read_only = probe.read_only;
-                    file_runtime.state = DiskRuntimeStatus::Disconnected;
-                }
-                Err(_) => {
-                    file_runtime.capacity_bytes = 0;
-                    file_runtime.read_only = false;
-                    file_runtime.state = DiskRuntimeStatus::Invalid {
-                        reason: INVALID_FILE_REASON.to_string(),
-                    };
-                }
-            }
+        Err(_) => {
+            runtime.set_file_invalid(INVALID_FILE_REASON.to_string());
         }
     }
 
@@ -442,9 +438,9 @@ pub fn delete_disk(
             .remove_managed_disk_with_media(target_id, Some(&mut error_text))
             .ok_or_else(|| ApiError::new("delete-disk-failed", "删除磁盘失败", Some(error_text)))?;
 
-        if let DiskRuntime::Memory(memory_runtime) = &mut removed_runtime.runtime {
-            memory_runtime.held_media = Some(media);
-            memory_runtime.state = DiskRuntimeStatus::Disconnected;
+        if removed_runtime.runtime.is_memory() {
+            removed_runtime.runtime.restore_media(media);
+            removed_runtime.runtime.set_disconnected();
         }
     }
 

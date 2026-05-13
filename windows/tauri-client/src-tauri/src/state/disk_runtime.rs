@@ -51,30 +51,14 @@ pub struct DiskRuntimeStore {
     runtimes: Vec<DiskRuntime>,
 }
 
-pub enum DiskRuntime {
-    Memory(MemoryDiskRuntime),
-    File(FileDiskRuntime),
-}
-
-pub struct MemoryDiskRuntime {
+pub struct DiskRuntime {
     pub(crate) disk_id: String,
     pub(crate) disk_name: String,
     pub(crate) auto_connect: bool,
-    pub(crate) memory_kind: MemoryMediaKind,
-    pub(crate) capacity_bytes: u64,
-    pub(crate) state: DiskRuntimeStatus,
-    pub(crate) held_media: Option<Box<dyn Media>>,
-}
-
-pub struct FileDiskRuntime {
-    pub(crate) disk_id: String,
-    pub(crate) disk_name: String,
-    pub(crate) auto_connect: bool,
-    pub(crate) file_kind: FileMediaKind,
-    pub(crate) file_path: String,
-    pub(crate) capacity_bytes: u64,
     pub(crate) read_only: bool,
     pub(crate) state: DiskRuntimeStatus,
+    pub(crate) media_config: DiskMediaConfig,
+    pub(crate) media: Option<Box<dyn Media>>,
 }
 
 impl Default for DiskRuntimeStore {
@@ -153,18 +137,21 @@ impl DiskRuntime {
         capacity_bytes: u64,
         media: Box<dyn Media>,
     ) -> Self {
-        Self::Memory(MemoryDiskRuntime {
+        Self {
             disk_id,
             disk_name,
             auto_connect,
-            memory_kind,
-            capacity_bytes,
+            read_only: false,
             state: DiskRuntimeStatus::Disconnected,
-            held_media: Some(media),
-        })
+            media_config: DiskMediaConfig::Memory {
+                memory_kind,
+                capacity_bytes,
+            },
+            media: Some(media),
+        }
     }
 
-    pub fn new_file_disconnected(
+    pub fn new_file(
         disk_id: String,
         disk_name: String,
         auto_connect: bool,
@@ -172,92 +159,54 @@ impl DiskRuntime {
         file_path: String,
         capacity_bytes: u64,
         read_only: bool,
+        status: DiskRuntimeStatus,
+        media: Option<Box<dyn Media>>,
     ) -> Self {
-        Self::File(FileDiskRuntime {
+        Self {
             disk_id,
             disk_name,
             auto_connect,
-            file_kind,
-            file_path,
-            capacity_bytes,
             read_only,
-            state: DiskRuntimeStatus::Disconnected,
-        })
-    }
-
-    pub fn new_file_invalid(
-        disk_id: String,
-        disk_name: String,
-        auto_connect: bool,
-        file_kind: FileMediaKind,
-        file_path: String,
-        reason: String,
-    ) -> Self {
-        Self::File(FileDiskRuntime {
-            disk_id,
-            disk_name,
-            auto_connect,
-            file_kind,
-            file_path,
-            capacity_bytes: 0,
-            read_only: false,
-            state: DiskRuntimeStatus::Invalid { reason },
-        })
+            state: status,
+            media_config: DiskMediaConfig::File {
+                file_kind,
+                file_path,
+                capacity_bytes,
+            },
+            media,
+        }
     }
 
     pub fn disk_id(&self) -> &str {
-        match self {
-            Self::Memory(runtime) => &runtime.disk_id,
-            Self::File(runtime) => &runtime.disk_id,
-        }
+        &self.disk_id
     }
 
     pub fn disk_name(&self) -> &str {
-        match self {
-            Self::Memory(runtime) => &runtime.disk_name,
-            Self::File(runtime) => &runtime.disk_name,
-        }
+        &self.disk_name
     }
 
     pub fn auto_connect(&self) -> bool {
-        match self {
-            Self::Memory(runtime) => runtime.auto_connect,
-            Self::File(runtime) => runtime.auto_connect,
-        }
+        self.auto_connect
     }
 
     pub fn set_identity(&mut self, disk_name: String, auto_connect: bool) {
-        match self {
-            Self::Memory(runtime) => {
-                runtime.disk_name = disk_name;
-                runtime.auto_connect = auto_connect;
-            }
-            Self::File(runtime) => {
-                runtime.disk_name = disk_name;
-                runtime.auto_connect = auto_connect;
-            }
-        }
+        self.disk_name = disk_name;
+        self.auto_connect = auto_connect;
     }
 
     pub fn read_only(&self) -> bool {
-        match self {
-            Self::Memory(_) => false,
-            Self::File(runtime) => runtime.read_only,
-        }
+        self.read_only
     }
 
     pub fn capacity_bytes(&self) -> u64 {
-        match self {
-            Self::Memory(runtime) => runtime.capacity_bytes,
-            Self::File(runtime) => runtime.capacity_bytes,
+        match &self.media_config {
+            DiskMediaConfig::Memory { capacity_bytes, .. } => *capacity_bytes,
+            DiskMediaConfig::File { capacity_bytes, .. } => *capacity_bytes,
         }
     }
 
     pub fn status(&self) -> &DiskRuntimeStatus {
-        match self {
-            Self::Memory(runtime) => &runtime.state,
-            Self::File(runtime) => &runtime.state,
-        }
+        &self.state
     }
 
     pub fn connected_target_id(&self) -> Option<u32> {
@@ -275,44 +224,59 @@ impl DiskRuntime {
     }
 
     pub fn is_memory(&self) -> bool {
-        matches!(self, Self::Memory(_))
+        matches!(self.media_config, DiskMediaConfig::Memory { .. })
     }
 
     pub fn file_path(&self) -> Option<&str> {
-        match self {
-            Self::Memory(_) => None,
-            Self::File(runtime) => Some(runtime.file_path.as_str()),
-        }
-    }
-
-    pub fn set_file_disconnected(&mut self, capacity_bytes: u64, read_only: bool) {
-        if let Self::File(runtime) = self {
-            runtime.capacity_bytes = capacity_bytes;
-            runtime.read_only = read_only;
-            runtime.state = DiskRuntimeStatus::Disconnected;
-        }
-    }
-
-    pub fn set_file_invalid(&mut self, reason: String) {
-        if let Self::File(runtime) = self {
-            runtime.capacity_bytes = 0;
-            runtime.read_only = false;
-            runtime.state = DiskRuntimeStatus::Invalid { reason };
+        match &self.media_config {
+            DiskMediaConfig::Memory { .. } => None,
+            DiskMediaConfig::File { file_path, .. } => Some(file_path.as_str()),
         }
     }
 
     pub fn media_snapshot(&self) -> DiskMediaConfig {
-        match self {
-            Self::Memory(runtime) => DiskMediaConfig::Memory {
-                memory_kind: runtime.memory_kind,
-                capacity_bytes: runtime.capacity_bytes,
-            },
-            Self::File(runtime) => DiskMediaConfig::File {
-                file_kind: runtime.file_kind,
-                file_path: runtime.file_path.clone(),
-                capacity_bytes: runtime.capacity_bytes,
-            },
+        self.media_config.clone()
+    }
+
+    pub fn take_media(&mut self) -> Option<Box<dyn Media>> {
+        self.media.take()
+    }
+
+    pub fn restore_media(&mut self, media: Box<dyn Media>) {
+        self.media = Some(media);
+    }
+
+    pub fn set_connected(&mut self, target_id: u32) {
+        self.state = DiskRuntimeStatus::Connected { target_id };
+    }
+
+    pub fn set_disconnected(&mut self) {
+        self.state = DiskRuntimeStatus::Disconnected;
+    }
+
+    pub fn set_file_disconnected(&mut self, capacity_bytes: u64, read_only: bool) {
+        if let DiskMediaConfig::File {
+            capacity_bytes: current_capacity_bytes,
+            ..
+        } = &mut self.media_config
+        {
+            *current_capacity_bytes = capacity_bytes;
         }
+        self.read_only = read_only;
+        self.state = DiskRuntimeStatus::Disconnected;
+    }
+
+    pub fn set_file_invalid(&mut self, reason: String) {
+        if let DiskMediaConfig::File {
+            capacity_bytes: current_capacity_bytes,
+            ..
+        } = &mut self.media_config
+        {
+            *current_capacity_bytes = 0;
+        }
+        self.read_only = false;
+        self.state = DiskRuntimeStatus::Invalid { reason };
+        self.media = None;
     }
 
     pub fn snapshot(&self) -> DiskRuntimeSnapshot {

@@ -3,32 +3,27 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 12px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-soft);
+  padding: 1px;
+  background: var(--border-soft);
   border-radius: var(--radius-panel);
+  overflow: hidden;
 }
 
-.list-panel.el-card {
-  --el-card-bg-color: var(--bg-surface);
-  --el-card-border-color: var(--border-soft);
-  --el-card-padding: 0;
-}
-
-.list-panel .el-card__header {
-  padding: 0;
-  border-bottom: 0;
-}
-
-.list-panel .el-card__body {
-  display: flex;
+.list-panel__surface {
   flex: 1 1 auto;
   min-height: 0;
-  padding: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 11px;
+  background: var(--bg-surface);
+  border-radius: calc(var(--radius-panel) - 1px);
+  overflow: hidden;
+  clip-path: inset(0 round calc(var(--radius-panel) - 1px));
 }
 
 .list-panel__header {
   display: flex;
+  flex: 0 0 auto;
   align-items: flex-end;
   justify-content: space-between;
   gap: 14px;
@@ -125,14 +120,41 @@
   font-weight: 600;
 }
 
+.list-panel__viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
 .list-panel__scroll {
   flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+.list-panel__scroll.el-scrollbar,
+.list-panel__scroll .el-scrollbar,
+.list-panel__scroll .el-scrollbar__wrap,
+.list-panel__scroll .el-scrollbar__view,
+.list-panel__scroll .el-scrollbar__view > * {
+  background: transparent;
+}
+
+.list-panel__scroll .el-scrollbar {
   height: 100%;
 }
 
 .list-panel__scroll .el-scrollbar__wrap {
   overflow-x: hidden;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.list-panel__scroll .el-scrollbar__view {
+  min-height: 100%;
 }
 
 .list-panel__content {

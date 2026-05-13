@@ -24,8 +24,8 @@ const diskCount = computed(() => props.disks.length);
 </script>
 
 <template>
-  <el-card class="list-panel" shadow="never">
-    <template #header>
+  <section class="list-panel">
+    <div class="list-panel__surface">
       <div class="list-panel__header">
         <div class="list-panel__title-group">
           <h2 class="list-panel__title">磁盘列表</h2>
@@ -45,42 +45,44 @@ const diskCount = computed(() => props.disks.length);
           </div>
         </div>
       </div>
-    </template>
 
-    <el-scrollbar class="list-panel__scroll">
-      <div v-if="loading" class="list-panel__content list-panel__loading">
-        <el-skeleton :rows="3" animated />
-        <el-skeleton :rows="3" animated />
+      <div class="list-panel__viewport">
+        <el-scrollbar class="list-panel__scroll">
+          <div v-if="loading" class="list-panel__content list-panel__loading">
+            <el-skeleton :rows="3" animated />
+            <el-skeleton :rows="3" animated />
+          </div>
+
+          <div v-else-if="disks.length > 0" class="list-panel__content">
+            <DiskCard
+              v-for="disk in disks"
+              :key="disk.diskId"
+              :disk="disk"
+              :action-loading="actionLoadingDiskId === disk.diskId"
+              @connect="emit('connect', $event)"
+              @disconnect="emit('disconnect', $event)"
+              @edit="emit('edit', $event)"
+              @delete="emit('delete', $event)"
+            />
+          </div>
+
+          <el-alert
+            v-else-if="errorText"
+            class="list-panel__error"
+            :title="errorText"
+            type="error"
+            :closable="false"
+            show-icon
+          />
+
+          <el-empty
+            v-else
+            class="list-panel__empty"
+            description="当前还没有磁盘配置"
+            :image-size="0"
+          />
+        </el-scrollbar>
       </div>
-
-      <div v-else-if="disks.length > 0" class="list-panel__content">
-        <DiskCard
-          v-for="disk in disks"
-          :key="disk.diskId"
-          :disk="disk"
-          :action-loading="actionLoadingDiskId === disk.diskId"
-          @connect="emit('connect', $event)"
-          @disconnect="emit('disconnect', $event)"
-          @edit="emit('edit', $event)"
-          @delete="emit('delete', $event)"
-        />
-      </div>
-
-      <el-alert
-        v-else-if="errorText"
-        class="list-panel__error"
-        :title="errorText"
-        type="error"
-        :closable="false"
-        show-icon
-      />
-
-      <el-empty
-        v-else
-        class="list-panel__empty"
-        description="当前还没有磁盘配置"
-        :image-size="0"
-      />
-    </el-scrollbar>
-  </el-card>
+    </div>
+  </section>
 </template>

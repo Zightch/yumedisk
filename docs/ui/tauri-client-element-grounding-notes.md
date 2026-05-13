@@ -99,6 +99,12 @@
 - 加载骨架；
 - 错误提示；
 - 空状态提示。
+- 列表头刷新图标按钮。
+
+当前实现补充：
+
+- 空状态继续使用 `el-empty`，只是把默认大图标关闭；
+- 重扫入口继续使用 `el-button + el-icon`，只是从文字按钮收成刷新图标按钮。
 
 ### 4.3 表单与对话框
 
@@ -152,11 +158,13 @@
 - 添加盘模式气泡：`el-popover`
 - 无效盘说明：`el-tooltip`
 - 各类反馈：`ElMessage`
+- 列表头重扫按钮图标：`el-button + el-icon`
 
 对应文件：
 
 - `windows/tauri-client/src/widgets/AppHeader/AppHeader.vue:52`
 - `windows/tauri-client/src/widgets/DiskCard/DiskCard.vue:92`
+- `windows/tauri-client/src/widgets/DiskListPanel/DiskListPanel.vue:30`
 
 ---
 

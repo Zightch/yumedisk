@@ -113,7 +113,7 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
             };
 
             match probe_raw_file_media(&file_path) {
-                Ok(probe) => Ok(DiskRuntime::new_file_disconnected(
+                Ok(probe) => Ok(DiskRuntime::new_file(
                     persisted_disk.disk_id,
                     persisted_disk.disk_name,
                     persisted_disk.auto_connect,
@@ -121,18 +121,25 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
                     file_path,
                     probe.capacity_bytes,
                     probe.read_only,
+                    crate::state::disk_runtime::DiskRuntimeStatus::Disconnected,
+                    None,
                 )),
-                Err(error) => Ok(DiskRuntime::new_file_invalid(
+                Err(error) => Ok(DiskRuntime::new_file(
                     persisted_disk.disk_id,
                     persisted_disk.disk_name,
                     persisted_disk.auto_connect,
                     file_kind,
                     file_path,
-                    if error.code == "invalid-file-path" {
-                        INVALID_FILE_REASON.to_string()
-                    } else {
-                        error.message
+                    0,
+                    false,
+                    crate::state::disk_runtime::DiskRuntimeStatus::Invalid {
+                        reason: if error.code == "invalid-file-path" {
+                            INVALID_FILE_REASON.to_string()
+                        } else {
+                            error.message
+                        },
                     },
+                    None,
                 )),
             }
         }
