@@ -101,7 +101,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 2px 4px 6px;
+  padding: 2px 14px 6px 4px;
 }
 
 .list-panel__content--center {
