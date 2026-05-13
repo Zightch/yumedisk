@@ -56,7 +56,6 @@ function handleOpenFileCreate() {
         placement="bottom-end"
         trigger="click"
         :show-arrow="false"
-        :width="248"
         :offset="8"
       >
         <template #reference>
