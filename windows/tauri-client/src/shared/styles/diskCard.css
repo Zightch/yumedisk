@@ -149,10 +149,43 @@
   padding: 6px 12px;
   border: 0;
   border-radius: 8px;
-  color: #ffffff;
   font-size: 11px;
   font-weight: 700;
   box-shadow: none;
+}
+
+.disk-card__primary-action.el-button:not(.is-disabled):not(.is-loading) {
+  color: #ffffff;
+}
+
+.disk-card__primary-action.el-button.is-loading::before {
+  display: none;
+}
+
+.disk-card__primary-action.el-button.is-loading,
+.disk-card__primary-action.el-button.is-disabled,
+.disk-card__primary-action.el-button.is-disabled:hover {
+  border: 0;
+  box-shadow: none;
+}
+
+.disk-card__primary-action.el-button:focus-visible,
+.disk-card__primary-action.el-button.is-loading:focus-visible,
+.disk-card__primary-action.el-button.is-disabled:focus-visible {
+  outline: 0;
+  box-shadow: none;
+}
+
+.disk-card__primary-action.el-button.is-loading,
+.disk-card__primary-action.el-button.is-loading:hover {
+  color: var(--accent-loading-text);
+  background: var(--accent-loading-bg);
+  border-color: var(--accent-loading-border);
+}
+
+.disk-card__primary-action.el-button.is-disabled,
+.disk-card__primary-action.el-button.is-disabled:hover {
+  color: var(--el-button-disabled-text-color);
 }
 
 .disk-card__primary-action--connect.el-button {
@@ -162,8 +195,9 @@
   --el-button-hover-border-color: #4fe890;
   --el-button-active-bg-color: #33c172;
   --el-button-active-border-color: #33c172;
-  --el-button-disabled-bg-color: rgba(61, 220, 132, 0.28);
-  --el-button-disabled-border-color: rgba(61, 220, 132, 0.28);
+  --el-button-disabled-bg-color: var(--el-disabled-bg-color);
+  --el-button-disabled-border-color: var(--el-disabled-border-color);
+  --el-button-disabled-text-color: var(--el-disabled-text-color);
 }
 
 .disk-card__primary-action--disconnect.el-button {
@@ -173,6 +207,9 @@
   --el-button-hover-border-color: #ff8080;
   --el-button-active-bg-color: #f15f5f;
   --el-button-active-border-color: #f15f5f;
+  --el-button-disabled-bg-color: var(--el-disabled-bg-color);
+  --el-button-disabled-border-color: var(--el-disabled-border-color);
+  --el-button-disabled-text-color: var(--el-disabled-text-color);
 }
 
 .disk-card__icon-action {

@@ -31,6 +31,9 @@
   --accent-text: #d45a6d;
   --accent-soft: rgba(195, 68, 88, 0.16);
   --accent-border: rgba(195, 68, 88, 0.6);
+  --accent-loading-bg: color-mix(in srgb, var(--accent) 38%, var(--bg-surface));
+  --accent-loading-border: color-mix(in srgb, var(--accent-border) 52%, transparent);
+  --accent-loading-text: color-mix(in srgb, var(--text-primary) 72%, var(--accent) 28%);
 }
 
 body[data-theme-mode="dark"] {
