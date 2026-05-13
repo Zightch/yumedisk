@@ -178,9 +178,9 @@
 
 .disk-card__primary-action.el-button.is-loading,
 .disk-card__primary-action.el-button.is-loading:hover {
-  color: var(--accent-loading-text);
-  background: var(--accent-loading-bg);
-  border-color: var(--accent-loading-border);
+  color: var(--disk-card-loading-text);
+  background: var(--disk-card-loading-bg);
+  border-color: var(--disk-card-loading-border);
 }
 
 .disk-card__primary-action.el-button.is-disabled,
@@ -198,6 +198,9 @@
   --el-button-disabled-bg-color: var(--el-disabled-bg-color);
   --el-button-disabled-border-color: var(--el-disabled-border-color);
   --el-button-disabled-text-color: var(--el-disabled-text-color);
+  --disk-card-loading-bg: color-mix(in srgb, #3ddc84 38%, var(--bg-surface));
+  --disk-card-loading-border: color-mix(in srgb, #3ddc84 52%, transparent);
+  --disk-card-loading-text: color-mix(in srgb, var(--text-primary) 72%, #3ddc84 28%);
 }
 
 .disk-card__primary-action--disconnect.el-button {
@@ -210,12 +213,16 @@
   --el-button-disabled-bg-color: var(--el-disabled-bg-color);
   --el-button-disabled-border-color: var(--el-disabled-border-color);
   --el-button-disabled-text-color: var(--el-disabled-text-color);
+  --disk-card-loading-bg: color-mix(in srgb, #ff6b6b 38%, var(--bg-surface));
+  --disk-card-loading-border: color-mix(in srgb, #ff6b6b 52%, transparent);
+  --disk-card-loading-text: color-mix(in srgb, var(--text-primary) 72%, #ff6b6b 28%);
 }
 
 .disk-card__icon-action.el-button {
   width: 26px;
   height: 26px;
   padding: 0;
+  margin: 0;
   border: 1px solid transparent;
   border-radius: 8px;
   background: var(--bg-surface);
