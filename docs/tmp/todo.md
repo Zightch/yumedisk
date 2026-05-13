@@ -6,8 +6,3 @@
 
 - `docs/workflow.md`
 - `docs/progress/README.md`
-
-参考：
-
-- `docs/workflow.md`
-- `docs/progress/README.md`

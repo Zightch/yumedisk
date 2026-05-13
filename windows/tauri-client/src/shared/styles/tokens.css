@@ -28,6 +28,7 @@
   --danger: #ff6b6b;
   --accent: #c34458;
   --accent-strong: #d45a6d;
+  --accent-text: #d45a6d;
   --accent-soft: rgba(195, 68, 88, 0.16);
   --accent-border: rgba(195, 68, 88, 0.6);
 }
@@ -77,6 +78,7 @@ body[data-theme-mode="light"] {
 body[data-theme-color="higanRed"] {
   --accent: #c34458;
   --accent-strong: #d45a6d;
+  --accent-text: #d45a6d;
   --accent-soft: rgba(195, 68, 88, 0.16);
   --accent-border: rgba(195, 68, 88, 0.6);
 }
@@ -84,6 +86,7 @@ body[data-theme-color="higanRed"] {
 body[data-theme-color="coralOrange"] {
   --accent: #f88379;
   --accent-strong: #f99d95;
+  --accent-text: #d26f67;
   --accent-soft: rgba(248, 131, 121, 0.16);
   --accent-border: rgba(248, 131, 121, 0.6);
 }
@@ -91,6 +94,7 @@ body[data-theme-color="coralOrange"] {
 body[data-theme-color="sunsetGold"] {
   --accent: #cd8b44;
   --accent-strong: #d9a05c;
+  --accent-text: #d9a05c;
   --accent-soft: rgba(205, 139, 68, 0.16);
   --accent-border: rgba(205, 139, 68, 0.6);
 }
@@ -98,6 +102,7 @@ body[data-theme-color="sunsetGold"] {
 body[data-theme-color="mintGreen"] {
   --accent: #a1c48c;
   --accent-strong: #b3d4a2;
+  --accent-text: #7ea066;
   --accent-soft: rgba(161, 196, 140, 0.16);
   --accent-border: rgba(161, 196, 140, 0.6);
 }
@@ -105,6 +110,7 @@ body[data-theme-color="mintGreen"] {
 body[data-theme-color="moonlightBlue"] {
   --accent: #7389ac;
   --accent-strong: #8b9fbd;
+  --accent-text: #8b9fbd;
   --accent-soft: rgba(115, 137, 172, 0.16);
   --accent-border: rgba(115, 137, 172, 0.6);
 }
@@ -112,8 +118,21 @@ body[data-theme-color="moonlightBlue"] {
 body[data-theme-color="twilightPurple"] {
   --accent: #665176;
   --accent-strong: #7d6a90;
+  --accent-text: #7d6a90;
   --accent-soft: rgba(102, 81, 118, 0.16);
   --accent-border: rgba(125, 106, 144, 0.8);
+}
+
+body[data-theme-mode="light"][data-theme-color="coralOrange"] {
+  --accent-text: #b95f57;
+}
+
+body[data-theme-mode="light"][data-theme-color="mintGreen"] {
+  --accent-text: #6f8e58;
+}
+
+body[data-theme-mode="dark"][data-theme-color="twilightPurple"] {
+  --accent-text: #a895bb;
 }
 
 *,

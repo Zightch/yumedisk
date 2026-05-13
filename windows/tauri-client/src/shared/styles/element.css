@@ -102,7 +102,7 @@ body .el-button--primary {
 }
 
 body .el-button.is-plain {
-  --el-button-hover-text-color: var(--accent);
+  --el-button-hover-text-color: var(--accent-text);
   --el-button-hover-bg-color: var(--accent-soft);
   --el-button-hover-border-color: var(--accent-border);
 }
