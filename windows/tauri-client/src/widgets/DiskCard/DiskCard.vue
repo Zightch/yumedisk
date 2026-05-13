@@ -89,15 +89,21 @@ function handleDelete(): void {
 
 <template>
   <article class="disk-card" :class="{ 'is-connected': isConnected }">
-    <el-tooltip
-      :disabled="!isInvalid || !disk.invalidReason"
-      :content="disk.invalidReason ?? ''"
-      placement="top"
-    >
-      <span class="disk-card__status" :class="statusClassName">
-        {{ statusText }}
+    <div class="disk-card__badges">
+      <span v-if="disk.autoConnect" class="disk-card__status disk-card__status--auto">
+        自动连接
       </span>
-    </el-tooltip>
+
+      <el-tooltip
+        :disabled="!isInvalid || !disk.invalidReason"
+        :content="disk.invalidReason ?? ''"
+        placement="top"
+      >
+        <span class="disk-card__status" :class="statusClassName">
+          {{ statusText }}
+        </span>
+      </el-tooltip>
+    </div>
 
     <span class="disk-card__avatar" :class="avatarClassName">
       {{ avatarText }}

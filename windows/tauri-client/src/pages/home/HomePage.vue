@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
-import { onMounted, ref } from "vue";
-import type { HomeDiskListItem } from "../../entities/disk/model";
+import { nextTick, onMounted, ref } from "vue";
+import type { HomeDiskListItem, HomeDiskListSnapshot } from "../../entities/disk/model";
 import CreateFileDiskDialog from "../../features/createFileDisk/CreateFileDiskDialog.vue";
 import CreateMemoryDiskDialog from "../../features/createMemoryDisk/CreateMemoryDiskDialog.vue";
 import EditDiskDialog from "../../features/editDisk/EditDiskDialog.vue";
@@ -32,26 +32,61 @@ const settingsVisible = ref(false);
 const editingDisk = ref<HomeDiskListItem | null>(null);
 const actionLoadingDiskId = ref<string | null>(null);
 const currentTheme = ref<AppTheme>({ ...DEFAULT_THEME });
+const initialAutoConnectCompleted = ref(false);
 
-async function loadHomeDiskList() {
-  loading.value = true;
+async function loadHomeDiskList(options: { showLoading?: boolean } = {}): Promise<HomeDiskListSnapshot | null> {
+  const showLoading = options.showLoading ?? true;
+  if (showLoading) {
+    loading.value = true;
+  }
+
   errorText.value = null;
 
   try {
     const snapshot = await queryHomeDiskList();
     disks.value = snapshot.disks;
     autoConnectCount.value = snapshot.autoConnectCount;
+    return snapshot;
   } catch (error) {
     disks.value = [];
     autoConnectCount.value = 0;
     errorText.value = getErrorMessage(error);
+    return null;
   } finally {
-    loading.value = false;
+    if (showLoading) {
+      loading.value = false;
+    }
   }
 }
 
+async function runInitialAutoConnect(snapshot: HomeDiskListSnapshot) {
+  if (initialAutoConnectCompleted.value) {
+    return;
+  }
+
+  initialAutoConnectCompleted.value = true;
+
+  const diskIds = snapshot.disks
+    .filter((disk) => disk.autoConnect && disk.status === "disconnected")
+    .map((disk) => disk.diskId);
+
+  for (const diskId of diskIds) {
+    await handleConnectDisk(diskId, { silentSuccess: true });
+  }
+}
+
+async function bootstrapHomePage() {
+  const snapshot = await loadHomeDiskList({ showLoading: true });
+  if (snapshot === null) {
+    return;
+  }
+
+  await nextTick();
+  await runInitialAutoConnect(snapshot);
+}
+
 onMounted(() => {
-  void loadHomeDiskList();
+  void bootstrapHomePage();
 });
 
 function handleOpenMemoryCreate() {
@@ -90,15 +125,21 @@ async function handleDiskUpdated() {
   await loadHomeDiskList();
 }
 
-async function handleConnectDisk(diskId: string) {
+async function handleConnectDisk(
+  diskId: string,
+  options: { silentSuccess?: boolean } = {},
+) {
   actionLoadingDiskId.value = diskId;
 
   try {
     await connectDisk({ diskId });
-    ElMessage.success("磁盘已连接");
-    await loadHomeDiskList();
+    if (!options.silentSuccess) {
+      ElMessage.success("磁盘已连接");
+    }
+    await loadHomeDiskList({ showLoading: false });
   } catch (error) {
-    ElMessage.error(getErrorMessage(error));
+    const message = getErrorMessage(error);
+    ElMessage.error(options.silentSuccess ? `自动连接失败：${message}` : message);
   } finally {
     actionLoadingDiskId.value = null;
   }
@@ -110,7 +151,7 @@ async function handleDisconnectDisk(diskId: string) {
   try {
     await disconnectDisk({ diskId });
     ElMessage.success("磁盘已断开");
-    await loadHomeDiskList();
+    await loadHomeDiskList({ showLoading: false });
   } catch (error) {
     ElMessage.error(getErrorMessage(error));
   } finally {
@@ -124,7 +165,7 @@ async function handleDeleteDisk(diskId: string) {
   try {
     await deleteDisk({ diskId });
     ElMessage.success("磁盘已删除");
-    await loadHomeDiskList();
+    await loadHomeDiskList({ showLoading: false });
   } catch (error) {
     ElMessage.error(getErrorMessage(error));
   } finally {
