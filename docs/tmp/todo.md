@@ -18,5 +18,5 @@
 
 参考：
 
-- `docs/workflow.md`
+- `docs/development/workflow.md`
 - `docs/progress/README.md`

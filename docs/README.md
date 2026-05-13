@@ -8,20 +8,37 @@
 
 早期文档中的 `MyCtl`、`MyDisk`、`MyApp` 只作为历史逻辑名保留；正式文档不再用它们描述新的多盘数据面目标。
 
-文档列表：
+## 目录结构
 
-- [项目概述](./项目概述.md)
+### 架构与目标
+
+- [项目概述](./architecture/项目概述.md)
+- [功能文档](./architecture/功能文档.md)
+- [技术文档](./architecture/技术文档.md)
+
+### 开发规则与流程
+
+- [开发文档](./development/开发文档.md)
+- [开发原则](./development/development-principles.md)
+- [执行工作流](./development/workflow.md)
+
+### UI 与前端设计
+
+- [Element Plus UI 规范提示](./ui/Element-Plus-UI规范提示词.md)
+- [Tauri Client UI 设计方案](./ui/tauri-client-ui-design.md)
+- [Tauri Client Element 落地说明](./ui/tauri-client-element-grounding-notes.md)
+- [Tauri Client UI 规范](./ui/tauri-client-ui-guidelines.md)
+
+### 排查与归档
+
+- [Windows驱动问题排查笔记](./troubleshooting/Windows驱动问题排查笔记.md)
+- [进度归档](./progress/README.md)
+
+### 组件与 SDK 文档
+
 - [AppKernel设计文档](../windows/AppKernel/AppKernel设计文档.md)
 - [AppKernel SDK文档](../windows/AppKernel/AppKernel-SDK文档.md)
 - [BackendCore SDK文档](../windows/BackendCore/BackendCore-SDK文档.md)
-- [功能文档](./功能文档.md)
-- [技术文档](./技术文档.md)
-- [开发文档](./开发文档.md)
-- [Windows驱动问题排查笔记](./Windows驱动问题排查笔记.md)
-- [执行工作流](./workflow.md)
-- [进度归档](./progress/README.md)
-- [Tauri Client Element 落地说明](./tauri-client-element-grounding-notes.md)
-- [Tauri Client UI 规范](./tauri-client-ui-guidelines.md)
 
 最终方案的核心原则：
 

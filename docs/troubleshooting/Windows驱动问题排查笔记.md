@@ -1,0 +1,587 @@
+# Windows驱动问题排查笔记
+
+本文档记录当前 `YumeDiskKMDF`、`YumeDiskSCSI`、`TestApp` 在重建 App-owned media queue 过程中已经遇到过的典型问题、确认过的根因、修复方式和后续注意事项。
+
+目标不是复述协议设计，而是把真实踩坑过程收成一本可复用的排查笔记，方便后续重构、回归和多盘并发验证时快速对照。
+
+## 1. 适用范围
+
+- 用户态后端：`windows/TestApp/src/`
+- KMDF 控制驱动：`windows/YumeDiskKMDF/YumeDiskKMDF`
+- Storport miniport：`windows/YumeDiskSCSI/YumeDiskSCSI`
+- 当前协议：`POST_READ_SLOT`、`POST_WRITE_SLOT`、`READ_ACK`、`WRITE_ACK_BATCH`
+
+## 2. 统一排查思路
+
+先分层，再判断卡在哪一层，不要一上来把“有设备无盘”“Q8挂死”“1117”都混成一个问题。
+
+### 2.1 四层划分
+
+1. `App` 是否成功打开 `YumeDiskKMDF`，并持续预投 slot。
+2. `KMDF` 是否成功持有 miniport handle，并把 slot transport 到 `YumeDiskSCSI`。
+3. `SCSI` 是否把系统 `READ/WRITE SRB` 正确挂到 per-target 队列，并完成首个 probe read。
+4. 系统存储栈是否已经拿到 probe read 结果，真正把盘枚举成 `Get-Disk` 可见磁盘。
+
+### 2.2 最有价值的观测点
+
+- `ct` / `rm` / `rm all`
+- `debug_snapshot`
+- `debug_scsi`
+- `YumeDiskKMDF` 的 `ControlSession*` / `ControlProxySubmitSlot*` 日志
+- `YumeDiskSCSI` 的 `DiskQueueReadSrb` / `DiskDrainReadSlots` / `DiskQueueReadAck` 日志
+- Windows 事件查看器中的 `disk 153`、`storport 129`
+
+### 2.3 常见计数判读
+
+如果出现下面这种组合，说明卡在“首个 probe read 没有真正回到系统”：
+
+```text
+backend_read_slot_posts > 0
+backend_read_slot_completions = 0
+backend_read_ack_commands = 0
+debug_scsi posted_read_slots = 1
+debug_scsi pending_reads = 1
+debug_scsi read_completed = 0
+```
+
+如果出现下面这种组合，说明高队列深度下有 slot/cancel/reset 没有收干净：
+
+```text
+read_post_slot = 32
+pending_reads = 8 / 31
+backend_command_failures 持续增加
+POST_READ_SLOT transient failure, error=1117
+磁盘 100%，但无实际读写吞吐
+```
+
+## 3. 问题归档
+
+### 3.1 设备打开失败：`open control device failed, error=50`
+
+相关提交：
+
+- `45fb1cf 修复open问题`
+
+现象：
+
+- 用户态打开控制设备失败，Win32 返回 `50`，即 `ERROR_NOT_SUPPORTED`。
+- KMDF 日志出现：
+
+```text
+ControlSessionTryOpen: create resources failed ... status=C00000BB
+ControlEvtFileCreate: ... status=C00000BB
+```
+
+定位信号：
+
+- `C00000BB` 是 `STATUS_NOT_SUPPORTED`。
+- 失败发生在 `ControlSessionTryOpen` 的“创建 file/session 资源”阶段，还没进入真正的数据面。
+- 如果 `QueryScsiInfo`/miniport 探测日志还没出现，说明问题在 KMDF session 资源创建，不在 SCSI。
+
+根因：
+
+- file 绑定 session/watchdog 引入后，KMDF 的 watchdog 资源创建方式不成立。
+- 本轮修复中，问题点落在 session 资源模型本身：watchdog 定时器和 file/session 生命周期耦合方式不对，导致 `ControlSessionCreateResources` 返回 `STATUS_NOT_SUPPORTED`。
+- 同时，旧实现把 session 锁、watchdog、下层 handle 和 in-flight I/O 生命周期缠在一起，后续就算侥幸打开成功，也容易在 cleanup/watchdog 上埋死锁和悬挂 I/O。
+
+修复：
+
+- 把 watchdog 改成 file 绑定的 one-shot timer，不再使用旧的 periodic 方式。
+- 心跳到达时手动重新 `WdfTimerStart`，而不是依赖周期性 timer 常驻。
+- session 内新增 `InFlightRequestCount + InFlightZeroEvent`，清理顺序固定为：
+
+```text
+SessionClose / WatchdogLock
+  -> RemoveAllDisks / SessionClose 下发到 SCSI
+  -> drain in-flight IO
+  -> close miniport handle
+```
+
+- `ControlSessionRelease` 不再只是解锁，而要和 in-flight 引用计数配对。
+
+注意事项：
+
+- 看到 `error=50` 时，先怀疑 `KMDF` 自己的 session 资源创建，不要先怀疑 `App` 路径或 `CreateFile` 参数。
+- file object 下面挂的 KMDF 对象必须严格检查是否支持当前配置，尤其是 timer、serialization、cleanup 顺序。
+- session 锁绝对不能长时间包住 `RemoveAllDisks -> drain -> close handle` 这种跨层流程。
+
+### 3.2 有设备无盘：设备管理器里有盘，磁盘管理器/`Get-Disk` 没盘
+
+相关提交：
+
+- `45fb1cf 修复open问题`
+- `2a785ba Fix KMDF async slot transport`
+- `26e25da Fix probe read slot completion path`
+- `8d969bf 修复有设备无盘问题`
+
+现象：
+
+- `ct` 成功，设备管理器里能看到 `Zightch YumeDisk SCSI Disk Device`。
+- `visible_path=<pending-enumeration>` 长时间不变。
+- `Get-PnpDevice` 能看到设备，`Get-Disk` 看不到新增磁盘。
+- 事件查看器常伴随 `disk 153`，目标通常是 `LBA 0`。
+
+典型日志组合：
+
+```text
+DiskQueueReadSrb: queue target=0 event=1 lba=0 blocks=1 bytes=4096
+DiskDrainReadSlots: dispatch target=0 event=1 slot=1 lba=0 blocks=1 bytes=4096
+backend_read_slot_completions=0
+backend_read_ack_commands=0
+posting_read_slots=1
+active_read_slots=1
+```
+
+根因：
+
+这个问题至少出现过三类根因。
+
+第一类是接口选错：
+
+- `KMDF` 枚举 `GUID_DEVINTERFACE_STORAGEPORT` 时会扫到大量非本驱动接口。
+- 只有通过 `QueryScsiInfo` 校验签名和组件版本后，才能确认目标 miniport。
+- 否则容易打开到别的 storageport 接口，`ZwDeviceIoControlFile(IOCTL_SCSI_MINIPORT)` 直接失败。
+
+第二类是首个 probe read 没真正闭环：
+
+- 系统会先对新盘发 `LBA 0 / 4KB` 一类的探测读。
+- `SCSI` 已经把这个读排进 `PendingReads`，并且把 read slot 派发给 `KMDF`。
+- 但 `App` 没有真正拿到这个 slot completion，或者拿到了 completion 但没有被正确消费。
+- 结果是设备节点存在，但 disk.sys/classpnp 一直等不到 probe read 成功返回，因此磁盘永远停在“设备已到达，盘未枚举完成”的状态。
+
+这类问题在异步 transport 上尤其隐蔽：
+
+- `IoCallDriver` 有时会同步 inline 完成 miniport control IRP。
+- 如果 `KMDF` 无条件把这次调用当成“真正的异步 pending”，上层 `WDFREQUEST` 就可能永远不被正确完成。
+- 从外部看起来就是：`SCSI` 已 dispatch，`KMDF` 似乎也收到了 completion，但 `App` 侧 completion 计数仍然为零。
+
+第三类是本次最终确认的 `POST_READ_SLOT` 提交线程阻塞：
+
+- 新的 App per-disk slot engine 是单线程模型；同一个线程负责预投 read/write slot、等待 overlapped completion、执行 `READ_ACK` / `WRITE_ACK_BATCH`。
+- 如果 `KMDF` 在处理 `POST_READ_SLOT` 的 WDF 请求线程里直接向 storage stack 调 `IoCallDriver`，这次调用在当前 miniport control 场景下可能无法及时返回到用户态。
+- 结果是用户态 `DeviceIoControl(POST_READ_SLOT)` 没有变成“已投递，等待 overlapped event”的状态，slot engine 卡在 `BeginAsyncIoControl` 内，根本进不了 `WaitForMultipleObjects`。
+- 这时 `SCSI` 日志可以看到 slot 已被完成，`KMDF` 也能打印 `finalStatus=00000000 completeInfo=32`，但 App 侧仍然是 `backend_read_slot_completions=0 / backend_read_ack_commands=0`，因为用户态线程还没机会消费 completion。
+- `completeInfo=32` 证明这不是输出长度为 0 的问题；`posting_read_slots` 长时间非 0 才是判断“卡在提交阶段”的关键证据。
+
+修复：
+
+- `KMDF` 打开 miniport 时，不只保存 `HANDLE`，还保存同生命周期的 `FILE_OBJECT + DEVICE_OBJECT`。
+- `POST_READ_SLOT` / `POST_WRITE_SLOT` 不再走同步代理，而是走真正的异步 slot transport。
+- `submit slot` 的 completion 必须回到原始 `App WDFREQUEST`，不能只完成 miniport control IRP。
+- 对 `IoCallDriver` 必须区分两种情况：
+  - 真正返回 `STATUS_PENDING`
+  - 同步 inline completion
+- `ControlProxySubmitSlotAsync` 必须先让原始 `WDFREQUEST` 进入长 pending，再把实际 `IoCallDriver` 放到 `IO_WORKITEM` 中执行，避免阻塞用户态 `DeviceIoControl` 提交流程。
+- 手工分配的 slot IRP 由 completion routine 和 work item 用单一 `CompletionState` 竞争收尾；completion routine 返回 `STATUS_MORE_PROCESSING_REQUIRED`，由 KMDF transport 自己完成原始 App request、释放 IRP/work item、注销 pending slot 引用。
+- `WdfRequestCompleteWithInformation` 必须返回真实输出长度：
+  - read slot 返回 `sizeof(YUMEDISK_READ_SLOT_EVENT)`
+  - write slot 返回 `YUMEDISK_WRITE_SLOT_HEADER_BASE_SIZE + DataLength`
+- App 侧保留 `posting_read_slots / posting_write_slots` 调试计数，用来区分“已经投递但没完成”和“还卡在投递调用内部”。
+- storageport 接口选择必须以 `QueryScsiInfo` 返回的签名和版本为最终裁决，而不是“第一个能打开的接口”。
+
+注意事项：
+
+- `visible_path=<pending-enumeration>` 只是结果，不是根因。
+- 设备管理器有设备，不代表系统已经把盘枚举成功。
+- 如果 `SCSI` 已经看到 `event=1/lba=0`，优先看 read slot completion 是否真的回到 `App`。
+- 如果 `posting_read_slots` 长时间非 0，先查 `KMDF POST_*_SLOT` 是否在 WDF 请求线程内同步等待了下层 storage stack，不要先改 SCSI 队列。
+
+直观解释：
+
+- 这个问题可以简单理解成“两段式登记”。
+- 第一段是“系统知道来了一个设备”，所以设备管理器里能看到设备。
+- 第二段是“系统再问一遍：你是不是一块真盘，前几个扇区能不能正常读出来”，这一步通常就是首个 `LBA 0 / 4KB` probe read。
+- 我们当时卡住的是第二段：设备已经到了，但这第一笔探测读没有完整走完，系统一直等不到成功答复。
+- 所以外在表现就是“有设备，但没有盘”；不是盘没创建出来，而是系统还不敢把它正式枚举成可用磁盘。
+
+### 3.3 高队列挂死：`Q2/Q8/Q32` 跑一半变成 100% 无读写
+
+相关提交：
+
+- `c63531a debug Q8/Q32`
+- `aebb108 修复Q8/Q32问题`
+- `430e364 修复1117问题`
+
+现象：
+
+- `Q1` 能跑，`Q2/Q8/Q32` 更容易在跑一段后挂死。
+- 磁盘 100%，但没有实际吞吐。
+- `diskspd` `Ctrl+C` 也停不下来，经常只能强杀 `TestApp`。
+- `debug_snapshot` 里常见：
+
+```text
+read_post_slot=32
+pending_reads=8 / 31
+backend_command_failures 持续上升
+backend_read_ack_commands 落后 backend_read_slot_completions
+POST_READ_SLOT transient failure, error=1117
+```
+
+根因：
+
+这不是一个“单点 bug”，而是一组取消/并发/ACK 耦合问题叠加出来的。
+
+第一类根因是 issued slot 取消后没有准确回收原始请求：
+
+- 旧实现只知道“posted slot 在哪”，不知道“这个 slot 已经发给了哪个系统请求”。
+- 一旦 slot 已经发出，再发生 reset/remove/cancel，就找不回原始 `READ/WRITE SRB`。
+- 结果就是一边 slot 丢了，一边系统 SRB 永远 pending，队列深度被慢慢吃光。
+
+第二类根因是 piggyback ACK 设计把两代状态绑死：
+
+- 旧 `POST_WRITE_SLOT` 同时承担“申请新 slot”和“顺带确认旧 ACK”。
+- 一旦 ACK 中夹着 stale/cancelled request，或者系统 write 已结束，这个 `POST_WRITE_SLOT` 的语义就变脏。
+- 在取消模型下，这种设计非常容易把 steady-state 队列卡死。
+
+第三类根因是 reset/cleanup 没有真正 complete 全部 pending：
+
+- 只清理了部分 pending I/O，而没有连 issued request、posted slot 一起收干净。
+- 这会导致高并发压测后遗留悬挂状态，下次 dispatch 时继续踩到脏状态。
+
+修复：
+
+- `SCSI` 为 read/write request 增加 `IssuedSlotId` / `LastIssuedSlotId`。
+- `CancelSlot` 不只取消“还在 posted 队列里的 slot”，还要能反查并结束“已经发出去的原始请求”。
+- `WRITE_ACK_BATCH` 成为唯一 ACK 入口，彻底移除 `POST_WRITE_SLOT` 输入里的 piggyback ACK。
+- `WRITE_ACK_BATCH` 支持逐项失败返回，stale/cancelled `eventId` 返回 `STATUS_NOT_FOUND`，而不是把整条命令打崩。
+- reset / session close / remove 路径要 complete 全部 pending，而不是只 complete 一部分“看起来像 I/O 的对象”。
+- 保持 `drain while available`，不要退回“一次只处理一个，等下次再唤醒”的模式。
+
+注意事项：
+
+- 这类挂死很容易被误判成“纯锁死”，实际上更常见的是 slot 丢失、request 悬挂、ACK 失配导致的逻辑性假死。
+- `Ctrl+C` 停不掉 `diskspd`，通常不是 `diskspd` 自己坏了，而是底层 raw I/O 没有被正确 cancel/complete。
+- 取消和清理必须按“单请求失败不判盘死”的原则实现，不能因为单次读写错误直接把整盘打死。
+
+### 3.4 `POST_READ_SLOT` / `POST_WRITE_SLOT` 出现 `1117`、`995`
+
+相关提交：
+
+- `430e364 修复1117问题`
+- `aebb108 修复Q8/Q32问题`
+
+现象：
+
+- 用户态打印：
+
+```text
+POST_READ_SLOT transient failure, error=1117
+POST_READ_SLOT transient failure, error=995
+```
+
+- WinDbg 断点确认过，一次典型返回落在 `ZwDeviceIoControlFile`，内核状态是 `0xC0000185`。
+
+错误含义：
+
+- `1117` = `ERROR_IO_DEVICE`
+- `995` = `ERROR_OPERATION_ABORTED`
+- `0xC0000185` = `STATUS_IO_DEVICE_ERROR`
+
+实际判读：
+
+- 在当前 slot transport 里，`1117` 不一定代表真实介质坏块。
+- 更常见的语义是：对应的 miniport control request 因 reset/remove/session close/cancel 被打断，最后在用户态表面上看成 I/O device error。
+- `995` 则更接近“这次 I/O 被系统主动终止/取消”。
+
+修复：
+
+- `KMDF` 对 `YumeDiskCommandSubmitSlot` 的 `STATUS_IO_DEVICE_ERROR` 做特殊映射，转成更接近真实语义的 `STATUS_CANCELLED`。
+- `App` 侧把 `1117` / `995` / `ERROR_NOT_READY` / `ERROR_DEVICE_NOT_CONNECTED` 当作可恢复 slot 错误处理：
+  - 先尝试 `CancelSlot`
+  - 短暂延迟后重投
+  - 只在持续出现或 session 已关闭时当成致命错误
+- `SCSI` 的 reset/remove/session close 路径必须补齐 complete pending。
+
+注意事项：
+
+- 在这个链路里，用户态看到 `1117` 时，第一反应不应该是“介质出错”，而应该先看最近是否发生了 `reset`、`remove`、`session cleanup`、`Ctrl+C`。
+- 如果 `1117` 伴随 `pending_reads`、`posted_read_slots` 卡住，更像取消语义泄漏，不像真正的读盘错误。
+
+### 3.5 性能只有约 `20 MB/s`，内核 CPU 很高
+
+现象：
+
+- 顺序 `1M Q1T1` 只有约 `20 MB/s`。
+- CPU 占用很高，而且大部分是内核时间。
+- 优化 miniport handle cache 后，性能仍几乎不变。
+
+根因：
+
+这个问题有两层。
+
+第一层是结构性瓶颈：
+
+- 旧 `WAIT_EVENT -> inline data -> READ_REPLY/WRITE_ACK` 模型导致每次 I/O 都要走多次同步往返。
+- `KMDF` 还会参与大 buffer 分配、清零、复制，内核态纯搬运成本太高。
+
+第二层是测量期被日志污染：
+
+- 在 `DiskQueueReadSrb`、`DiskDrainReadSlots`、`ControlProxySubmitSlotAsync` 这类热路径上打大量 `DbgPrint`，虚拟机吞吐会断崖式下降。
+- 本轮实际观察中，清掉热路径 print 之后，吞吐可以从几十 MB/s 直接回到数百 MB/s 级别。
+
+修复：
+
+- 用 App-owned slot queue 替换旧 wait-event 大 payload 往返。
+- `KMDF` 只传 slot descriptor，不再持有自己的大数据面协议。
+- `App` 与 `KMDF` 之间使用 direct I/O，减少额外复制。
+- 压测前删掉热路径 print，尤其是：
+  - `SCSI` 每次 read/write dispatch
+  - `KMDF` 每次 slot submit/complete
+  - `App` 每次 slot complete / ack send
+
+注意事项：
+
+- 性能测试前先确认当前驱动不是“调试日志版”。
+- 在虚拟机里，`DbgPrint` 的性能杀伤经常比代码结构问题还更夸张。
+- 如果吞吐突然从 `500 MB/s` 掉回 `20 MB/s`，先查 print，不要先改协议。
+
+### 3.6 `Ctrl+C` / `rm all` / App 退出时的清理挂住
+
+现象：
+
+- 正常压测时直接 `Ctrl+C`，也可能把虚拟盘打成 100% 无读写。
+- `rm all` 曾出现卡住或误判“链路坏了”。
+- 结束 `TestApp` 后，`diskspd` 才被迫返回。
+
+根因：
+
+- 这些现象本质上还是取消和 session cleanup 的一部分，不是和 `Q8/Q32` 完全无关的新问题。
+- 旧链路里，系统 I/O cancel、App slot cancel、session close、miniport handle close 没有被收进唯一边界。
+- 一旦先后顺序反了，就会出现：
+  - session 已关，但 slot 还活着
+  - slot 已取消，但原始 SRB 还 pending
+  - `diskspd` 想停，但底层请求没人 complete
+
+修复原则：
+
+- `KMDF` watchdog / cleanup 统一走：
+
+```text
+RemoveAllDisks | SessionClose
+  -> drain in-flight slot/control IO
+  -> close miniport handle
+  -> 锁定 session，直到 file object 真正关闭
+```
+
+- `SCSI` 对取消的处理原则固定为：
+  - 只完成对应读写请求为错误
+  - 不判盘死
+  - 不影响后续独立 I/O
+
+注意事项：
+
+- 系统侧取消逻辑只追到 `SCSI`，不额外做一套“系统 -> KMDF -> App -> ACK -> 再取消”的全链路复杂取消协议。
+- `App` 可以继续把已经拿到的 slot 正常回 ACK；ACK 到达时再由 `SCSI` 判断原始系统请求是否已经取消或不存在。
+- 这个原则必须贯穿读写两条链路。
+
+### 3.7 多盘并发的常见误区
+
+现象：
+
+- 双盘 `Q1T1` 能过，但单盘速度被平分。
+- 一块盘的高并发异常会拖慢另一块盘。
+
+根因：
+
+- App 端如果共享全局 worker 池、共享全局队列深度，天然会互相抢资源。
+- SCSI 端如果共享 adapter 级读写锁和队列，多 target 并发时一定会互相串扰。
+
+当前结论：
+
+- `KMDF` 共享 session 状态即可，不应该共享数据面调度。
+- `SCSI` 必须是 per-target 读写队列、per-target pending 状态。
+- `App` 必须是 per-disk worker 组、per-disk queue depth、per-disk ACK 状态。
+
+注意事项：
+
+- 多盘性能问题很多时候不是“算法不够快”，而是状态归属错了。
+- 只要还有 adapter 级全局数据面锁或 App 级全局队列深度，多盘就不可能真正并发。
+
+### 3.8 单盘吞吐从 `250/320 MB/s` 恢复到约 `600 MB/s`
+
+现象：
+
+- 多盘并发闭环打通后，单盘顺序吞吐一度从约 `500 MB/s` 掉到约 `250 MB/s`。
+- 把每盘数据面先改成“1 个读线程 + 1 个写线程”后，单盘只回升到约 `320 MB/s`。
+- 再继续改成“每盘少量 read workers + 少量 write workers + 1 个独立 write ACK flush worker”后，单盘恢复到约 `600 MB/s`。
+
+根因：
+
+- 真正限制单盘吞吐的不是全局锁，而是 App 每盘数据面的执行模型。
+- “每盘单线程 slot engine”会把 `slot completion -> memcpy -> ACK -> 补投下一槽` 串成一条单执行体热路径。
+- “每盘 1 读 1 写”虽然比单线程 slot engine 好，但单盘完成消费速度仍不够高。
+
+修复：
+
+- 保持 per-disk 边界不变，不回退到旧版 `Q` 个读 worker、`Q` 个写 worker 的海量线程模型。
+- 改成“每盘少量有上限的小常数 worker”，并把 `queue depth` 继续留给 in-flight slot，而不是交给线程数量。
+- 读侧和写侧都保留独立 ACK 路径，不再回到单线程串行 completion 消费。
+
+注意事项：
+
+- 如果单盘掉速、多盘总吞吐却还能继续涨，优先怀疑 per-disk 数据面模型，不要先怀疑 KMDF 全局锁。
+- 吞吐恢复后，如果内核 CPU 仍明显偏高，再把重点切到 `KMDF async slot transport` 的每-slot 固定开销。
+
+### 3.9 锁临界区过大导致 kernel CPU 偏高或清理互等
+
+现象：
+
+- 吞吐已经恢复，但 kernel CPU 占用仍明显偏高。
+- 高 QD 时系统没有完全挂死，但内核态时间异常高。
+- cleanup、watchdog、`rm all`、Ctrl+C 偶发等待很久。
+- WinDbg 或采样能看到大量时间消耗在锁竞争、系统 worker 调度、completion 互等附近。
+
+常见根因：
+
+- `KMDF` 把 `SessionLock` 放进每个 `POST_READ_SLOT/POST_WRITE_SLOT` 高频路径。
+- 持有 `SessionLock` 后再等待 pending slot drain，导致 cleanup 和 completion 容易互相等。
+- `submit queue/free list` 锁内做了 `IoCallDriver`、`WdfRequestComplete`、对象分配释放。
+- `SCSI` queue lock 内做大块 `RtlCopyMemory` 或 `StorPortNotification(RequestComplete)`。
+- remove/cleanup 没有先把 pending 对象移动到本地 list，而是在锁内边遍历边完成。
+- write ACK range 太大时，`WriteQueueLock` 内 bitmap 检查/置位循环过长。
+
+判定方法：
+
+- 先看是否有实际 I/O 进展：如果没有进展，优先按 QD 挂死、cancel、pending SRB 泄漏排查。
+- 如果吞吐仍有但 kernel CPU 高，重点看 `KMDF async slot transport` 和锁竞争。
+- 对 KMDF 看每 slot 是否仍在走 `ControlAlloc + IoAllocateIrp + IoAllocateWorkItem + IoQueueWorkItem`。
+- 对 KMDF 看 `ControlSessionRegisterPendingSlot` 是否仍每 slot 获取 `WDFWAITLOCK`。
+- 对 SCSI 看锁内是否出现 copy、completion、free、wait、IO call。
+- 对 cleanup 看是否持锁等待 `PendingSlotZeroEvent` 或 pending SRB drain。
+
+固定修复原则：
+
+```text
+锁外准备
+  -> 锁内摘状态 / 转移所有权
+  -> 立即解锁
+  -> 锁外 copy / complete / free / wait / IoCallDriver
+```
+
+注意事项：
+
+- `KSPIN_LOCK` 不是错误，SCSI per-target queue 使用 spin lock 是合理的；错误通常是锁内做了太多事。
+- `WDFWAITLOCK` 也不是错误，但它不能进入 slot 高频热路径。
+- 不要通过把 spin lock 换成 wait lock 来掩盖临界区过大；先缩小临界区。
+- 如果线性查找成为热点，应增加 ready list、pending-unissued list 或 eventId index，而不是扩大锁范围。
+- `DiskResetDiskStorage` 一类释放大块内存的路径也应使用“锁内交换指针，锁外释放”的方式，避免把释放成本塞进锁内。
+
+### 3.10 热路径固定开销导致 kernel CPU 偏高
+
+现象：
+
+- 单盘吞吐已经能到数百 MB/s，甚至约 `600 MB/s`，但 CPU 仍明显偏高。
+- CPU 时间主要落在 kernel time，而不是 App user time。
+- 关闭热路径 print 后吞吐恢复，但 kernel CPU 仍比预期高。
+- 多盘总吞吐能继续扩展，说明 App per-disk worker 和 SCSI per-target queue 大方向成立。
+
+常见热路径来源：
+
+- 热路径 `DbgPrint`：每次 read/write dispatch、slot submit、slot complete、ACK 都打印。
+- 每 slot 分配释放：`ControlAlloc(asyncRequest)`、`ControlAlloc(ioctlBuffer)`、`IoAllocateIrp`、`IoFreeIrp`。
+- 每 slot work item：`IoAllocateWorkItem`、`IoQueueWorkItem`、`IoFreeWorkItem`。
+- 每 slot 进入系统 worker queue，造成调度和上下文切换成本。
+- 每 slot 获取 `WDFWAITLOCK` 做 session 检查。
+- 短控制命令每次都分配临时 `SRB_IO_CONTROL` buffer 和 event。
+- ACK batch 太小，导致命令次数过多。
+- App 每个完成都立刻补投/ACK，批量度太低。
+
+当前最热的 KMDF slot transport 形态：
+
+```text
+POST_READ_SLOT / POST_WRITE_SLOT
+  -> ControlProxySubmitSlotAsync
+  -> alloc asyncRequest
+  -> alloc ioctlBuffer
+  -> IoAllocateIrp
+  -> IoAllocateWorkItem
+  -> IoQueueWorkItem
+  -> IoCallDriver
+  -> completion
+  -> WdfRequestComplete
+  -> free work item / IRP / buffers
+```
+
+判断方法：
+
+- 如果去掉热路径 print 后吞吐大幅上升，说明 print 是第一层瓶颈。
+- 如果吞吐已经恢复但 kernel CPU 仍高，继续看每-slot 固定开销。
+- 对 KMDF，优先查 `ControlProxySubmitSlotAsync` 是否每次都 alloc/free IRP、buffer、work item。
+- 对 SCSI，查 `DiskAllocPostedSlot`、`DiskAllocReadRequest`、`DiskAllocWriteRequest` 是否在高 IOPS 下成为频繁分配点。
+- 对 App，查是否每个 slot 完成都唤醒过多线程或立即发送过小 ACK batch。
+- 用计数器看每秒 slot submit/complete、ACK command、work item、pool miss、allocation failure，而不是只看 MB/s。
+
+固定修复方向：
+
+- 热路径 print 默认关闭，只保留低频 debug counter。
+- `KMDF async slot transport` 改成 session-owned 对象池。
+- 池对象长期持有 `IRP + IOCTL buffer + completion context`。
+- 用 `IoReuseIrp` 复用 IRP，去掉每-slot `IoAllocateIrp/IoFreeIrp`。
+- 用 session-owned 长期 submit worker，去掉每-slot `IoAllocateWorkItem/IoFreeWorkItem`。
+- worker 批量 drain submit queue，不能一个 slot 一个 worker。
+- 高频 session 准入用原子 state + pending ref，不走 `WDFWAITLOCK`。
+- `READ_ACK` 保持小描述符 + `KernelVa`，不要把 1MB 数据塞进 `SRB_IO_CONTROL`。
+- `WRITE_ACK_BATCH` 保持独立 batch，必要时提高 batch 合并度，但不恢复 piggyback ACK。
+
+注意事项：
+
+- 热路径优化不能改变协议语义，第一阶段只压对象生命周期和调度成本。
+- 不要为了减少命令数立即设计新协议；当前协议已经能支撑吞吐，先压实现固定成本。
+- 不要把 App worker 数继续堆大来掩盖 KMDF kernel CPU 问题；这会把上下文切换重新拉高。
+- 如果对象池满，初版宁可返回 busy 让 App 重投，也不要在 KMDF 内无限等待池对象。
+- 热路径优化必须和 cleanup 一起验证：`Ctrl+C`、`rm all`、App exit、heartbeat timeout 都要能收干净。
+
+### 3.11 宿主机截图等外部扰动下，`Q32T2` 吞吐短时从约 `500 MB/s` 掉到约 `300 MB/s`
+
+现象：
+
+- `Q32T2` 压测在正常无干扰情况下可以长期维持约 `500 MB/s`。
+- 压测过程中如果在宿主机执行截图之类的外部操作，虚拟机内吞吐可能短时掉到约 `300 MB/s`。
+- 当前再次确认后，该吞吐回落是可恢复的；外部扰动结束后，吞吐可以重新回到原先水平。
+
+当前判断：
+
+- 这更像是宿主机/虚拟机调度被抢占后的暂时性性能回落，而不是当前链路 correctness 缺陷。
+- 由于 `App-owned` 架构依赖用户态 worker 持续处理 slot 和 ACK，用户态调度被打断时出现短时补水不足是可预期现象。
+- 只要吞吐能自行恢复，就不把它定性为当前要修的 bug。
+
+与真正缺陷的区分口径：
+
+- 如果外部扰动后吞吐短时下降，但数秒内能自行恢复：按环境扰动处理，不改驱动/`AppKernel`。
+- 如果一次扰动后吞吐长期停在低档位，且不再恢复：再按 `AppKernel` 数据面恢复能力缺陷处理。
+- 如果无外部扰动、纯正常压测也会稳定掉速：再回到真正性能回归排查。
+
+注意事项：
+
+- 做性能对比时，尽量避免在宿主机上同时执行截图、远程桌面抓图、重型调试器刷新等会干扰 VM 调度的操作。
+- 这类现象优先记录为“环境扰动敏感”，不要直接据此重构驱动。
+- 真正需要修的前提仍是“不可恢复”或“无扰动也稳定复现”。
+
+## 4. 调试和压测注意事项
+
+### 4.1 `diskspd` 使用注意
+
+- 直接对 `\\.\PhysicalDriveN` 压测时，可能出现 `Error getting file size`。
+- 当前调试中更稳定的方式是使用 `diskspd` 的 `#N` 目标。
+- 压测前要先确认磁盘已经真正进入 `Get-Disk`，而不是只在设备管理器里可见。
+
+### 4.2 首个 probe read 的价值最高
+
+- 只要 `LBA 0 / 4KB` 的读没闭环，后面的 QDepth 压测结论都没有意义。
+- “有设备无盘”优先抓 probe read，不要先看大块顺序读写。
+
+### 4.3 先看单请求边界，再看全局行为
+
+- 读错误：只影响该 `eventId`。
+- 写错误：只影响该大 write 对应的 `eventId`。
+- 任何单请求错误都不应该直接把整盘打死。
+
+## 5. 当前最重要的长期规则
+
+1. `KMDF` 只做 session/watchdog/direct-IO transport，不做自己的数据面状态机。
+2. `SCSI` 只用 per-target 单盘队列推进请求，不回到 adapter 级共享数据面锁。
+3. `App` 只按盘并发，不共享全局数据面 worker 池。
+4. `WRITE_ACK_BATCH` 是唯一 ACK 入口，不再恢复 piggyback ACK。
+5. 热路径 print 只用于短期定位，定位完成后必须删除，否则性能数据不可信。
+6. 锁内只做状态转移，copy、complete、free、wait、`IoCallDriver` 都放到锁外。
+7. 热路径不做 per-slot alloc/free IRP/work item，优先用 session-owned 对象池和长期 worker。

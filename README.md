@@ -69,10 +69,10 @@ Client Host                     Server Host
 
 详细设计与 SDK 文档请参阅：
 
-- [应用层设计草案](docs/tmp/yumedisk-application-layer-design-draft.md) — 产品定位、一致性模型、协议设计
+- [项目概述](docs/architecture/项目概述.md) — 产品定位、系统分层、整体边界
 - [AppKernel 设计文档](windows/AppKernel/AppKernel设计文档.md) — 架构分层、接口定义、写路径语义
 - [AppKernel SDK 文档](windows/AppKernel/AppKernel-SDK文档.md) — DLL 接入指南
-- [开发原则](docs/development-principles.md) — 极简核心、单一真实来源、边界闸口等原则
+- [开发原则](docs/development/development-principles.md) — 极简核心、单一真实来源、边界闸口等原则
 
 ## 开发状态
 
