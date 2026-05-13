@@ -260,7 +260,7 @@
 .app-dialog-tabs.el-tabs {
   --el-tabs-header-height: 36px;
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   flex-direction: column;
   min-height: max-content;
   min-width: 0;
