@@ -3,11 +3,11 @@ use std::sync::Mutex;
 
 use backend_rust::BackendContext;
 
-use crate::state::disk_store::DiskStore;
+use crate::state::disk_runtime::DiskRuntimeStore;
 
 pub struct ClientState {
     pub backend: BackendContext,
-    pub disk_store: Mutex<DiskStore>,
+    pub disk_runtime_store: Mutex<DiskRuntimeStore>,
     is_exiting: AtomicBool,
 }
 
@@ -15,7 +15,7 @@ impl Default for ClientState {
     fn default() -> Self {
         Self {
             backend: BackendContext::new(),
-            disk_store: Mutex::new(DiskStore::default()),
+            disk_runtime_store: Mutex::new(DiskRuntimeStore::default()),
             is_exiting: AtomicBool::new(false),
         }
     }

@@ -19,6 +19,10 @@ export async function queryHomeDiskList(): Promise<HomeDiskListSnapshot> {
   return invoke<HomeDiskListSnapshot>("query_home_disk_list");
 }
 
+export async function rescanRuntimeDisks(): Promise<HomeDiskListSnapshot> {
+  return invoke<HomeDiskListSnapshot>("rescan_runtime_disks");
+}
+
 export async function createMemoryDisk(
   request: CreateMemoryDiskRequest,
 ): Promise<CreateMemoryDiskResponse> {

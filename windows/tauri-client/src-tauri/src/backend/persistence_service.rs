@@ -18,15 +18,16 @@ use crate::state::client_config::PersistedDiskMediaConfig;
 use crate::state::client_config::PersistedDiskRecord;
 use crate::state::client_config::PersistedFileMediaKind;
 use crate::state::client_config::PersistedMemoryMediaKind;
-use crate::state::disk_store::ConfigDiskRecord;
-use crate::state::disk_store::DiskMediaConfig;
-use crate::state::disk_store::DiskStore;
-use crate::state::disk_store::FileMediaKind;
-use crate::state::disk_store::MemoryMediaKind;
+use crate::state::disk_runtime::DiskRuntime;
+use crate::state::disk_runtime::DiskRuntimeStore;
+use crate::state::disk_runtime::FileMediaKind;
+use crate::state::disk_runtime::MemoryMediaKind;
+
+const INVALID_FILE_REASON: &str = "文件路径必须指向已存在文件";
 
 pub struct RestoredClientState {
     pub session_config: SessionConfig,
-    pub disk_store: DiskStore,
+    pub disk_runtime_store: DiskRuntimeStore,
 }
 
 pub fn load_client_state() -> Result<RestoredClientState, ApiError> {
@@ -35,20 +36,23 @@ pub fn load_client_state() -> Result<RestoredClientState, ApiError> {
         heartbeat_interval_ms: persisted_config.session_config.heartbeat_interval_ms,
         initial_event_queue_capacity: persisted_config.session_config.initial_event_queue_capacity,
     };
-    let disk_store = build_restored_disk_store(persisted_config)?;
+    let disk_runtime_store = build_restored_runtime_store(persisted_config)?;
 
     Ok(RestoredClientState {
         session_config,
-        disk_store,
+        disk_runtime_store,
     })
 }
 
-pub fn save_client_state(backend: &BackendContext, disk_store: &DiskStore) -> Result<(), ApiError> {
+pub fn save_client_state(
+    backend: &BackendContext,
+    runtime_store: &DiskRuntimeStore,
+) -> Result<(), ApiError> {
     let persisted_config = PersistedClientConfig {
         version: 1,
         session_config: map_session_config(backend.session_config()),
-        disks: disk_store
-            .config_disks_snapshot()
+        disks: runtime_store
+            .snapshots()
             .into_iter()
             .map(map_persisted_disk_record)
             .collect(),
@@ -57,10 +61,10 @@ pub fn save_client_state(backend: &BackendContext, disk_store: &DiskStore) -> Re
     client_config::save_client_config(&persisted_config).map_err(map_client_config_error)
 }
 
-fn build_restored_disk_store(
+fn build_restored_runtime_store(
     persisted_config: PersistedClientConfig,
-) -> Result<DiskStore, ApiError> {
-    let mut disk_store = DiskStore::default();
+) -> Result<DiskRuntimeStore, ApiError> {
+    let mut runtime_store = DiskRuntimeStore::default();
     let mut disk_ids = BTreeSet::new();
 
     for persisted_disk in persisted_config.disks {
@@ -72,21 +76,14 @@ fn build_restored_disk_store(
             ));
         }
 
-        let restored_record = restore_disk_record(persisted_disk)?;
-        disk_store.insert_disk_record(restored_record.config_disk, restored_record.media);
+        let runtime = restore_disk_runtime(persisted_disk)?;
+        runtime_store.insert_runtime(runtime);
     }
 
-    Ok(disk_store)
+    Ok(runtime_store)
 }
 
-struct RestoredDiskRecord {
-    config_disk: ConfigDiskRecord,
-    media: Option<Box<dyn Media>>,
-}
-
-fn restore_disk_record(
-    persisted_disk: PersistedDiskRecord,
-) -> Result<RestoredDiskRecord, ApiError> {
+fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRuntime, ApiError> {
     match persisted_disk.media {
         PersistedDiskMediaConfig::Memory {
             memory_kind,
@@ -98,20 +95,14 @@ fn restore_disk_record(
             };
             let media = create_memory_media(memory_kind, capacity_bytes)?;
 
-            Ok(RestoredDiskRecord {
-                config_disk: ConfigDiskRecord {
-                    disk_id: persisted_disk.disk_id,
-                    disk_name: persisted_disk.disk_name,
-                    auto_connect: persisted_disk.auto_connect,
-                    read_only: false,
-                    invalid_reason: None,
-                    media: DiskMediaConfig::Memory {
-                        memory_kind,
-                        capacity_bytes,
-                    },
-                },
-                media: Some(media),
-            })
+            Ok(DiskRuntime::new_memory(
+                persisted_disk.disk_id,
+                persisted_disk.disk_name,
+                persisted_disk.auto_connect,
+                memory_kind,
+                capacity_bytes,
+                media,
+            ))
         }
         PersistedDiskMediaConfig::File {
             file_kind,
@@ -120,42 +111,29 @@ fn restore_disk_record(
             let file_kind = match file_kind {
                 PersistedFileMediaKind::RawFile => FileMediaKind::RawFile,
             };
-            match open_raw_file_media(&file_path) {
-                Ok(raw_file_media) => {
-                    let capacity_bytes = raw_file_media.size_bytes();
-                    let read_only = raw_file_media.read_only();
 
-                    Ok(RestoredDiskRecord {
-                        config_disk: ConfigDiskRecord {
-                            disk_id: persisted_disk.disk_id,
-                            disk_name: persisted_disk.disk_name,
-                            auto_connect: persisted_disk.auto_connect,
-                            read_only,
-                            invalid_reason: None,
-                            media: DiskMediaConfig::File {
-                                file_kind,
-                                file_path,
-                                capacity_bytes,
-                            },
-                        },
-                        media: Some(Box::new(raw_file_media)),
-                    })
-                }
-                Err(error) => Ok(RestoredDiskRecord {
-                    config_disk: ConfigDiskRecord {
-                        disk_id: persisted_disk.disk_id,
-                        disk_name: persisted_disk.disk_name,
-                        auto_connect: persisted_disk.auto_connect,
-                        read_only: false,
-                        invalid_reason: Some(error.message),
-                        media: DiskMediaConfig::File {
-                            file_kind,
-                            file_path,
-                            capacity_bytes: 0,
-                        },
+            match probe_raw_file_media(&file_path) {
+                Ok(probe) => Ok(DiskRuntime::new_file_disconnected(
+                    persisted_disk.disk_id,
+                    persisted_disk.disk_name,
+                    persisted_disk.auto_connect,
+                    file_kind,
+                    file_path,
+                    probe.capacity_bytes,
+                    probe.read_only,
+                )),
+                Err(error) => Ok(DiskRuntime::new_file_invalid(
+                    persisted_disk.disk_id,
+                    persisted_disk.disk_name,
+                    persisted_disk.auto_connect,
+                    file_kind,
+                    file_path,
+                    if error.code == "invalid-file-path" {
+                        INVALID_FILE_REASON.to_string()
+                    } else {
+                        error.message
                     },
-                    media: None,
-                }),
+                )),
             }
         }
     }
@@ -168,13 +146,15 @@ fn map_session_config(session_config: SessionConfig) -> client_config::Persisted
     }
 }
 
-fn map_persisted_disk_record(config_disk: ConfigDiskRecord) -> PersistedDiskRecord {
+fn map_persisted_disk_record(
+    snapshot: crate::state::disk_runtime::DiskRuntimeSnapshot,
+) -> PersistedDiskRecord {
     PersistedDiskRecord {
-        disk_id: config_disk.disk_id,
-        disk_name: config_disk.disk_name,
-        auto_connect: config_disk.auto_connect,
-        media: match config_disk.media {
-            DiskMediaConfig::Memory {
+        disk_id: snapshot.disk_id,
+        disk_name: snapshot.disk_name,
+        auto_connect: snapshot.auto_connect,
+        media: match snapshot.media {
+            crate::state::disk_runtime::DiskMediaConfig::Memory {
                 memory_kind,
                 capacity_bytes,
             } => PersistedDiskMediaConfig::Memory {
@@ -184,7 +164,7 @@ fn map_persisted_disk_record(config_disk: ConfigDiskRecord) -> PersistedDiskReco
                 },
                 capacity_bytes,
             },
-            DiskMediaConfig::File {
+            crate::state::disk_runtime::DiskMediaConfig::File {
                 file_kind,
                 file_path,
                 ..
@@ -210,7 +190,31 @@ fn create_memory_media(
     }
 }
 
-fn open_raw_file_media(file_path: &str) -> Result<RawFileMedia, ApiError> {
+pub struct RawFileProbe {
+    pub capacity_bytes: u64,
+    pub read_only: bool,
+}
+
+pub fn probe_raw_file_media(file_path: &str) -> Result<RawFileProbe, ApiError> {
+    let file_path_buf = PathBuf::from(file_path);
+    if !file_path_buf.is_file() {
+        return Err(ApiError::new(
+            "invalid-file-path",
+            "文件路径必须指向已存在文件",
+            Some(file_path.to_string()),
+        ));
+    }
+
+    let media =
+        RawFileMedia::open(&file_path_buf).map_err(|error| map_raw_file_media_error(error, file_path))?;
+
+    Ok(RawFileProbe {
+        capacity_bytes: media.size_bytes(),
+        read_only: media.read_only(),
+    })
+}
+
+pub fn open_raw_file_media(file_path: &str) -> Result<RawFileMedia, ApiError> {
     let file_path_buf = PathBuf::from(file_path);
     if !file_path_buf.is_file() {
         return Err(ApiError::new(

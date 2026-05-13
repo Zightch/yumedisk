@@ -245,8 +245,8 @@ async function handleCreateNewFileSubmit() {
               <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
             </el-form-item>
 
-            <el-form-item label="RAW 文件路径">
-              <el-input v-model="form.filePath" placeholder="选择现有 RAW 文件">
+            <el-form-item label="文件路径">
+              <el-input v-model="form.filePath" placeholder="选择现有文件">
                 <template #append>
                   <el-button
                     class="app-dialog-form__append-button"
@@ -274,7 +274,7 @@ async function handleCreateNewFileSubmit() {
             </el-form-item>
 
             <el-form-item label="文件路径">
-              <el-input v-model="newFileForm.filePath" placeholder="输入要创建的 RAW 文件路径">
+              <el-input v-model="newFileForm.filePath" placeholder="输入要创建的文件路径">
                 <template #append>
                   <el-button
                     class="app-dialog-form__append-button"

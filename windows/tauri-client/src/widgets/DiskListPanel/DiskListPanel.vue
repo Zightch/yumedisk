@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { RefreshRight } from "@element-plus/icons-vue";
 import { computed } from "vue";
 import type { HomeDiskListItem } from "../../entities/disk/model";
 import DiskCard from "../DiskCard/DiskCard.vue";
@@ -12,6 +13,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  rescan: [];
   connect: [diskId: string];
   disconnect: [diskId: string];
   delete: [diskId: string];
@@ -30,9 +32,17 @@ const diskCount = computed(() => props.disks.length);
           <span class="list-panel__count">{{ diskCount }}</span>
         </div>
 
-        <div class="list-panel__summary">
-          <span class="list-panel__summary-label">自动连接</span>
-          <span class="list-panel__summary-value">{{ autoConnectCount }} / {{ diskCount }}</span>
+        <div class="list-panel__meta">
+          <el-button class="list-panel__rescan" text aria-label="重扫" @click="emit('rescan')">
+            <el-icon>
+              <RefreshRight />
+            </el-icon>
+          </el-button>
+
+          <div class="list-panel__summary">
+            <span class="list-panel__summary-label">自动连接</span>
+            <span class="list-panel__summary-value">{{ autoConnectCount }} / {{ diskCount }}</span>
+          </div>
         </div>
       </div>
     </template>
@@ -65,7 +75,12 @@ const diskCount = computed(() => props.disks.length);
         show-icon
       />
 
-      <el-empty v-else class="list-panel__empty" description="当前还没有磁盘配置" />
+      <el-empty
+        v-else
+        class="list-panel__empty"
+        description="当前还没有磁盘配置"
+        :image-size="0"
+      />
     </el-scrollbar>
   </el-card>
 </template>

@@ -11,6 +11,7 @@ import {
   deleteDisk,
   disconnectDisk,
   queryHomeDiskList,
+  rescanRuntimeDisks,
 } from "../../shared/api/diskClient";
 import { getErrorMessage } from "../../shared/api/sessionClient";
 import AppHeader from "../../widgets/AppHeader/AppHeader.vue";
@@ -173,6 +174,23 @@ async function handleDeleteDisk(diskId: string) {
   }
 }
 
+async function handleRescanRuntimeDisks() {
+  loading.value = true;
+  errorText.value = null;
+
+  try {
+    const snapshot = await rescanRuntimeDisks();
+    disks.value = snapshot.disks;
+    autoConnectCount.value = snapshot.autoConnectCount;
+    ElMessage.success("已完成重扫");
+  } catch (error) {
+    errorText.value = getErrorMessage(error);
+    ElMessage.error(errorText.value);
+  } finally {
+    loading.value = false;
+  }
+}
+
 function handleThemeChanged(theme: AppTheme) {
   currentTheme.value = theme;
   applyTheme(theme);
@@ -197,6 +215,7 @@ function handleThemeChanged(theme: AppTheme) {
         :loading="loading"
         :error-text="errorText"
         :action-loading-disk-id="actionLoadingDiskId"
+        @rescan="handleRescanRuntimeDisks"
         @connect="handleConnectDisk"
         @disconnect="handleDisconnectDisk"
         @edit="handleEditDisk"

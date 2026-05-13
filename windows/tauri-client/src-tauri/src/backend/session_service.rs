@@ -33,11 +33,11 @@ pub fn initialize_client(state: &ClientState) -> Result<SessionSnapshot, ApiErro
     }
 
     {
-        let mut disk_store = state
-            .disk_store
+        let mut disk_runtime_store = state
+            .disk_runtime_store
             .lock()
-            .expect("disk store mutex should not be poisoned");
-        *disk_store = restored_state.disk_store;
+            .expect("disk runtime store mutex should not be poisoned");
+        *disk_runtime_store = restored_state.disk_runtime_store;
     }
 
     Ok(SessionSnapshot {
