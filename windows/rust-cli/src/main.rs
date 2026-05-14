@@ -1,31 +1,19 @@
 mod dense_mem;
-mod disk_io;
-mod stress;
 
 use std::env;
 use std::io;
 use std::io::Write;
 use std::process;
-use std::thread;
-use std::time::Duration;
-use std::time::Instant;
 
 use backend_rust::BackendContext;
-use backend_rust::DebugSnapshot;
 use backend_rust::BackendStatsSnapshot;
+use backend_rust::DebugSnapshot;
 use backend_rust::DiskConfig;
-use backend_rust::ManagedDiskSnapshot;
 use backend_rust::YUMEDISK_MAX_TARGETS;
 use backend_rust::YUMEDISK_MAX_USABLE_TARGET_ID;
-use backend_rust::enumerate_visible_yumedisks;
-use backend_rust::make_physical_drive_path;
 use dense_mem::DenseMem;
-use stress::SmokeConfig;
-use stress::run_smoke;
 
 type AppResult<T> = Result<T, String>;
-
-const DISK_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, Copy)]
 struct CreateDiskRequest {
@@ -54,10 +42,6 @@ fn run() -> AppResult<()> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
         None | Some("shell") => run_shell(),
-        Some("smoke") => {
-            let config = parse_smoke_args(args)?;
-            run_smoke(config)
-        }
         Some("help") | Some("--help") | Some("-h") => {
             print_usage();
             Ok(())
@@ -89,9 +73,7 @@ impl CliHost {
             return Err(error);
         }
 
-        Ok(Self {
-            context,
-        })
+        Ok(Self { context })
     }
 
     fn shutdown(&mut self) {
@@ -219,15 +201,13 @@ impl CliHost {
         );
         for disk in snapshot.disks {
             println!(
-                "debug_disk target={}, disk_bytes={}, sector_size={}, read_only={}, lifecycle={}, online={}, visible_path={}, physical_drive={}",
+                "debug_disk target={}, disk_bytes={}, sector_size={}, read_only={}, lifecycle={}, online={}",
                 disk.target_id,
                 disk.disk_size_bytes,
                 disk.sector_size,
                 bool_to_text(disk.read_only),
                 disk.lifecycle_text,
-                bool_to_text(disk.online),
-                pending_text(&disk.visible_path),
-                pending_text(&disk.physical_drive_path)
+                bool_to_text(disk.online)
             );
         }
         Ok(())
@@ -238,28 +218,13 @@ impl CliHost {
         println!("managed_target_count={}", managed_disks.len());
         for disk in managed_disks {
             println!(
-                "target={}, disk_bytes={}, sector_size={}, read_only={}, backing=denseMem, lifecycle={}, online={}, visible_path={}, physical_drive={}",
+                "target={}, disk_bytes={}, sector_size={}, read_only={}, backing=denseMem, lifecycle={}, online={}",
                 disk.target_id,
                 disk.disk_size_bytes,
                 disk.sector_size,
                 bool_to_text(disk.read_only),
                 disk.lifecycle_text,
-                bool_to_text(disk.online),
-                pending_text(&disk.visible_path),
-                pending_text(&disk.physical_drive_path)
-            );
-        }
-
-        let visible_disks = enumerate_visible_yumedisks();
-        println!("visible_disk_count={}", visible_disks.len());
-        for (index, disk) in visible_disks.iter().enumerate() {
-            println!(
-                "visible_disk[{}], path={}, device_number={}, disk_bytes={}, physical_drive={}",
-                index,
-                disk.path,
-                disk.device_number,
-                disk.length_bytes,
-                make_physical_drive_path(disk.device_number)
+                bool_to_text(disk.online)
             );
         }
     }
@@ -297,15 +262,23 @@ impl CliHost {
             return Err(error_text);
         }
 
-        let snapshot = self.wait_for_disk_ready(target_id, DISK_READY_TIMEOUT)?;
-        println!(
-            "created target={}, disk_bytes={}, read_only={}, visible_path={}, physical_drive={}",
-            snapshot.target_id,
-            snapshot.disk_size_bytes,
-            bool_to_text(snapshot.read_only),
-            pending_text(&snapshot.visible_path),
-            pending_text(&snapshot.physical_drive_path)
-        );
+        if let Some(snapshot) = self.find_disk_snapshot(target_id) {
+            println!(
+                "created target={}, disk_bytes={}, read_only={}, lifecycle={}, online={}",
+                snapshot.target_id,
+                snapshot.disk_size_bytes,
+                bool_to_text(snapshot.read_only),
+                snapshot.lifecycle_text,
+                bool_to_text(snapshot.online)
+            );
+        } else {
+            println!(
+                "created target={}, disk_bytes={}, read_only={}",
+                target_id,
+                disk_size_bytes,
+                bool_to_text(request.read_only)
+            );
+        }
         Ok(())
     }
 
@@ -338,31 +311,7 @@ impl CliHost {
         Ok(())
     }
 
-    fn wait_for_disk_ready(
-        &self,
-        target_id: u32,
-        timeout: Duration,
-    ) -> AppResult<ManagedDiskSnapshot> {
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .ok_or_else(|| "timeout-overflow".to_string())?;
-
-        loop {
-            if let Some(snapshot) = self.find_disk_snapshot(target_id) {
-                if !snapshot.physical_drive_path.is_empty() {
-                    return Ok(snapshot);
-                }
-            }
-
-            if Instant::now() >= deadline {
-                return Err(format!("disk-ready-timeout target={}", target_id));
-            }
-
-            thread::sleep(Duration::from_millis(100));
-        }
-    }
-
-    fn find_disk_snapshot(&self, target_id: u32) -> Option<ManagedDiskSnapshot> {
+    fn find_disk_snapshot(&self, target_id: u32) -> Option<backend_rust::ManagedDiskSnapshot> {
         self.context
             .snapshot_managed_disks()
             .into_iter()
@@ -370,56 +319,10 @@ impl CliHost {
     }
 }
 
-fn parse_smoke_args(mut args: impl Iterator<Item = String>) -> AppResult<SmokeConfig> {
-    let mut config = SmokeConfig::default();
-
-    while let Some(flag) = args.next() {
-        let value = args
-            .next()
-            .ok_or_else(|| format!("missing value for {}", flag))?;
-        match flag.as_str() {
-            "--disk-mib" => {
-                config.disk_mib = value
-                    .parse()
-                    .map_err(|_| format!("invalid --disk-mib: {}", value))?;
-            }
-            "--threads" => {
-                config.threads = value
-                    .parse()
-                    .map_err(|_| format!("invalid --threads: {}", value))?;
-            }
-            "--iterations" => {
-                config.iterations_per_thread = value
-                    .parse()
-                    .map_err(|_| format!("invalid --iterations: {}", value))?;
-            }
-            "--block-kib" => {
-                config.block_kib = value
-                    .parse()
-                    .map_err(|_| format!("invalid --block-kib: {}", value))?;
-            }
-            "--target" => {
-                let target_id: u32 = value
-                    .parse()
-                    .map_err(|_| format!("invalid --target: {}", value))?;
-                config.target_id = Some(target_id);
-            }
-            other => {
-                return Err(format!("unknown flag: {}", other));
-            }
-        }
-    }
-
-    Ok(config)
-}
-
 fn print_usage() {
     println!("usage:");
     println!("  rust-cli");
     println!("  rust-cli shell");
-    println!(
-        "  rust-cli smoke [--disk-mib N] [--threads N] [--iterations N] [--block-kib N] [--target N]"
-    );
     println!("  rust-cli help");
     println!();
     println!("default command: shell");
@@ -435,7 +338,7 @@ fn print_runtime_help() {
     println!("                                     create one denseMem disk");
     println!("  rm <target>                        remove one disk target");
     println!("  rm all                             remove all disk targets");
-    println!("  ls                                 list managed targets and visible YumeDisk disks");
+    println!("  ls                                 list managed targets");
     println!("  stats                              print aggregated AppKernel counters");
     println!("  debug                              print backend snapshot");
     println!("  exit                               close session and quit");
@@ -466,7 +369,9 @@ fn parse_create_disk_args(args: &[&str]) -> AppResult<CreateDiskRequest> {
             continue;
         }
         if token.eq_ignore_ascii_case("sparse") {
-            return Err("sparse not supported; rust-cli currently only supports denseMem".to_string());
+            return Err(
+                "sparse not supported; rust-cli currently only supports denseMem".to_string(),
+            );
         }
         if token.eq_ignore_ascii_case("true") || token.eq_ignore_ascii_case("false") {
             if read_only_seen {
@@ -508,14 +413,6 @@ fn parse_u32_value(text: &str, name: &str) -> AppResult<u32> {
 fn parse_u64_value(text: &str, name: &str) -> AppResult<u64> {
     text.parse::<u64>()
         .map_err(|_| format!("invalid {}: {}", name, text))
-}
-
-fn pending_text(text: &str) -> &str {
-    if text.is_empty() {
-        "<pending-enumeration>"
-    } else {
-        text
-    }
 }
 
 fn bool_to_text(value: bool) -> &'static str {

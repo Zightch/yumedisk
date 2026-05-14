@@ -12,7 +12,6 @@ use crate::appkernel;
 use crate::config;
 use crate::error::BackendError;
 use crate::media::Media;
-use crate::scan;
 use crate::staging::StagingStore;
 use crate::types;
 use crate::win32;
@@ -122,7 +121,6 @@ impl DiskRuntime {
                 sector_size: disk_config.sector_size,
                 disk_size_bytes: disk_config.disk_size_bytes,
                 read_only: disk_config.read_only,
-                identity: scan::DiskIdentity::default(),
             },
             queue_config: types::DiskQueueConfig {
                 queue_depth: disk_config.queue_depth,
@@ -233,107 +231,16 @@ impl BackendContext {
             .contains_key(&target_id)
     }
 
-    fn snapshot_claimed_disk_paths(&self, excluded_target_id: u32) -> Vec<String> {
-        self.inner
-            .disk_runtimes
-            .lock()
-            .expect("disk map poisoned")
-            .iter()
-            .filter_map(|(target_id, runtime)| {
-                if *target_id == excluded_target_id {
-                    return None;
-                }
-                let runtime = runtime.read().expect("disk runtime poisoned");
-                if runtime.metadata.identity.path.is_empty() {
-                    None
-                } else {
-                    Some(runtime.metadata.identity.path.clone())
-                }
-            })
-            .collect()
-    }
-
-    fn try_refresh_disk_runtime_identity(
-        &self,
-        disk_runtime: &Arc<RwLock<DiskRuntime>>,
-        baseline_visible_disks: Option<&[scan::DiskIdentity]>,
-        timeout_ms: u32,
-    ) -> bool {
-        let excluded_target_id = disk_runtime
-            .read()
-            .expect("disk runtime poisoned")
-            .metadata
-            .target_id;
-        let claimed_paths = self.snapshot_claimed_disk_paths(excluded_target_id);
-        // SAFETY: Win32 tick count.
-        let start_tick = unsafe { win32::GetTickCount64() };
-
-        loop {
-            let visible_disks = scan::enumerate_visible_yumedisks();
-            let mut selected = None;
-
-            for identity in &visible_disks {
-                if claimed_paths.iter().any(|path| path == &identity.path) {
-                    continue;
-                }
-                if baseline_visible_disks
-                    .map(|baseline| baseline.iter().any(|item| item.path == identity.path))
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-
-                selected = Some(identity.clone());
-                break;
-            }
-
-            if selected.is_none() && !visible_disks.is_empty() {
-                for identity in &visible_disks {
-                    if !claimed_paths.iter().any(|path| path == &identity.path) {
-                        selected = Some(identity.clone());
-                        break;
-                    }
-                }
-            }
-
-            if let Some(identity) = selected {
-                disk_runtime
-                    .write()
-                    .expect("disk runtime poisoned")
-                    .metadata
-                    .identity = identity;
-                return true;
-            }
-
-            // SAFETY: Win32 tick count.
-            let elapsed = unsafe { win32::GetTickCount64() - start_tick };
-            if timeout_ms == 0
-                || self.inner.stop.load(Ordering::Relaxed)
-                || elapsed >= u64::from(timeout_ms)
-            {
-                return false;
-            }
-
-            // SAFETY: sleep.
-            unsafe { win32::Sleep(types::DISK_ARRIVAL_POLL_MS) };
-        }
-    }
-
     fn make_managed_disk_snapshot(
         &self,
         disk_runtime: &Arc<RwLock<DiskRuntime>>,
     ) -> types::ManagedDiskSnapshot {
-        let _ = self.try_refresh_disk_runtime_identity(disk_runtime, None, 0);
         let runtime = disk_runtime.read().expect("disk runtime poisoned");
         let mut snapshot = types::ManagedDiskSnapshot {
             target_id: runtime.metadata.target_id,
             disk_size_bytes: runtime.metadata.disk_size_bytes,
             sector_size: runtime.metadata.sector_size,
             read_only: runtime.metadata.read_only,
-            visible_path: runtime.metadata.identity.path.clone(),
-            physical_drive_path: scan::make_physical_drive_path(
-                runtime.metadata.identity.device_number,
-            ),
             lifecycle_text: String::from("unknown"),
             online: false,
         };
@@ -388,9 +295,7 @@ impl BackendContext {
         };
 
         match event_record.event_type {
-            appkernel::AkEventType::DiskOnline => {
-                let _ = self.try_refresh_disk_runtime_identity(&disk_runtime, None, 0);
-            }
+            appkernel::AkEventType::DiskOnline => {}
             appkernel::AkEventType::WriteFinalCommitted => {
                 if !commit_disk_runtime_staging(&disk_runtime, event_record.event_id) {
                     self.append_log(format!(
@@ -868,7 +773,6 @@ impl BackendContext {
             return Err(media);
         }
 
-        let visible_disks_before_create = scan::enumerate_visible_yumedisks();
         let runtime = Arc::new(RwLock::new(DiskRuntime::new(&disk_config)));
         {
             let mut runtime_guard = runtime.write().expect("disk runtime poisoned");
@@ -929,24 +833,6 @@ impl BackendContext {
             runtime_guard.queue_config.ack_batch_max_ranges
         ));
         drop(runtime_guard);
-
-        if self.try_refresh_disk_runtime_identity(
-            &runtime,
-            Some(&visible_disks_before_create),
-            types::DISK_ARRIVAL_TIMEOUT_MS,
-        ) {
-            let runtime_guard = runtime.read().expect("disk runtime poisoned");
-            self.append_log(format!(
-                "[backend] visiblePath={}, physicalDrive={}",
-                runtime_guard.metadata.identity.path,
-                scan::make_physical_drive_path(runtime_guard.metadata.identity.device_number)
-            ));
-        } else {
-            self.append_log(format!(
-                "[backend] visiblePath=<pending-enumeration>, target={}",
-                disk_config.target_id
-            ));
-        }
 
         Ok(disk_config.target_id)
     }

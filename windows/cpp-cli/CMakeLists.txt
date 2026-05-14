@@ -42,7 +42,6 @@ target_link_libraries(
     cpp_cli
     PRIVATE
     BackendCore
-    scan
 )
 
 add_custom_command(

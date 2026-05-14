@@ -106,11 +106,6 @@
           <string>Media</string>
          </property>
         </column>
-        <column>
-         <property name="text">
-          <string>Visible Path</string>
-         </property>
-        </column>
        </widget>
       </item>
       <item>

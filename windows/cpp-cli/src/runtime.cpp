@@ -9,9 +9,6 @@
 
 namespace testapp {
 
-using YumeDisk::Scan::EnumerateVisibleYumeDisks;
-using YumeDisk::Scan::MakePhysicalDrivePath;
-
 namespace {
 
 const wchar_t* ReadOnlyToText(
@@ -88,31 +85,6 @@ ManagedDiskLocalState FindLocalDiskState(
     return it->second;
 }
 
-bool WaitForDiskReady(
-    CliContext* context,
-    ULONG targetId,
-    BackendCore::ManagedDiskSnapshot* outSnapshot)
-{
-    const ULONGLONG startTick = GetTickCount64();
-
-    for (;;) {
-        for (const auto& disk : context->Backend.snapshotManagedDisks()) {
-            if ((disk.targetId == targetId) && !disk.physicalDrivePath.empty()) {
-                if (outSnapshot != nullptr) {
-                    *outSnapshot = disk;
-                }
-                return true;
-            }
-        }
-
-        if ((GetTickCount64() - startTick) >= kDiskArrivalTimeoutMs) {
-            return false;
-        }
-
-        Sleep(kDiskArrivalPollMs);
-    }
-}
-
 bool CreateManagedDisk(
     CliContext* context,
     const CreateDiskRequest& request)
@@ -120,7 +92,6 @@ bool CreateManagedDisk(
     CreateDiskRequest resolvedRequest = request;
     CreatedMedia createdMedia;
     BackendCore::DiskConfig diskConfig{};
-    BackendCore::ManagedDiskSnapshot snapshot{};
     std::wstring errorText;
     ManagedDiskLocalState localState;
 
@@ -191,14 +162,6 @@ bool CreateManagedDisk(
                << L", slot_bytes=" << context->Config.WriteSlotBytes
                << std::endl;
 
-    if (WaitForDiskReady(context, resolvedRequest.TargetId, &snapshot)) {
-        std::wcout << L"visible_path=" << snapshot.visiblePath
-                   << L", physical_drive=" << snapshot.physicalDrivePath
-                   << std::endl;
-    } else {
-        std::wcout << L"visible_path=<pending-enumeration>, target=" << resolvedRequest.TargetId << std::endl;
-    }
-
     return true;
 }
 
@@ -244,7 +207,6 @@ void ListManagedDisks(
     CliContext* context)
 {
     const auto managedDisks = context->Backend.snapshotManagedDisks();
-    const auto visibleDisks = EnumerateVisibleYumeDisks();
 
     std::wcout << L"managed_target_count=" << managedDisks.size() << std::endl;
     for (const auto& disk : managedDisks) {
@@ -260,18 +222,6 @@ void ListManagedDisks(
                    << L", write_workers=" << localState.WriteWorkerCount
                    << L", read_slot_depth=" << localState.QueueDepth
                    << L", write_slot_depth=" << localState.QueueDepth
-                   << L", visible_path=" << (disk.visiblePath.empty() ? L"<pending-enumeration>" : disk.visiblePath)
-                   << L", physical_drive=" << (disk.physicalDrivePath.empty() ? L"<pending-enumeration>" : disk.physicalDrivePath)
-                   << std::endl;
-    }
-
-    std::wcout << L"visible_disk_count=" << visibleDisks.size() << std::endl;
-    for (size_t index = 0; index < visibleDisks.size(); ++index) {
-        const auto& disk = visibleDisks[index];
-        std::wcout << L"visible_disk[" << index << L"]"
-                   << L", path=" << disk.Path
-                   << L", device_number=" << disk.DeviceNumber
-                   << L", disk_bytes=" << disk.LengthBytes
                    << std::endl;
     }
 }
@@ -342,7 +292,6 @@ void PrintDebugSnapshot(
                    << L", online=" << OnlineToText(disk.online)
                    << L", read_workers=" << localState.ReadWorkerCount
                    << L", write_workers=" << localState.WriteWorkerCount
-                   << L", visible_path=" << (disk.visiblePath.empty() ? L"<pending-enumeration>" : disk.visiblePath)
                    << std::endl;
     }
 }

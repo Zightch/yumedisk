@@ -130,7 +130,6 @@
 - `StagingStore/*`
 - `types/*`
 - `media/Media/*`
-- `scan`
 - `AppKernel` 内部头
 
 固定规则：
@@ -149,7 +148,7 @@
 | disk 配置决定 | 宿主 | `DiskConfig` 必须由宿主显式提供 |
 | staged write / commit / reject | `BackendCore` | 不让 `Media` 再自带一套暂存状态机 |
 | session / disk runtime 真状态 | `BackendCore` | 上层只读快照，不持有第二份真状态 |
-| 可见盘枚举 | 宿主共享模块 | 不下沉到 `AppKernel`，也不作为 `BackendCore` SDK 主接口 |
+| 系统设备路径枚举 | 不属于当前 SDK | `BackendCore` 不输出系统盘可见路径文本 |
 
 ## 5. 核心对象模型
 
@@ -245,15 +244,13 @@ BackendContext ctor
 
 | 常量 | 当前值 | 用途 | 备注 |
 | --- | --- | --- | --- |
-| `diskArrivalPollMs` | `100` | 建盘后可见盘轮询间隔 | 仅表示当前实现行为，不是对外配置面 |
-| `diskArrivalTimeoutMs` | `2000` | 建盘后可见盘轮询超时 | 超时后路径可能仍为 pending |
 | `eventWaitPollMs` | `100` | event thread wait 周期 | 仅表示当前实现行为 |
 | `maxBufferedLogLines` | `256` | 内部日志缓冲上限 | 超过后最旧日志被丢弃 |
 
 坑点：
 
 - `defaultSectorSize` 当前是 `4096`，不要把它和 `windows/shared/yumedisk_proto.h` 里的 `YUMEDISK_DEFAULT_SECTOR_SIZE == 512` 混为一谈。
-- `diskArrivalPollMs / diskArrivalTimeoutMs / eventWaitPollMs` 是当前实现常量，不是宿主可控配置。
+- `eventWaitPollMs` 是当前实现常量，不是宿主可控配置。
 
 ### 7.2 宿主侧盘类型标签
 
@@ -373,8 +370,6 @@ struct ManagedDiskSnapshot {
     uint64_t diskSizeBytes = 0;
     ULONG sectorSize = 0;
     bool readOnly = false;
-    std::wstring visiblePath;
-    std::wstring physicalDrivePath;
     std::wstring lifecycleText;
     bool online = false;
 };
@@ -388,8 +383,6 @@ struct ManagedDiskSnapshot {
 | `diskSizeBytes` | 当前盘容量 | 与建盘时配置一致 |
 | `sectorSize` | 当前盘扇区大小 | 与建盘时配置一致 |
 | `readOnly` | 当前盘是否只读 | 与建盘时配置一致 |
-| `visiblePath` | 系统可见路径 | 可能为空或 pending |
-| `physicalDrivePath` | 物理盘路径文本 | 仅作展示和辅助定位，不建议当主键 |
 | `lifecycleText` | 生命周期文本 | 见下表 |
 | `online` | 当前是否在线 | 当前实现等于 `lifecycle == running` |
 
@@ -406,10 +399,7 @@ struct ManagedDiskSnapshot {
 | `broken` | 异常态 |
 | `unknown` | 查询失败或暂不可知 |
 
-坑点：
-
-- 建盘刚成功时，`visiblePath` 和 `physicalDrivePath` 可能还没稳定刷新出来。
-- 不要把 `visiblePath` 为空理解成建盘失败；先看 `targetId / lifecycleText / online`。
+当前快照不包含系统设备路径。宿主应通过 `targetId / lifecycleText / online` 判断 runtime 状态。
 
 ### 7.6 `BackendStatsSnapshot`
 
@@ -721,12 +711,10 @@ public:
 行为：
 
 - 基于 runtime map 生成快照
-- 会尝试即时刷新一次可见盘 identity
-- 即时刷新不会阻塞等待新设备长期出现，当前使用的是零超时快速刷新
+- 不触发系统设备路径枚举
 
 坑点：
 
-- `visiblePath / physicalDrivePath` 可能短时间内仍未稳定
 - 不要把快照对象当作实时句柄
 
 ### 9.9 `bool queryBackendStats(BackendStatsSnapshot* outStats, std::wstring* outErrorText = nullptr) const`
@@ -856,7 +844,7 @@ public:
 坑点：
 
 - `media` 成功移交后，宿主不能再继续访问原实例。
-- 建盘成功不等于 `visiblePath` 立刻可见；系统路径刷新有窗口期。
+- 建盘成功后以 `targetId / lifecycleText / online` 作为 runtime 状态观察口。
 - `diskConfig.diskSizeBytes` 与 `media->sizeBytes()` 任何不一致都会被拒绝。
 
 ### 9.13 `bool removeManagedDisk(ULONG targetId, std::wstring* outErrorText = nullptr)`
@@ -974,9 +962,9 @@ public:
 
 不是。`BackendCore` 只记录类型标签，真正如何分配由宿主的 `Media` 实现决定。
 
-### 11.3 误以为建盘成功后系统路径立刻稳定
+### 11.3 误以为 SDK 会返回系统设备路径
 
-不保证。`visiblePath` 和 `physicalDrivePath` 有刷新窗口，短时间 pending 是正常现象。
+不会。当前 `BackendCore` SDK 不枚举系统设备路径，也不返回系统盘路径文本。
 
 ### 11.4 误以为 `findFirstFreeTarget()` 扫系统全局
 

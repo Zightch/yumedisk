@@ -37,7 +37,6 @@
 - 写暂存提交与丢弃。
 - LBA overlap 一致性策略。
 - CLI、服务控制、压测辅助。
-- 可见盘路径枚举和 `PhysicalDrive` 发现。
 
 业务宿主层不负责：
 
@@ -67,7 +66,7 @@
 - 持有介质字节。
 - 持有介质锁。
 - 解释系统取消语义给业务层。
-- 枚举 `visible_path` / `PhysicalDriveX`。
+- 枚举系统设备路径。
 - 驱动安装与设备实例修复。
 - CLI 与 benchmark 控制。
 
@@ -96,7 +95,7 @@
 - `KMDF session` 生命周期：只在 `AppKernel session` 内。
 - per-disk worker、slot、ACK flush 运行态：只在 `AppKernel disk runtime` 内。
 - 正式介质、暂存层、叠加读视图和介质锁：只在业务宿主 disk object 内。
-- 设备收敛和可见盘枚举：只在业务宿主控制层内。
+- 设备实例收敛：只在业务宿主控制层内。
 - 系统请求取消最终判定：只在 `YumeDiskSCSI` 内。
 
 禁止出现：
@@ -224,7 +223,7 @@ typedef struct AK_EVENT {
 
 语义：
 
-- `AkEventDiskOnline` 表示该盘 runtime 已经启动，read slot 已经进入可用状态，且 `CREATE_DISK` 已完成；它不等同于业务宿主已经拿到了 `visible_path` 或 `PhysicalDriveX`。
+- `AkEventDiskOnline` 表示该盘 runtime 已经启动，read slot 已经进入可用状态，且 `CREATE_DISK` 已完成；它不等同于系统盘符或磁盘管理器可见性已经刷新完成。
 - `AkEventDiskRemoved` 表示该盘的 `AppKernel` 运行态已经完成删除收口。
 - `AkEventWriteFinalCommitted` 表示该 `EventId` 的全部 `seq` 都已被 `SCSI` 接受，业务宿主应把该笔 staged write 合并到正式介质。
 - `AkEventWriteFinalRejected` 表示该 `EventId` 已被最终判定失败、取消、stale 或 not found，业务宿主应丢弃该笔 staged write。

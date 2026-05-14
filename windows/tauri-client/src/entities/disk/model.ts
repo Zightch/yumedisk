@@ -27,8 +27,6 @@ export interface HomeDiskListItem {
   online: boolean;
   targetId: number | null;
   lifecycleText: string;
-  visiblePath: string;
-  physicalDrivePath: string;
   media: HomeDiskMedia;
 }
 

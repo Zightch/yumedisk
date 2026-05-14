@@ -160,18 +160,15 @@ void Widget::applySnapshot(const BackendHostSnapshot& snapshot) {
         auto* targetIdItem = new QTableWidgetItem(QString::number(disk.targetId));
         auto* lifecycleItem = new QTableWidgetItem(disk.lifecycleText);
         auto* mediaItem = new QTableWidgetItem(disk.mediaText);
-        auto* visiblePathItem = new QTableWidgetItem(disk.visiblePathText);
 
         targetIdItem->setData(Qt::UserRole, QVariant::fromValue(disk.targetId));
         lifecycleItem->setData(Qt::UserRole, QVariant::fromValue(disk.targetId));
         mediaItem->setData(Qt::UserRole, QVariant::fromValue(disk.targetId));
-        visiblePathItem->setData(Qt::UserRole, QVariant::fromValue(disk.targetId));
 
         ui->diskTableWidget->insertRow(rowIndex);
         ui->diskTableWidget->setItem(rowIndex, 0, targetIdItem);
         ui->diskTableWidget->setItem(rowIndex, 1, lifecycleItem);
         ui->diskTableWidget->setItem(rowIndex, 2, mediaItem);
-        ui->diskTableWidget->setItem(rowIndex, 3, visiblePathItem);
     }
 
     if (hadCurrentTarget) {

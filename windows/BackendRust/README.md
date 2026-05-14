@@ -6,7 +6,8 @@
 
 - 只做块设备编排核心
 - 不做 UI、表单、路径选择、具体介质实现
-- 宿主创建 `Media`，`BackendRust` 只负责 session / runtime / staging / scan
+- 宿主创建 `Media`，`BackendRust` 只负责 session / runtime / staging
+- 不枚举系统设备路径，不输出系统盘路径文本
 
 ## 稳定公开面
 
@@ -20,9 +21,6 @@
 - `ManagedDiskSnapshot`
 - `BackendStatsSnapshot`
 - `DebugSnapshot`
-- `DiskIdentity`
-- `enumerate_visible_yumedisks()`
-- `make_physical_drive_path()`
 - `validate_session_config()`
 - `validate_disk_config()`
 - `validate_create_disk_inputs()`

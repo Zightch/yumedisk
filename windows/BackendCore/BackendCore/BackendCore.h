@@ -28,8 +28,6 @@ inline constexpr UINT32 defaultWriteSlotBytes = 1024 * 1024;
 inline constexpr UINT16 defaultReadWorkerCount = 4;
 inline constexpr UINT16 defaultWriteWorkerCount = 2;
 inline constexpr UINT32 defaultAckBatchMaxRanges = defaultQueueDepth;
-inline constexpr DWORD diskArrivalPollMs = 100;
-inline constexpr DWORD diskArrivalTimeoutMs = 2000;
 inline constexpr DWORD eventWaitPollMs = 100;
 inline constexpr UINT32 defaultHeartbeatIntervalMs = 1000;
 inline constexpr UINT32 defaultInitialEventQueueCapacity = 1024;
@@ -57,8 +55,6 @@ struct ManagedDiskSnapshot {
     uint64_t diskSizeBytes = 0;
     ULONG sectorSize = 0;
     bool readOnly = false;
-    std::wstring visiblePath;
-    std::wstring physicalDrivePath;
     std::wstring lifecycleText;
     bool online = false;
 };

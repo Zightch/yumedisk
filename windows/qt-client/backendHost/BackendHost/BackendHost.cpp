@@ -65,20 +65,6 @@ QString mediaText(
     }
 }
 
-QString visiblePathText(
-    const BackendCore::ManagedDiskSnapshot& snapshot)
-{
-    if (!snapshot.visiblePath.empty()) {
-        return fromWide(snapshot.visiblePath);
-    }
-
-    if (!snapshot.physicalDrivePath.empty()) {
-        return fromWide(snapshot.physicalDrivePath);
-    }
-
-    return QStringLiteral("<pending-enumeration>");
-}
-
 BackendHostManagedDiskSnapshot toBackendHostManagedDiskSnapshot(
     const BackendCore::ManagedDiskSnapshot& snapshot,
     const QString& mediaTextValue)
@@ -88,7 +74,6 @@ BackendHostManagedDiskSnapshot toBackendHostManagedDiskSnapshot(
     result.targetId = snapshot.targetId;
     result.lifecycleText = fromWide(snapshot.lifecycleText);
     result.mediaText = mediaTextValue;
-    result.visiblePathText = visiblePathText(snapshot);
     return result;
 }
 

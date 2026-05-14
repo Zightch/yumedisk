@@ -9,18 +9,14 @@
 #include "BackendCore.h"
 #include "StagingStore/StagingStore.h"
 #include "appkernel.h"
-#include "scan.h"
 
 namespace BackendCore {
-
-using YumeDisk::Scan::DiskIdentity;
 
 struct DiskMetadata {
     ULONG targetId = 0;
     ULONG sectorSize = 0;
     uint64_t diskSizeBytes = 0;
     bool readOnly = false;
-    DiskIdentity identity{};
 };
 
 struct DiskQueueConfig {

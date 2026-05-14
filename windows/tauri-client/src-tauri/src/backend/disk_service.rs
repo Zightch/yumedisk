@@ -33,8 +33,6 @@ pub struct HomeDiskListItemSnapshot {
     pub online: bool,
     pub target_id: Option<u32>,
     pub lifecycle_text: String,
-    pub visible_path: String,
-    pub physical_drive_path: String,
     pub media: DiskMediaConfig,
 }
 
@@ -314,9 +312,9 @@ pub fn connect_disk(
     runtime_store: &mut DiskRuntimeStore,
     disk_id: &str,
 ) -> Result<u32, ApiError> {
-    let runtime = runtime_store.find_runtime_mut(disk_id).ok_or_else(|| {
-        ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string()))
-    })?;
+    let runtime = runtime_store
+        .find_runtime_mut(disk_id)
+        .ok_or_else(|| ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string())))?;
 
     if let Some(target_id) = runtime.connected_target_id() {
         return Err(ApiError::new(
@@ -378,9 +376,9 @@ pub fn disconnect_disk(
     runtime_store: &mut DiskRuntimeStore,
     disk_id: &str,
 ) -> Result<(), ApiError> {
-    let runtime = runtime_store.find_runtime_mut(disk_id).ok_or_else(|| {
-        ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string()))
-    })?;
+    let runtime = runtime_store
+        .find_runtime_mut(disk_id)
+        .ok_or_else(|| ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string())))?;
 
     let Some(target_id) = runtime.connected_target_id() else {
         return Err(ApiError::new(
@@ -404,9 +402,9 @@ pub fn disconnect_disk(
     drop(media);
     runtime.media = None;
 
-    let file_path = runtime.file_path().ok_or_else(|| {
-        ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string()))
-    })?;
+    let file_path = runtime
+        .file_path()
+        .ok_or_else(|| ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string())))?;
     match persistence_service::probe_raw_file_media(file_path) {
         Ok(probe) => {
             runtime.set_file_disconnected(probe.capacity_bytes, probe.read_only);
@@ -456,13 +454,15 @@ pub fn update_disk(
         return Err(ApiError::new("invalid-disk-name", "磁盘名称不能为空", None));
     }
 
-    let runtime = runtime_store.find_runtime_mut(&request.disk_id).ok_or_else(|| {
-        ApiError::new(
-            "disk-not-found",
-            "磁盘不存在",
-            Some(request.disk_id.to_string()),
-        )
-    })?;
+    let runtime = runtime_store
+        .find_runtime_mut(&request.disk_id)
+        .ok_or_else(|| {
+            ApiError::new(
+                "disk-not-found",
+                "磁盘不存在",
+                Some(request.disk_id.to_string()),
+            )
+        })?;
 
     let previous_snapshot = runtime.snapshot();
     runtime.set_identity(disk_name.to_string(), request.auto_connect);
@@ -599,12 +599,6 @@ fn map_home_disk_list_item_snapshot(
         target_id,
         lifecycle_text: runtime_snapshot
             .map(|snapshot| snapshot.lifecycle_text.clone())
-            .unwrap_or_default(),
-        visible_path: runtime_snapshot
-            .map(|snapshot| snapshot.visible_path.clone())
-            .unwrap_or_default(),
-        physical_drive_path: runtime_snapshot
-            .map(|snapshot| snapshot.physical_drive_path.clone())
             .unwrap_or_default(),
         media: runtime.media,
     }

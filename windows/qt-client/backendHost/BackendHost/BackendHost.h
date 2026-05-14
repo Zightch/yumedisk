@@ -36,7 +36,6 @@ struct BackendHostManagedDiskSnapshot {
     unsigned long targetId = 0;
     QString lifecycleText;
     QString mediaText;
-    QString visiblePathText;
 };
 
 struct BackendHostStatsSnapshot {

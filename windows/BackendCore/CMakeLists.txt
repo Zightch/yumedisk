@@ -8,11 +8,6 @@ add_subdirectory(
         ${CMAKE_CURRENT_BINARY_DIR}/AppKernel
 )
 
-add_subdirectory(
-        ../scan
-        ${CMAKE_CURRENT_BINARY_DIR}/scan
-)
-
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -55,7 +50,6 @@ target_link_libraries(
         BackendCore
         PRIVATE
         AppKernel
-        scan
 )
 
 add_custom_command(

@@ -13,12 +13,8 @@
 #include "config/config.h"
 #include "media/media.h"
 #include "runtime/runtimeDisk.h"
-#include "scan.h"
 
 namespace BackendCore {
-
-using YumeDisk::Scan::EnumerateVisibleYumeDisks;
-using YumeDisk::Scan::MakePhysicalDrivePath;
 
 std::wstring formatStatusHex(AK_STATUS status);
 std::wstring formatVersionBe(UINT32 versionBe);
@@ -172,95 +168,6 @@ bool diskRuntimeExists(
     return state.diskRuntimes.find(targetId) != state.diskRuntimes.end();
 }
 
-std::vector<std::wstring> snapshotClaimedDiskPaths(
-    BackendContext* context,
-    ULONG excludedTargetId)
-{
-    std::vector<std::wstring> paths;
-    auto& state = RuntimeAccess::state(context);
-
-    std::lock_guard<std::mutex> guard(state.diskRuntimesLock);
-    for (const auto& entry : state.diskRuntimes) {
-        if (entry.first == excludedTargetId) {
-            continue;
-        }
-        if (!entry.second->metadata.identity.Path.empty()) {
-            paths.push_back(entry.second->metadata.identity.Path);
-        }
-    }
-
-    return paths;
-}
-
-bool containsPath(
-    const std::vector<std::wstring>& paths,
-    const std::wstring& path)
-{
-    return std::find(paths.begin(), paths.end(), path) != paths.end();
-}
-
-bool containsVisibleDiskPath(
-    const std::vector<DiskIdentity>& identities,
-    const std::wstring& path)
-{
-    return std::any_of(
-        identities.begin(),
-        identities.end(),
-        [&](const DiskIdentity& identity) {
-            return identity.Path == path;
-        });
-}
-
-bool tryRefreshDiskRuntimeIdentity(
-    BackendContext* context,
-    const std::shared_ptr<DiskRuntime>& diskRuntime,
-    const std::vector<DiskIdentity>* baselineVisibleDisks,
-    DWORD timeoutMs)
-{
-    const auto claimedPaths = snapshotClaimedDiskPaths(context, diskRuntime->metadata.targetId);
-    const ULONGLONG startTick = GetTickCount64();
-
-    for (;;) {
-        const auto visibleDisks = EnumerateVisibleYumeDisks();
-        const DiskIdentity* selected = nullptr;
-
-        for (const auto& identity : visibleDisks) {
-            if (containsPath(claimedPaths, identity.Path)) {
-                continue;
-            }
-            if ((baselineVisibleDisks != nullptr) &&
-                containsVisibleDiskPath(*baselineVisibleDisks, identity.Path)) {
-                continue;
-            }
-
-            selected = &identity;
-            break;
-        }
-
-        if ((selected == nullptr) && !visibleDisks.empty()) {
-            for (const auto& identity : visibleDisks) {
-                if (!containsPath(claimedPaths, identity.Path)) {
-                    selected = &identity;
-                    break;
-                }
-            }
-        }
-
-        if (selected != nullptr) {
-            diskRuntime->metadata.identity = *selected;
-            return true;
-        }
-
-        if ((timeoutMs == 0) ||
-            RuntimeAccess::state(context).stop.load(std::memory_order_relaxed) ||
-            ((GetTickCount64() - startTick) >= timeoutMs)) {
-            return false;
-        }
-
-        Sleep(diskArrivalPollMs);
-    }
-}
-
 std::wstring lifecycleToText(
     AK_LIFECYCLE_STATE lifecycle)
 {
@@ -285,7 +192,6 @@ std::wstring lifecycleToText(
 }
 
 ManagedDiskSnapshot makeManagedDiskSnapshot(
-    BackendContext* context,
     const std::shared_ptr<DiskRuntime>& diskRuntime)
 {
     ManagedDiskSnapshot snapshot;
@@ -296,9 +202,6 @@ ManagedDiskSnapshot makeManagedDiskSnapshot(
     snapshot.diskSizeBytes = diskRuntime->metadata.diskSizeBytes;
     snapshot.sectorSize = diskRuntime->metadata.sectorSize;
     snapshot.readOnly = diskRuntime->metadata.readOnly;
-    (void)tryRefreshDiskRuntimeIdentity(context, diskRuntime, nullptr, 0);
-    snapshot.visiblePath = diskRuntime->metadata.identity.Path;
-    snapshot.physicalDrivePath = MakePhysicalDrivePath(diskRuntime->metadata.identity.DeviceNumber);
 
     haveState = (diskRuntime->lifecycle.handle != nullptr) &&
         (AkQueryDiskState(diskRuntime->lifecycle.handle, &diskState) == AK_STATUS_SUCCESS);
@@ -339,7 +242,6 @@ void handleAppKernelEvent(
 
     switch (eventRecord->Type) {
     case AkEventDiskOnline:
-        (void)tryRefreshDiskRuntimeIdentity(context, diskRuntime, nullptr, 0);
         break;
 
     case AkEventWriteFinalCommitted:
@@ -673,7 +575,7 @@ std::vector<ManagedDiskSnapshot> BackendContext::snapshotManagedDisks() const
         if (diskRuntime == nullptr) {
             continue;
         }
-        snapshots.push_back(makeManagedDiskSnapshot(mutableContext, diskRuntime));
+        snapshots.push_back(makeManagedDiskSnapshot(diskRuntime));
     }
 
     return snapshots;
@@ -766,7 +668,6 @@ bool BackendContext::createManagedDisk(
     AK_STATUS status;
     std::wstring configError;
     std::wstring mediaReason;
-    const auto visibleDisksBeforeCreate = EnumerateVisibleYumeDisks();
     auto& state = RuntimeAccess::state(this);
 
     if (state.session == nullptr) {
@@ -853,15 +754,6 @@ bool BackendContext::createManagedDisk(
         L", readWorkerCount=" + std::to_wstring(diskRuntime->queueConfig.readWorkerCount) +
         L", writeWorkerCount=" + std::to_wstring(diskRuntime->queueConfig.writeWorkerCount) +
         L", ackBatchMaxRanges=" + std::to_wstring(diskRuntime->queueConfig.ackBatchMaxRanges));
-
-    if (tryRefreshDiskRuntimeIdentity(this, diskRuntime, &visibleDisksBeforeCreate, diskArrivalTimeoutMs)) {
-        appendLog(
-            L"[backend] visiblePath=" + diskRuntime->metadata.identity.Path +
-            L", physicalDrive=" + MakePhysicalDrivePath(diskRuntime->metadata.identity.DeviceNumber));
-    } else {
-        appendLog(
-            L"[backend] visiblePath=<pending-enumeration>, target=" + std::to_wstring(diskConfig.targetId));
-    }
 
     return true;
 }
