@@ -11,7 +11,6 @@ import { DEFAULT_THEME, applyTheme, type AppTheme } from "../../shared/theme/the
 import {
   deleteDisk,
   disconnectDisk,
-  rescanRuntimeDisks,
 } from "../../shared/api/diskClient";
 import { getErrorMessage } from "../../shared/api/sessionClient";
 import AppHeader from "../../widgets/AppHeader/AppHeader.vue";
@@ -30,6 +29,7 @@ const {
   diskDisplayPhase,
   errorText,
   handleConnectDisk: runConnectDisk,
+  handleRescanRuntimeDisks: runRescanRuntimeDisks,
   loadHomeDiskList,
   loading,
   runtimeDisks,
@@ -124,19 +124,16 @@ async function handleDeleteDisk(diskId: string) {
 }
 
 async function handleRescanRuntimeDisks() {
-  loading.value = true;
-  errorText.value = null;
-
   try {
-    const snapshot = await rescanRuntimeDisks();
-    runtimeDisks.value = snapshot.disks;
-    autoConnectCount.value = snapshot.autoConnectCount;
+    const snapshot = await runRescanRuntimeDisks();
+    if (snapshot === null) {
+      return;
+    }
+
     ElMessage.success("已完成重扫");
   } catch (error) {
     errorText.value = getErrorMessage(error);
     ElMessage.error(errorText.value);
-  } finally {
-    loading.value = false;
   }
 }
 

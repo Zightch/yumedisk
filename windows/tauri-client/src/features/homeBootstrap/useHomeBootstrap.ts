@@ -4,6 +4,7 @@ import type { SessionPhase, SessionSnapshot } from "../../entities/session/model
 import {
   connectDisk,
   queryHomeDiskList,
+  rescanRuntimeDisks,
 } from "../../shared/api/diskClient";
 import {
   getErrorMessage,
@@ -33,8 +34,17 @@ export function useHomeBootstrap() {
   const initialAutoConnectCompleted = ref(false);
   const actionLoadingDiskId = ref<string | null>(null);
 
-  async function loadHomeDiskList(options: { showLoading?: boolean } = {}): Promise<HomeDiskListSnapshot | null> {
+  function applyHomeDiskListSnapshot(snapshot: HomeDiskListSnapshot): void {
+    runtimeDisks.value = snapshot.disks;
+    autoConnectCount.value = snapshot.autoConnectCount;
+  }
+
+  async function runHomeDiskListOperation(
+    operation: () => Promise<HomeDiskListSnapshot>,
+    options: { showLoading?: boolean; preserveSnapshotOnError?: boolean } = {},
+  ): Promise<HomeDiskListSnapshot | null> {
     const showLoading = options.showLoading ?? true;
+    const preserveSnapshotOnError = options.preserveSnapshotOnError ?? false;
     if (showLoading) {
       loading.value = true;
     }
@@ -42,13 +52,14 @@ export function useHomeBootstrap() {
     errorText.value = null;
 
     try {
-      const snapshot = await queryHomeDiskList();
-      runtimeDisks.value = snapshot.disks;
-      autoConnectCount.value = snapshot.autoConnectCount;
+      const snapshot = await operation();
+      applyHomeDiskListSnapshot(snapshot);
       return snapshot;
     } catch (error) {
-      runtimeDisks.value = [];
-      autoConnectCount.value = 0;
+      if (!preserveSnapshotOnError) {
+        runtimeDisks.value = [];
+        autoConnectCount.value = 0;
+      }
       errorText.value = getErrorMessage(error);
       return null;
     } finally {
@@ -56,6 +67,19 @@ export function useHomeBootstrap() {
         loading.value = false;
       }
     }
+  }
+
+  async function loadHomeDiskList(options: { showLoading?: boolean } = {}): Promise<HomeDiskListSnapshot | null> {
+    return runHomeDiskListOperation(queryHomeDiskList, options);
+  }
+
+  async function handleRescanRuntimeDisks(
+    options: { showLoading?: boolean } = {},
+  ): Promise<HomeDiskListSnapshot | null> {
+    return runHomeDiskListOperation(rescanRuntimeDisks, {
+      ...options,
+      preserveSnapshotOnError: true,
+    });
   }
 
   async function handleConnectDisk(
@@ -99,6 +123,7 @@ export function useHomeBootstrap() {
   async function bootstrapHomePage() {
     loading.value = true;
     errorText.value = null;
+    actionLoadingDiskId.value = null;
     sessionSnapshot.value = null;
     sessionPhase.value = "initializing";
     diskDisplayPhase.value = "startup";
@@ -120,16 +145,21 @@ export function useHomeBootstrap() {
       sessionSnapshot.value = await openSession();
       sessionPhase.value = "ready";
 
+      const rescanSnapshot = await handleRescanRuntimeDisks({ showLoading: false });
+      if (rescanSnapshot === null) {
+        sessionPhase.value = "failed";
+        return;
+      }
+
+      diskDisplayPhase.value = "normal";
       await nextTick();
-      await runInitialAutoConnect(snapshot);
+
+      await runInitialAutoConnect(rescanSnapshot);
     } catch (error) {
       sessionSnapshot.value = null;
       sessionPhase.value = "failed";
       errorText.value = getErrorMessage(error);
     } finally {
-      if (sessionPhase.value === "ready") {
-        diskDisplayPhase.value = "normal";
-      }
       loading.value = false;
     }
   }
@@ -144,6 +174,7 @@ export function useHomeBootstrap() {
     diskDisplayPhase,
     errorText,
     handleConnectDisk,
+    handleRescanRuntimeDisks,
     loadHomeDiskList,
     loading,
     runtimeDisks,
