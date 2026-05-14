@@ -20,13 +20,22 @@ const isInitializing = computed(() => props.sessionPhase === "initializing");
 const isReady = computed(() => props.sessionPhase === "ready");
 const isFailed = computed(() => props.sessionPhase === "failed");
 const statusText = computed(() => formatSessionPhaseText(props.sessionPhase));
+const canCreateDisk = computed(() => props.sessionPhase === "ready");
 
 function handleOpenMemoryCreate() {
+  if (!canCreateDisk.value) {
+    return;
+  }
+
   addPopoverVisible.value = false;
   emit("openMemoryCreate");
 }
 
 function handleOpenFileCreate() {
+  if (!canCreateDisk.value) {
+    return;
+  }
+
   addPopoverVisible.value = false;
   emit("openFileCreate");
 }
@@ -88,14 +97,22 @@ function handleOpenFileCreate() {
         </template>
 
         <div class="app-header__add-options">
-          <el-button class="app-header__add-option" @click="handleOpenMemoryCreate">
+          <el-button
+            class="app-header__add-option"
+            :disabled="!canCreateDisk"
+            @click="handleOpenMemoryCreate"
+          >
             <span class="app-header__add-option-icon app-header__add-option-icon--memory">
               M
             </span>
             <span class="app-header__add-option-title">内存盘</span>
           </el-button>
 
-          <el-button class="app-header__add-option" @click="handleOpenFileCreate">
+          <el-button
+            class="app-header__add-option"
+            :disabled="!canCreateDisk"
+            @click="handleOpenFileCreate"
+          >
             <span class="app-header__add-option-icon app-header__add-option-icon--file">F</span>
             <span class="app-header__add-option-title">文件盘</span>
           </el-button>
