@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import type { HomeDiskListItem } from "../../entities/disk/model";
 import CreateFileDiskDialog from "../../features/createFileDisk/CreateFileDiskDialog.vue";
 import CreateMemoryDiskDialog from "../../features/createMemoryDisk/CreateMemoryDiskDialog.vue";
 import EditDiskDialog from "../../features/editDisk/EditDiskDialog.vue";
+import { mapHomeDiskDisplayItems } from "../../features/homeBootstrap/homeDisplayMapper";
 import { useHomeBootstrap } from "../../features/homeBootstrap/useHomeBootstrap";
 import { DEFAULT_THEME, applyTheme, type AppTheme } from "../../shared/theme/theme";
 import {
@@ -26,13 +27,19 @@ const currentTheme = ref<AppTheme>({ ...DEFAULT_THEME });
 const {
   actionLoadingDiskId,
   autoConnectCount,
-  disks,
+  diskDisplayPhase,
   errorText,
   handleConnectDisk: runConnectDisk,
   loadHomeDiskList,
   loading,
-  sessionSnapshot,
+  runtimeDisks,
+  sessionPhase,
 } = useHomeBootstrap();
+
+const displayDisks = computed(() => mapHomeDiskDisplayItems(runtimeDisks.value, {
+  sessionPhase: sessionPhase.value,
+  diskDisplayPhase: diskDisplayPhase.value,
+}));
 
 function handleOpenMemoryCreate() {
   memoryCreateVisible.value = true;
@@ -55,7 +62,7 @@ async function handleFileDiskCreated() {
 }
 
 function handleEditDisk(diskId: string) {
-  const disk = disks.value.find((item) => item.diskId === diskId) ?? null;
+  const disk = runtimeDisks.value.find((item) => item.diskId === diskId) ?? null;
   if (disk === null) {
     ElMessage.error("磁盘不存在");
     return;
@@ -122,7 +129,7 @@ async function handleRescanRuntimeDisks() {
 
   try {
     const snapshot = await rescanRuntimeDisks();
-    disks.value = snapshot.disks;
+    runtimeDisks.value = snapshot.disks;
     autoConnectCount.value = snapshot.autoConnectCount;
     ElMessage.success("已完成重扫");
   } catch (error) {
@@ -143,7 +150,7 @@ function handleThemeChanged(theme: AppTheme) {
   <el-container class="app-shell home-page" direction="vertical">
     <el-header class="home-page__header" height="auto">
       <AppHeader
-        :session-ready="sessionSnapshot?.ready ?? false"
+        :session-phase="sessionPhase"
         @open-settings="handleOpenSettings"
         @open-memory-create="handleOpenMemoryCreate"
         @open-file-create="handleOpenFileCreate"
@@ -152,7 +159,7 @@ function handleThemeChanged(theme: AppTheme) {
 
     <el-main class="home-page__main">
       <DiskListPanel
-        :disks="disks"
+        :disks="displayDisks"
         :auto-connect-count="autoConnectCount"
         :loading="loading"
         :error-text="errorText"

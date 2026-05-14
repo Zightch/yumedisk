@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import { Plus, Setting } from "@element-plus/icons-vue";
+import type { SessionPhase } from "../../entities/session/model";
 
 const props = defineProps<{
-  sessionReady: boolean;
+  sessionPhase: SessionPhase;
 }>();
 
 const emit = defineEmits<{
@@ -13,6 +14,19 @@ const emit = defineEmits<{
 }>();
 
 const addPopoverVisible = ref(false);
+const isReady = computed(() => props.sessionPhase === "ready");
+const isFailed = computed(() => props.sessionPhase === "failed");
+const statusText = computed(() => {
+  if (props.sessionPhase === "ready") {
+    return "会话正常";
+  }
+
+  if (props.sessionPhase === "failed") {
+    return "会话失败";
+  }
+
+  return "正在初始化";
+});
 
 function handleOpenMemoryCreate() {
   addPopoverVisible.value = false;
@@ -43,10 +57,16 @@ function handleOpenFileCreate() {
     </div>
 
     <div class="app-header__tools">
-      <div class="app-header__status" :class="{ 'is-ready': props.sessionReady }">
+      <div
+        class="app-header__status"
+        :class="{
+          'is-ready': isReady,
+          'is-failed': isFailed,
+        }"
+      >
         <span class="app-header__status-dot"></span>
         <span class="app-header__status-text">
-          {{ props.sessionReady ? "会话正常" : "会话未就绪" }}
+          {{ statusText }}
         </span>
       </div>
 

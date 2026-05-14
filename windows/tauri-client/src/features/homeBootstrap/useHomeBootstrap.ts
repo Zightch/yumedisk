@@ -1,6 +1,6 @@
 import { nextTick, onMounted, ref } from "vue";
 import type { HomeDiskListItem, HomeDiskListSnapshot } from "../../entities/disk/model";
-import type { SessionSnapshot } from "../../entities/session/model";
+import type { SessionPhase, SessionSnapshot } from "../../entities/session/model";
 import {
   connectDisk,
   queryHomeDiskList,
@@ -10,20 +10,25 @@ import {
   openSession,
   restoreClientState,
 } from "../../shared/api/sessionClient";
+import type { HomeDiskDisplayPhase } from "./homeDisplayMapper";
 
 export interface HomeBootstrapState {
-  disks: HomeDiskListItem[];
+  runtimeDisks: HomeDiskListItem[];
   autoConnectCount: number;
   loading: boolean;
   errorText: string | null;
+  sessionPhase: SessionPhase;
+  diskDisplayPhase: HomeDiskDisplayPhase;
   sessionSnapshot: SessionSnapshot | null;
 }
 
 export function useHomeBootstrap() {
-  const disks = ref<HomeDiskListItem[]>([]);
+  const runtimeDisks = ref<HomeDiskListItem[]>([]);
   const autoConnectCount = ref(0);
   const loading = ref(true);
   const errorText = ref<string | null>(null);
+  const sessionPhase = ref<SessionPhase>("initializing");
+  const diskDisplayPhase = ref<HomeDiskDisplayPhase>("startup");
   const sessionSnapshot = ref<SessionSnapshot | null>(null);
   const initialAutoConnectCompleted = ref(false);
   const actionLoadingDiskId = ref<string | null>(null);
@@ -38,11 +43,11 @@ export function useHomeBootstrap() {
 
     try {
       const snapshot = await queryHomeDiskList();
-      disks.value = snapshot.disks;
+      runtimeDisks.value = snapshot.disks;
       autoConnectCount.value = snapshot.autoConnectCount;
       return snapshot;
     } catch (error) {
-      disks.value = [];
+      runtimeDisks.value = [];
       autoConnectCount.value = 0;
       errorText.value = getErrorMessage(error);
       return null;
@@ -94,24 +99,37 @@ export function useHomeBootstrap() {
   async function bootstrapHomePage() {
     loading.value = true;
     errorText.value = null;
+    sessionSnapshot.value = null;
+    sessionPhase.value = "initializing";
+    diskDisplayPhase.value = "startup";
+    initialAutoConnectCompleted.value = false;
 
     try {
       await restoreClientState();
 
       const snapshot = await loadHomeDiskList({ showLoading: false });
       if (snapshot === null) {
-        sessionSnapshot.value = null;
+        sessionPhase.value = "failed";
+        loading.value = false;
         return;
       }
 
+      loading.value = false;
+      await nextTick();
+
       sessionSnapshot.value = await openSession();
+      sessionPhase.value = "ready";
 
       await nextTick();
       await runInitialAutoConnect(snapshot);
     } catch (error) {
       sessionSnapshot.value = null;
+      sessionPhase.value = "failed";
       errorText.value = getErrorMessage(error);
     } finally {
+      if (sessionPhase.value === "ready") {
+        diskDisplayPhase.value = "normal";
+      }
       loading.value = false;
     }
   }
@@ -123,11 +141,13 @@ export function useHomeBootstrap() {
   return {
     actionLoadingDiskId,
     autoConnectCount,
-    disks,
+    diskDisplayPhase,
     errorText,
     handleConnectDisk,
     loadHomeDiskList,
     loading,
+    runtimeDisks,
+    sessionPhase,
     sessionSnapshot,
   };
 }
