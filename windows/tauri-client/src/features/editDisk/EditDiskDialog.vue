@@ -94,6 +94,7 @@ async function handleSubmit() {
     v-model="dialogVisible"
     class="app-dialog app-dialog--edit"
     modal-class="app-dialog-overlay"
+    transition="app-dialog-slide-horizontal"
     width="392px"
     align-center
     :show-close="false"

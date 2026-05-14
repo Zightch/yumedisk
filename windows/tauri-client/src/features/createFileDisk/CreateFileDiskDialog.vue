@@ -226,6 +226,7 @@ async function handleCreateNewFileSubmit() {
     v-model="dialogVisible"
     class="app-dialog app-dialog--file"
     modal-class="app-dialog-overlay"
+    transition="app-dialog-slide-horizontal"
     width="456px"
     align-center
     :show-close="false"

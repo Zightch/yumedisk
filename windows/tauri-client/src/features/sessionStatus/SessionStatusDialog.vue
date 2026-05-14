@@ -47,6 +47,7 @@ function handleClose(): void {
     v-model="dialogVisible"
     class="app-dialog app-dialog--session"
     modal-class="app-dialog-overlay"
+    transition="app-dialog-slide-horizontal"
     align-center
     :show-close="false"
   >

@@ -2,6 +2,66 @@
   backdrop-filter: blur(8px);
 }
 
+.app-dialog-slide-horizontal-enter-active {
+  animation: app-dialog-overlay-fade-in var(--el-transition-duration);
+}
+
+.app-dialog-slide-horizontal-enter-active .el-overlay-dialog {
+  animation: app-dialog-slide-in var(--el-transition-duration);
+}
+
+.app-dialog-slide-horizontal-leave-active {
+  animation: app-dialog-overlay-fade-out var(--el-transition-duration);
+}
+
+.app-dialog-slide-horizontal-leave-active .el-overlay-dialog {
+  animation: app-dialog-slide-out var(--el-transition-duration);
+}
+
+@keyframes app-dialog-slide-in {
+  0% {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes app-dialog-slide-out {
+  0% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateX(-20px);
+  }
+}
+
+@keyframes app-dialog-overlay-fade-in {
+  0% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes app-dialog-overlay-fade-out {
+  0% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
 .app-dialog.el-dialog {
   width: min(calc(100vw - 24px), var(--app-dialog-width, 420px)) !important;
   margin: 0 !important;
