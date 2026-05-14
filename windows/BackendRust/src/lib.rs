@@ -18,6 +18,7 @@ pub use scan::DiskIdentity;
 pub use scan::enumerate_visible_yumedisks;
 pub use scan::make_physical_drive_path;
 pub use types::BackendStatsSnapshot;
+pub use types::ComponentVersionSnapshot;
 pub use types::DEFAULT_ACK_BATCH_MAX_RANGES;
 pub use types::DEFAULT_HEARTBEAT_INTERVAL_MS;
 pub use types::DEFAULT_INITIAL_EVENT_QUEUE_CAPACITY;

@@ -687,19 +687,10 @@ impl BackendContext {
         append_log_inner(&self.inner, text);
     }
 
-    pub fn query_session_state_text(&self) -> String {
+    fn query_open_session_state(&self) -> Result<appkernel::AkSessionState, String> {
         let session = *self.inner.session.lock().expect("session poisoned");
         if session == 0 {
-            if !*self
-                .inner
-                .open_succeeded
-                .lock()
-                .expect("open_succeeded poisoned")
-            {
-                let status = *self.inner.open_status.lock().expect("open_status poisoned");
-                return format!("open-failed({})", format_status_hex(status));
-            }
-            return String::from("closed");
+            return Err(String::from("closed"));
         }
 
         let mut session_state = appkernel::AkSessionState {
@@ -718,8 +709,31 @@ impl BackendContext {
             appkernel::AkQuerySessionState(session as *mut appkernel::AkSession, &mut session_state)
         };
         if status != appkernel::AK_STATUS_SUCCESS {
-            return format!("query-failed({})", format_status_hex(status));
+            return Err(format!("query-failed({})", format_status_hex(status)));
         }
+
+        Ok(session_state)
+    }
+
+    pub fn query_session_state_text(&self) -> String {
+        let session = *self.inner.session.lock().expect("session poisoned");
+        if session == 0 {
+            if !*self
+                .inner
+                .open_succeeded
+                .lock()
+                .expect("open_succeeded poisoned")
+            {
+                let status = *self.inner.open_status.lock().expect("open_status poisoned");
+                return format!("open-failed({})", format_status_hex(status));
+            }
+            return String::from("closed");
+        }
+
+        let session_state = match self.query_open_session_state() {
+            Ok(session_state) => session_state,
+            Err(error_text) => return error_text,
+        };
 
         format!(
             "session={}, lifecycle={}, transport={}, disks={}",
@@ -732,6 +746,18 @@ impl BackendContext {
             },
             session_state.disk_count
         )
+    }
+
+    pub fn query_component_version_snapshot(&self) -> types::ComponentVersionSnapshot {
+        let Ok(session_state) = self.query_open_session_state() else {
+            return types::ComponentVersionSnapshot::default();
+        };
+
+        types::ComponentVersionSnapshot {
+            appkernel_version_text: format_version_be(session_state.appkernel_version_be),
+            kmdf_version_text: format_version_be(session_state.kmdf_version_be),
+            scsi_version_text: format_version_be(session_state.scsi_version_be),
+        }
     }
 
     pub fn snapshot_log_lines(&self) -> Vec<String> {

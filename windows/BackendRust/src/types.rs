@@ -91,6 +91,13 @@ pub struct DebugSnapshot {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ComponentVersionSnapshot {
+    pub appkernel_version_text: String,
+    pub kmdf_version_text: String,
+    pub scsi_version_text: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DiskMetadata {
     pub target_id: u32,
     pub sector_size: u32,

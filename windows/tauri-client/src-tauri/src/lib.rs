@@ -99,6 +99,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::app_info::query_component_versions,
             commands::session::restore_client_state,
             commands::session::open_session,
             commands::config::query_backend_defaults,
