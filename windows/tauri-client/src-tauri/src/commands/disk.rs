@@ -18,8 +18,6 @@ pub struct ManagedDiskSnapshotDto {
     pub disk_size_bytes: u64,
     pub sector_size: u32,
     pub read_only: bool,
-    pub visible_path: String,
-    pub physical_drive_path: String,
     pub lifecycle_text: String,
     pub online: bool,
 }
@@ -180,8 +178,6 @@ pub struct HomeDiskListItemDto {
     pub online: bool,
     pub target_id: Option<u32>,
     pub lifecycle_text: String,
-    pub visible_path: String,
-    pub physical_drive_path: String,
     pub media: HomeDiskMediaDto,
 }
 
@@ -200,8 +196,6 @@ fn map_managed_disk_snapshot_dto(
         disk_size_bytes: snapshot.disk_size_bytes,
         sector_size: snapshot.sector_size,
         read_only: snapshot.read_only,
-        visible_path: snapshot.visible_path,
-        physical_drive_path: snapshot.physical_drive_path,
         lifecycle_text: snapshot.lifecycle_text,
         online: snapshot.online,
     }
@@ -250,8 +244,6 @@ fn map_home_disk_list_item_dto(
         online: snapshot.online,
         target_id: snapshot.target_id,
         lifecycle_text: snapshot.lifecycle_text,
-        visible_path: snapshot.visible_path,
-        physical_drive_path: snapshot.physical_drive_path,
         media: map_home_disk_media_dto(snapshot.media),
     }
 }
@@ -262,9 +254,7 @@ fn map_requested_memory_media_kind(
     match requested_kind {
         RequestedMemoryMediaKindDto::Auto => disk_service::RequestedMemoryMediaKind::Auto,
         RequestedMemoryMediaKindDto::DenseMem => disk_service::RequestedMemoryMediaKind::DenseMem,
-        RequestedMemoryMediaKindDto::SparseMem => {
-            disk_service::RequestedMemoryMediaKind::SparseMem
-        }
+        RequestedMemoryMediaKindDto::SparseMem => disk_service::RequestedMemoryMediaKind::SparseMem,
     }
 }
 
@@ -363,7 +353,9 @@ pub fn create_memory_disk(
                 auto_connect: request.auto_connect,
             },
         )?;
-        if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_runtime_store) {
+        if let Err(error) =
+            persistence_service::save_client_state(&state.backend, &disk_runtime_store)
+        {
             let _ = disk_runtime_store.remove_runtime(&disk_id);
             return Err(error);
         }
@@ -406,7 +398,9 @@ pub fn create_file_disk(
                 auto_connect: request.auto_connect,
             },
         )?;
-        if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_runtime_store) {
+        if let Err(error) =
+            persistence_service::save_client_state(&state.backend, &disk_runtime_store)
+        {
             let _ = disk_runtime_store.remove_runtime(&disk_id);
             return Err(error);
         }
@@ -437,7 +431,9 @@ pub fn create_new_file_disk(
                 auto_connect: request.auto_connect,
             },
         )?;
-        if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_runtime_store) {
+        if let Err(error) =
+            persistence_service::save_client_state(&state.backend, &disk_runtime_store)
+        {
             let _ = disk_runtime_store.remove_runtime(&disk_id);
             return Err(error);
         }
@@ -490,7 +486,8 @@ pub fn delete_disk(
     let deleted_state =
         disk_service::delete_disk(&state.backend, &mut disk_runtime_store, &request.disk_id)?;
 
-    if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_runtime_store) {
+    if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_runtime_store)
+    {
         disk_runtime_store.restore_removed_runtime(deleted_state.removed_runtime);
         return Err(error);
     }
@@ -517,7 +514,8 @@ pub fn update_disk(
         },
     )?;
 
-    if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_runtime_store) {
+    if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_runtime_store)
+    {
         let runtime = disk_runtime_store
             .find_runtime_mut(&updated_state.previous_snapshot.disk_id)
             .ok_or_else(|| {

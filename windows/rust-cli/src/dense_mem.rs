@@ -16,16 +16,6 @@ impl DenseMem {
             bytes: Arc::new(RwLock::new(vec![0; size])),
         })
     }
-
-    pub fn snapshot_range(
-        &self,
-        offset_bytes: u64,
-        length: usize,
-    ) -> Result<Vec<u8>, BackendError> {
-        let mut buffer = vec![0; length];
-        self.read_locked(offset_bytes, &mut buffer)?;
-        Ok(buffer)
-    }
 }
 
 impl Media for DenseMem {

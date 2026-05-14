@@ -52,7 +52,7 @@
 它不负责：
 
 - 驱动安装、卸载、修复。
-- `visible_path` / `PhysicalDriveX` 枚举。
+- 系统设备路径枚举。
 - 正式介质、暂存层、overlay 读视图。
 - 系统取消的全链路上浮。
 - CLI、压测、业务逻辑。
@@ -67,8 +67,7 @@
 补充固定约束：
 
 - `AppKernel` 不承接系统可见盘枚举。
-- `visible_path / PhysicalDriveX` 继续留在宿主控制层。
-- 如果多个宿主都需要这条能力，优先复用宿主侧共享静态库，而不是把该能力下沉到 `AppKernel`。
+- 当前正式宿主链路不枚举系统设备路径，建盘成功以 target/runtime/lifecycle/online 为准。
 
 ## 2. 交付物
 
@@ -77,8 +76,6 @@
 - `AppKernel.dll`
 - 对应 import library
 - 公开头文件 [include/appkernel.h](./include/appkernel.h)
-- 宿主侧可见盘扫描静态库 `scan`
-- 对应公开头文件 [windows/scan/scan.h](../scan/scan.h)
 - 本文档
 
 公开 ABI 约束固定为：
@@ -95,8 +92,6 @@
 - `MinGW`
 
 仓内最小接入方式可直接参考 [windows/TestApp/CMakeLists.txt](../TestApp/CMakeLists.txt)。
-
-如果宿主需要承接 `visible_path / PhysicalDriveX` 刷新，仓内推荐直接链接 `scan`，不要在每个宿主工程里各自复制一份 `SetupAPI` 枚举实现。
 
 ## 3. 当前版本规则
 
@@ -134,14 +129,13 @@
 宿主的最小接入顺序固定为：
 
 1. 准备日志函数 `AK_LOG_FN`。
-2. 如果需要系统可见盘刷新，接入宿主侧扫描静态库 `scan`。
-3. 调用 `AkOpen` 打开 session。
-4. 启动一个专门的事件消费线程，持续 `AkWaitEvent` 或 `AkPollEvent`。
-5. 为每个盘准备自己的 `media_ctx` 和 `AK_MEDIA_OPS`。
-6. 调用 `AkCreateDisk` 建盘。
-7. 收到 `AkEventDiskOnline` 后，再做可见盘路径刷新或压测。
-8. 收到 `AkEventWriteFinalCommitted / AkEventWriteFinalRejected` 后，分别做提交或丢弃。
-9. 退出时先 `AkRemoveDisk`，最后 `AkClose`。
+2. 调用 `AkOpen` 打开 session。
+3. 启动一个专门的事件消费线程，持续 `AkWaitEvent` 或 `AkPollEvent`。
+4. 为每个盘准备自己的 `media_ctx` 和 `AK_MEDIA_OPS`。
+5. 调用 `AkCreateDisk` 建盘。
+6. 收到 `AkEventDiskOnline` 后，更新该 target 的 runtime 状态。
+7. 收到 `AkEventWriteFinalCommitted / AkEventWriteFinalRejected` 后，分别做提交或丢弃。
+8. 退出时先 `AkRemoveDisk`，最后 `AkClose`。
 
 不要把事件消费做成“有空再看”的附属逻辑。对写路径来说，最终事件是正确性链路的一部分。
 
@@ -482,10 +476,9 @@ typedef struct AK_DISK_PARAMS {
 
 它不表示：
 
-- 宿主一定已经拿到了 `visible_path`
 - 系统一定已经完成盘符/磁盘管理器可见性刷新
 
-这些仍需要宿主自己枚举。
+当前正式宿主链路不以系统设备路径作为建盘成功判据。
 
 ### 7.2 `AkRemoveDisk`
 
@@ -545,7 +538,7 @@ typedef struct AK_DISK_STATE {
 | --- | --- | --- |
 | `Lifecycle` | 当前盘 runtime 生命周期 | 取值见 `AK_LIFECYCLE_STATE` |
 | `TargetId` | 该盘 target 编号 | 与建盘时传入的 `AK_DISK_PARAMS.TargetId` 对应 |
-| `DiskRuntimeId` | `AppKernel` 为该盘分配的 session 内运行时唯一编号 | 不是系统 `PhysicalDriveX`，也不是 target 的别名 |
+| `DiskRuntimeId` | `AppKernel` 为该盘分配的 session 内运行时唯一编号 | 不是 target 的别名 |
 | `ReadWorkersRunning` | read worker 线程组是否已经启动并保持运行 | `FALSE` 时该盘读路径不可再视为稳态可用 |
 | `WriteWorkersRunning` | write worker 线程组是否已经启动并保持运行 | `FALSE` 时该盘写路径不可再视为稳态可用 |
 | `AckFlusherRunning` | write ACK flush worker 是否已经启动并保持运行 | `FALSE` 时写最终裁决无法继续推进 |
@@ -769,8 +762,8 @@ typedef enum AK_EVENT_TYPE {
 
 | 枚举值 | 数值 | 含义 | 宿主典型动作 |
 | --- | --- | --- | --- |
-| `AkEventDiskOnline` | `0` | 该盘 runtime 已启动且 `CREATE_DISK` 已完成 | 刷新 `visible_path` / `PhysicalDriveX` |
-| `AkEventDiskRemoved` | `1` | 该盘删除收口已经走完 | 释放本地磁盘对象并刷新可见盘缓存 |
+| `AkEventDiskOnline` | `0` | 该盘 runtime 已启动且 `CREATE_DISK` 已完成 | 更新宿主 runtime 状态 |
+| `AkEventDiskRemoved` | `1` | 该盘删除收口已经走完 | 释放本地磁盘对象 |
 | `AkEventWriteFinalCommitted` | `2` | 一笔系统写已被最终接受 | 将 staged write 提交到正式介质 |
 | `AkEventWriteFinalRejected` | `3` | 一笔系统写已被最终拒绝 | 丢弃 staged write |
 | `AkEventSessionBroken` | `4` | 当前 session 已损坏不可继续使用 | 停止新流程并进入关闭/重建 |
@@ -797,9 +790,8 @@ typedef enum AK_EVENT_TYPE {
 
 宿主典型动作：
 
-- 刷新 `visible_path`
-- 查 `PhysicalDriveX`
-- 通知上层可以开始压测或挂载
+- 更新该 target 的 runtime 状态
+- 通知上层该盘已进入运行态
 
 ### 9.2 `AkEventDiskRemoved`
 
@@ -894,7 +886,7 @@ typedef enum AK_EVENT_TYPE {
   - 退出收尾
 - 1 个事件消费线程
   - 持续 `AkWaitEvent`
-  - 在宿主侧做 `commit / discard / visible_path refresh`
+  - 在宿主侧做 `commit / discard / runtime 状态刷新`
 
 不要再在宿主层额外包一层 read/write worker pool 去和 `AppKernel` 抢职责。
 
@@ -1001,7 +993,7 @@ for (;;) {
 
     switch (event_record.Type) {
     case AkEventDiskOnline:
-        HostRefreshVisiblePath(event_record.TargetId);
+        HostMarkDiskOnline(event_record.TargetId);
         break;
 
     case AkEventWriteFinalCommitted:
@@ -1022,37 +1014,6 @@ for (;;) {
 }
 ```
 
-更完整的仓内样例可直接参考：
-
-- [windows/TestApp/src/main.cpp](../TestApp/src/main.cpp)
-- [windows/TestApp/src/runtime.cpp](../TestApp/src/runtime.cpp)
-- [windows/TestApp/src/media.cpp](../TestApp/src/media.cpp)
-- [windows/scan/scan.h](../scan/scan.h)
-- [windows/scan/scan.cpp](../scan/scan.cpp)
-
-宿主侧可见盘扫描推荐调用面：
-
-```cpp
-#include "scan.h"
-
-using YumeDisk::Scan::DiskIdentity;
-using YumeDisk::Scan::EnumerateVisibleYumeDisks;
-using YumeDisk::Scan::MakePhysicalDrivePath;
-```
-
-`scan` 静态库的职责固定为：
-
-- 枚举 `GUID_DEVINTERFACE_DISK`
-- 读取系统当前可见盘的 `Vendor / Product / DeviceNumber / LengthBytes`
-- 为宿主提供 `visible_path / PhysicalDriveX` 绑定所需的最小信息
-
-`scan` 静态库不负责：
-
-- `AppKernel` session 生命周期
-- 盘 runtime 生命周期
-- 写最终裁决
-- staged write 管理
-
 ## 14. 宿主接入检查清单
 
 - 是否先完成驱动安装/修复，再调用 `AkOpen`？
@@ -1064,4 +1025,4 @@ using YumeDisk::Scan::MakePhysicalDrivePath;
 - 是否在 `AkEventSessionBroken` 时停止等待“补齐所有最终事件”？
 - 是否保证 `media_ctx` 在 `AkRemoveDisk / AkClose` 返回前一直有效？
 - 是否避免在宿主回调里反向阻塞 `AppKernel` 控制 API？
-- 是否把 `visible_path / PhysicalDriveX` 枚举继续留在宿主层？
+- 是否避免把系统设备路径枚举作为建盘成功判据？

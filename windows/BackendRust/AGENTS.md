@@ -22,14 +22,12 @@
   - `AppKernel` FFI 定义。
 - `src/media.rs`
   - `Media` trait 抽象。
-- `src/scan.rs`
-  - 可见盘枚举。
 - `src/staging.rs`
   - staged write / commit / reject 相关数据结构和状态机。
 - `src/runtime.rs`
   - `BackendContext`、单盘 runtime 持有、事件线程、日志、快照。
 - `src/win32.rs`
-  - 当前阶段自行声明的最小 Win32 / SetupAPI FFI。
+  - 当前阶段自行声明的最小 Win32 FFI。
 - `build.rs`
   - 编译并链接 `AppKernel` C 源码。
 
@@ -51,7 +49,7 @@
   - staging 生命周期
   - 快照与统计
   - `AppKernel` FFI 接入
-  - 可见盘扫描
+- `BackendRust` 不负责系统可见盘路径枚举，也不输出系统盘路径文本；运行态真状态以 target、lifecycle、online 为准。
 - 当前不提前补完整 `NetworkMedia` 确认链。
 
 ## 实现原则

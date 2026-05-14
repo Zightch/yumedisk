@@ -8,11 +8,8 @@
 #include <string>
 
 #include "BackendCore.h"
-#include "scan.h"
 
 namespace testapp {
-
-using YumeDisk::Scan::DiskIdentity;
 
 constexpr ULONG kDefaultSectorSize = BackendCore::defaultSectorSize;
 constexpr size_t kDefaultQueueDepth = BackendCore::defaultQueueDepth;
@@ -23,8 +20,6 @@ constexpr size_t kMaxReadWorkersPerDisk = 4;
 constexpr size_t kMaxWriteWorkersPerDisk = 2;
 constexpr size_t kReadSlotsPerWorkerTarget = 8;
 constexpr size_t kWriteSlotsPerWorkerTarget = 16;
-constexpr DWORD kDiskArrivalPollMs = BackendCore::diskArrivalPollMs;
-constexpr DWORD kDiskArrivalTimeoutMs = BackendCore::diskArrivalTimeoutMs;
 
 enum class MediaMode {
     Auto,

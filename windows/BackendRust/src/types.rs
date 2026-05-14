@@ -6,8 +6,6 @@ pub const DEFAULT_WRITE_SLOT_BYTES: u32 = 1024 * 1024;
 pub const DEFAULT_READ_WORKER_COUNT: u16 = 4;
 pub const DEFAULT_WRITE_WORKER_COUNT: u16 = 2;
 pub const DEFAULT_ACK_BATCH_MAX_RANGES: u32 = DEFAULT_QUEUE_DEPTH;
-pub const DISK_ARRIVAL_POLL_MS: u32 = 100;
-pub const DISK_ARRIVAL_TIMEOUT_MS: u32 = 2000;
 pub const EVENT_WAIT_POLL_MS: u32 = 100;
 pub const DEFAULT_HEARTBEAT_INTERVAL_MS: u32 = 1000;
 pub const DEFAULT_INITIAL_EVENT_QUEUE_CAPACITY: u32 = 1024;
@@ -67,8 +65,6 @@ pub struct ManagedDiskSnapshot {
     pub disk_size_bytes: u64,
     pub sector_size: u32,
     pub read_only: bool,
-    pub visible_path: String,
-    pub physical_drive_path: String,
     pub lifecycle_text: String,
     pub online: bool,
 }
@@ -103,7 +99,6 @@ pub struct DiskMetadata {
     pub sector_size: u32,
     pub disk_size_bytes: u64,
     pub read_only: bool,
-    pub identity: crate::scan::DiskIdentity,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
