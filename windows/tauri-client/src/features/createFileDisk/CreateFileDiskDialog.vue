@@ -254,17 +254,16 @@ async function handleCreateNewFileSubmit() {
             </el-form-item>
 
             <el-form-item label="文件路径">
-              <el-input v-model="form.filePath" placeholder="选择现有文件">
-                <template #append>
-                  <el-button
-                    class="app-dialog-form__append-button"
-                    :loading="browsing"
-                    @click="handleBrowse"
-                  >
-                    浏览
-                  </el-button>
-                </template>
-              </el-input>
+              <div class="app-dialog-path-field">
+                <el-input v-model="form.filePath" placeholder="选择现有文件" />
+                <el-button
+                  class="app-dialog-path-field__browse"
+                  :loading="browsing"
+                  @click="handleBrowse"
+                >
+                  浏览
+                </el-button>
+              </div>
             </el-form-item>
 
             <el-form-item class="app-dialog-form__switch" label="启动自动连接">
@@ -306,17 +305,16 @@ async function handleCreateNewFileSubmit() {
             </el-form-item>
 
             <el-form-item label="文件路径">
-              <el-input v-model="newFileForm.filePath" placeholder="输入要创建的文件路径">
-                <template #append>
-                  <el-button
-                    class="app-dialog-form__append-button"
-                    :loading="browsing"
-                    @click="handleBrowseNewFilePath"
-                  >
-                    浏览
-                  </el-button>
-                </template>
-              </el-input>
+              <div class="app-dialog-path-field">
+                <el-input v-model="newFileForm.filePath" placeholder="输入要创建的文件路径" />
+                <el-button
+                  class="app-dialog-path-field__browse"
+                  :loading="browsing"
+                  @click="handleBrowseNewFilePath"
+                >
+                  浏览
+                </el-button>
+              </div>
             </el-form-item>
 
             <el-form-item label="容量 (MiB)">
