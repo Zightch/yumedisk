@@ -59,7 +59,7 @@
   flex-shrink: 0;
 }
 
-.app-header__status {
+.app-header__status.el-button {
   height: 36px;
   display: inline-flex;
   align-items: center;
@@ -68,6 +68,26 @@
   border: 1px solid var(--border-soft);
   border-radius: 12px;
   background: var(--bg-surface-selected);
+  color: var(--text-primary);
+  box-shadow: none;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.app-header__status.el-button.is-text,
+.app-header__status.el-button.is-text:not(.is-disabled):hover,
+.app-header__status.el-button.is-text:not(.is-disabled):focus {
+  background: var(--bg-surface-selected);
+  border: 1px solid var(--border-soft);
+}
+
+.app-header__status.el-button:hover,
+.app-header__status.el-button:focus-visible {
+  background: color-mix(in srgb, var(--bg-surface-selected) 84%, var(--accent-soft));
+  border-color: var(--accent-border);
+  color: var(--text-primary);
 }
 
 .app-header__status-dot {
@@ -85,11 +105,34 @@
   background: var(--danger);
 }
 
+.app-header__status-spinner {
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-text);
+}
+
+.app-header__status-spinner .el-icon {
+  font-size: 12px;
+  animation: app-header-status-spin 1s linear infinite;
+}
+
 .app-header__status-text {
-  color: var(--text-primary);
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
+}
+
+@keyframes app-header-status-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .app-header__add.el-button {

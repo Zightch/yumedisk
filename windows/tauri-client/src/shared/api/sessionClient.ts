@@ -9,6 +9,17 @@ export async function openSession(): Promise<SessionSnapshot> {
   return invoke<SessionSnapshot>("open_session");
 }
 
+export function getErrorDetail(error: unknown): string | null {
+  if (error && typeof error === "object") {
+    const detail = Reflect.get(error, "detail");
+    if (typeof detail === "string" && detail.length > 0) {
+      return detail;
+    }
+  }
+
+  return null;
+}
+
 export function getErrorMessage(error: unknown): string {
   if (typeof error === "string") {
     return error;

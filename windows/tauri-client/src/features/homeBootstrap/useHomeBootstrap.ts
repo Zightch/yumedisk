@@ -7,6 +7,7 @@ import {
   rescanRuntimeDisks,
 } from "../../shared/api/diskClient";
 import {
+  getErrorDetail,
   getErrorMessage,
   openSession,
   restoreClientState,
@@ -19,6 +20,7 @@ export interface HomeBootstrapState {
   loading: boolean;
   errorText: string | null;
   sessionPhase: SessionPhase;
+  sessionStatusText: string | null;
   diskDisplayPhase: HomeDiskDisplayPhase;
   sessionSnapshot: SessionSnapshot | null;
 }
@@ -29,6 +31,7 @@ export function useHomeBootstrap() {
   const loading = ref(true);
   const errorText = ref<string | null>(null);
   const sessionPhase = ref<SessionPhase>("initializing");
+  const sessionStatusText = ref<string | null>("正在恢复配置");
   const diskDisplayPhase = ref<HomeDiskDisplayPhase>("startup");
   const sessionSnapshot = ref<SessionSnapshot | null>(null);
   const initialAutoConnectCompleted = ref(false);
@@ -120,21 +123,65 @@ export function useHomeBootstrap() {
     }
   }
 
+  function setSessionFailureState(text: string): void {
+    sessionPhase.value = "failed";
+    sessionStatusText.value = text;
+    diskDisplayPhase.value = "startup";
+  }
+
+  function resolveSessionFailureText(error: unknown): string {
+    return getErrorDetail(error) ?? getErrorMessage(error);
+  }
+
+  async function runOpenSessionFlow(): Promise<boolean> {
+    errorText.value = null;
+    sessionPhase.value = "initializing";
+    diskDisplayPhase.value = "startup";
+    sessionStatusText.value = "正在打开 Backend 会话";
+
+    try {
+      sessionSnapshot.value = await openSession();
+      sessionPhase.value = "ready";
+
+      sessionStatusText.value = "正在重扫磁盘运行态";
+      const rescanSnapshot = await handleRescanRuntimeDisks({ showLoading: false });
+      if (rescanSnapshot === null) {
+        setSessionFailureState(errorText.value ?? "重扫磁盘运行态失败");
+        return false;
+      }
+
+      diskDisplayPhase.value = "normal";
+      await nextTick();
+
+      sessionStatusText.value = "正在执行自动连接";
+      await runInitialAutoConnect(rescanSnapshot);
+      sessionStatusText.value = sessionSnapshot.value.stateText;
+      return true;
+    } catch (error) {
+      sessionSnapshot.value = null;
+      setSessionFailureState(resolveSessionFailureText(error));
+      errorText.value = getErrorMessage(error);
+      return false;
+    }
+  }
+
   async function bootstrapHomePage() {
     loading.value = true;
     errorText.value = null;
     actionLoadingDiskId.value = null;
     sessionSnapshot.value = null;
     sessionPhase.value = "initializing";
+    sessionStatusText.value = "正在恢复配置";
     diskDisplayPhase.value = "startup";
     initialAutoConnectCompleted.value = false;
 
     try {
       await restoreClientState();
 
+      sessionStatusText.value = "正在加载磁盘配置";
       const snapshot = await loadHomeDiskList({ showLoading: false });
       if (snapshot === null) {
-        sessionPhase.value = "failed";
+        setSessionFailureState(errorText.value ?? "加载磁盘配置失败");
         loading.value = false;
         return;
       }
@@ -142,26 +189,20 @@ export function useHomeBootstrap() {
       loading.value = false;
       await nextTick();
 
-      sessionSnapshot.value = await openSession();
-      sessionPhase.value = "ready";
-
-      const rescanSnapshot = await handleRescanRuntimeDisks({ showLoading: false });
-      if (rescanSnapshot === null) {
-        sessionPhase.value = "failed";
-        return;
-      }
-
-      diskDisplayPhase.value = "normal";
-      await nextTick();
-
-      await runInitialAutoConnect(rescanSnapshot);
+      await runOpenSessionFlow();
     } catch (error) {
       sessionSnapshot.value = null;
-      sessionPhase.value = "failed";
+      setSessionFailureState(resolveSessionFailureText(error));
       errorText.value = getErrorMessage(error);
     } finally {
       loading.value = false;
     }
+  }
+
+  async function retryOpenSessionFlow(): Promise<boolean> {
+    initialAutoConnectCompleted.value = false;
+    actionLoadingDiskId.value = null;
+    return runOpenSessionFlow();
   }
 
   onMounted(() => {
@@ -177,8 +218,10 @@ export function useHomeBootstrap() {
     handleRescanRuntimeDisks,
     loadHomeDiskList,
     loading,
+    retryOpenSessionFlow,
     runtimeDisks,
     sessionPhase,
     sessionSnapshot,
+    sessionStatusText,
   };
 }

@@ -1,0 +1,108 @@
+.app-dialog.app-dialog--session.el-dialog {
+  --app-dialog-width: 400px;
+}
+
+.session-status-dialog {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 30px 24px 28px;
+  text-align: center;
+}
+
+.session-status-dialog__indicator {
+  width: 56px;
+  height: 56px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.session-status-dialog__indicator .el-icon {
+  font-size: 28px;
+}
+
+.session-status-dialog__indicator.is-initializing {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
+  border-color: var(--accent-border);
+  color: var(--accent-text);
+}
+
+.session-status-dialog__indicator.is-initializing .el-icon {
+  animation: session-status-dialog-spin 1s linear infinite;
+}
+
+.session-status-dialog__indicator.is-ready {
+  background: color-mix(in srgb, var(--success) 12%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--success) 42%, transparent);
+  color: var(--success);
+}
+
+.session-status-dialog__indicator.is-failed {
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg-surface));
+  border-color: color-mix(in srgb, var(--danger) 42%, transparent);
+  color: var(--danger);
+}
+
+.session-status-dialog__content {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.session-status-dialog__state {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+}
+
+.session-status-dialog__description {
+  max-width: 320px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.session-status-dialog__actions {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.session-status-dialog__actions .app-dialog__button.el-button {
+  min-width: 120px;
+}
+
+@keyframes session-status-dialog-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 440px) {
+  .session-status-dialog {
+    gap: 16px;
+    padding: 28px 20px 24px;
+  }
+
+  .session-status-dialog__state {
+    font-size: 22px;
+  }
+}

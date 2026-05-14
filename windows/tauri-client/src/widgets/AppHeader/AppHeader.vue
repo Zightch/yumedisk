@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { Plus, Setting } from "@element-plus/icons-vue";
+import { Loading, Plus, Setting } from "@element-plus/icons-vue";
+import { formatSessionPhaseText } from "../../entities/session/presenter";
 import type { SessionPhase } from "../../entities/session/model";
 
 const props = defineProps<{
@@ -8,25 +9,17 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  openSessionStatus: [];
   openSettings: [];
   openMemoryCreate: [];
   openFileCreate: [];
 }>();
 
 const addPopoverVisible = ref(false);
+const isInitializing = computed(() => props.sessionPhase === "initializing");
 const isReady = computed(() => props.sessionPhase === "ready");
 const isFailed = computed(() => props.sessionPhase === "failed");
-const statusText = computed(() => {
-  if (props.sessionPhase === "ready") {
-    return "会话正常";
-  }
-
-  if (props.sessionPhase === "failed") {
-    return "会话失败";
-  }
-
-  return "正在初始化";
-});
+const statusText = computed(() => formatSessionPhaseText(props.sessionPhase));
 
 function handleOpenMemoryCreate() {
   addPopoverVisible.value = false;
@@ -57,18 +50,26 @@ function handleOpenFileCreate() {
     </div>
 
     <div class="app-header__tools">
-      <div
+      <el-button
         class="app-header__status"
+        text
         :class="{
+          'is-initializing': isInitializing,
           'is-ready': isReady,
           'is-failed': isFailed,
         }"
+        @click="emit('openSessionStatus')"
       >
-        <span class="app-header__status-dot"></span>
+        <span v-if="isInitializing" class="app-header__status-spinner">
+          <el-icon>
+            <Loading />
+          </el-icon>
+        </span>
+        <span v-else class="app-header__status-dot"></span>
         <span class="app-header__status-text">
           {{ statusText }}
         </span>
-      </div>
+      </el-button>
 
       <el-popover
         v-model:visible="addPopoverVisible"

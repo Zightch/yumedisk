@@ -7,6 +7,7 @@ import CreateMemoryDiskDialog from "../../features/createMemoryDisk/CreateMemory
 import EditDiskDialog from "../../features/editDisk/EditDiskDialog.vue";
 import { mapHomeDiskDisplayItems } from "../../features/homeBootstrap/homeDisplayMapper";
 import { useHomeBootstrap } from "../../features/homeBootstrap/useHomeBootstrap";
+import SessionStatusDialog from "../../features/sessionStatus/SessionStatusDialog.vue";
 import { DEFAULT_THEME, applyTheme, type AppTheme } from "../../shared/theme/theme";
 import {
   deleteDisk,
@@ -20,6 +21,7 @@ const memoryCreateVisible = ref(false);
 const fileCreateVisible = ref(false);
 const editDiskVisible = ref(false);
 const settingsVisible = ref(false);
+const sessionStatusVisible = ref(false);
 const editingDisk = ref<HomeDiskListItem | null>(null);
 const currentTheme = ref<AppTheme>({ ...DEFAULT_THEME });
 
@@ -32,8 +34,10 @@ const {
   handleRescanRuntimeDisks: runRescanRuntimeDisks,
   loadHomeDiskList,
   loading,
+  retryOpenSessionFlow,
   runtimeDisks,
   sessionPhase,
+  sessionStatusText,
 } = useHomeBootstrap();
 
 const displayDisks = computed(() => mapHomeDiskDisplayItems(runtimeDisks.value, {
@@ -51,6 +55,10 @@ function handleOpenFileCreate() {
 
 function handleOpenSettings() {
   settingsVisible.value = true;
+}
+
+function handleOpenSessionStatus() {
+  sessionStatusVisible.value = true;
 }
 
 async function handleMemoryDiskCreated() {
@@ -137,6 +145,10 @@ async function handleRescanRuntimeDisks() {
   }
 }
 
+async function handleRetrySession() {
+  await retryOpenSessionFlow();
+}
+
 function handleThemeChanged(theme: AppTheme) {
   currentTheme.value = theme;
   applyTheme(theme);
@@ -148,6 +160,7 @@ function handleThemeChanged(theme: AppTheme) {
     <el-header class="home-page__header" height="auto">
       <AppHeader
         :session-phase="sessionPhase"
+        @open-session-status="handleOpenSessionStatus"
         @open-settings="handleOpenSettings"
         @open-memory-create="handleOpenMemoryCreate"
         @open-file-create="handleOpenFileCreate"
@@ -174,6 +187,12 @@ function handleThemeChanged(theme: AppTheme) {
     v-model="settingsVisible"
     :theme="currentTheme"
     @update:theme="handleThemeChanged"
+  />
+  <SessionStatusDialog
+    v-model="sessionStatusVisible"
+    :session-phase="sessionPhase"
+    :session-status-text="sessionStatusText"
+    @retry="handleRetrySession"
   />
   <CreateMemoryDiskDialog
     v-model="memoryCreateVisible"
