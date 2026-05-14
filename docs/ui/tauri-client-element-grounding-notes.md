@@ -45,7 +45,8 @@
 
 ### 3.2 结构目标
 
-- 初始化页居中、简洁，只表达“正在初始化 / 初始化失败”；
+- 程序启动后直接进入主页，由主页承接启动期展示；
+- 顶部会话状态按钮负责表达“正在初始化 / 会话正常 / 会话失败”；
 - 主页分为顶部工具区和中部磁盘列表区；
 - 磁盘列表是主视觉中心；
 - 设置页作为覆盖层切入，而不是新窗口；
@@ -68,7 +69,6 @@
 
 页面主骨架依赖 Element 布局容器：
 
-- 初始化页：`windows/tauri-client/src/pages/init/InitPage.vue:10`
 - 主页：`windows/tauri-client/src/pages/home/HomePage.vue:120`
 
 对应承载：
@@ -76,9 +76,8 @@
 - `el-container`
 - `el-header`
 - `el-main`
-- `el-card`
 
-这些组件负责页面的结构流、头部与内容区关系、卡片基础语义。
+这些组件负责页面的结构流、头部与内容区关系。
 
 ### 4.2 列表与状态组件
 
@@ -105,6 +104,24 @@
 
 - 空状态继续使用 `el-empty`，只是把默认大图标关闭；
 - 重扫入口继续使用 `el-button + el-icon`，只是从文字按钮收成刷新图标按钮。
+
+顶部会话状态入口依赖：
+
+- `el-button`
+- `el-icon`
+- `el-dialog`
+
+对应文件：
+
+- `windows/tauri-client/src/widgets/AppHeader/AppHeader.vue:1`
+- `windows/tauri-client/src/features/sessionStatus/SessionStatusDialog.vue:1`
+
+这些组件负责：
+
+- 会话三态按钮语义；
+- 顶部可点击状态入口；
+- 会话状态查看对话框；
+- 失败态重试入口。
 
 ### 4.3 表单与对话框
 
@@ -232,7 +249,7 @@
 当前样式文件分工如下：
 
 - `windows/tauri-client/src/shared/styles/layout.css`
-  - 页面骨架、窗口尺寸、初始化页布局
+  - 页面骨架、窗口尺寸、主页主壳布局
 - `windows/tauri-client/src/shared/styles/header.css`
   - 顶部栏、状态块、添加气泡
 - `windows/tauri-client/src/shared/styles/listPanel.css`
@@ -396,6 +413,43 @@
 - 内容区右侧保留滚动条安全 padding。
 
 这类问题必须在布局层修，不应该在单个卡片上打补丁。
+
+---
+
+### 5.9 会话状态入口继续站在 Element 语义上
+
+顶部会话状态块当前不是普通文本，而是基于 `el-button` 的可点击状态入口；状态详情继续使用 `el-dialog` 承接。
+
+这里做的工作是：
+
+- 继续使用 `el-button` 提供按钮语义、图标承载和交互状态；
+- 通过局部样式把它收成顶部状态 pill；
+- 使用 `el-dialog` 作为状态详情和失败重试的唯一弹层承载；
+- 失败态重试继续走 Element 按钮语义，不额外自造一套浮层动作体系。
+
+这说明当前项目并不是“只要样式特殊就绕开 Element”，而是：
+
+- 先保留 Element 的行为底座；
+- 再把视觉和信息层级调整到目标效果。
+
+---
+
+### 5.10 启动期磁盘覆盖停留在展示映射层
+
+主页当前会把启动期和会话失败期的磁盘统一覆盖成 `invalid` 展示，但这层逻辑并没有下沉为磁盘真实状态。
+
+实际落地方式是：
+
+- 宿主继续提供真实 `runtimeDisks`；
+- 主页通过单一映射口生成 `displayDisks`；
+- 磁盘卡片只消费最终展示 DTO；
+- 卡片本身不额外判断“正在初始化”或“会话失败”。
+
+这样做的价值是：
+
+- 启动链和展示覆盖职责不散到多个组件；
+- 磁盘卡片保持简单，只负责展示结果；
+- 后续如果继续调整启动链，不需要反向清理一批卡片级补丁判断。
 
 ---
 
