@@ -99,7 +99,8 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            commands::session::initialize_client,
+            commands::session::restore_client_state,
+            commands::session::open_session,
             commands::config::query_backend_defaults,
             commands::config::query_session_config,
             commands::disk::query_managed_disks,

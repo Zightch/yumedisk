@@ -12,22 +12,17 @@ pub struct SessionSnapshotDto {
     pub state_text: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InitializeClientResponse {
-    pub session: SessionSnapshotDto,
+#[tauri::command]
+pub fn restore_client_state(state: State<'_, ClientState>) -> Result<(), ApiError> {
+    session_service::restore_client_state(&state)
 }
 
 #[tauri::command]
-pub fn initialize_client(
-    state: State<'_, ClientState>,
-) -> Result<InitializeClientResponse, ApiError> {
-    let session = session_service::initialize_client(&state)?;
+pub fn open_session(state: State<'_, ClientState>) -> Result<SessionSnapshotDto, ApiError> {
+    let session = session_service::open_session(&state)?;
 
-    Ok(InitializeClientResponse {
-        session: SessionSnapshotDto {
-            ready: session.ready,
-            state_text: session.state_text,
-        },
+    Ok(SessionSnapshotDto {
+        ready: session.ready,
+        state_text: session.state_text,
     })
 }

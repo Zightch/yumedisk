@@ -1,94 +1,38 @@
 <script setup lang="ts">
 import { ElMessage } from "element-plus";
-import { nextTick, onMounted, ref } from "vue";
-import type { HomeDiskListItem, HomeDiskListSnapshot } from "../../entities/disk/model";
+import { ref } from "vue";
+import type { HomeDiskListItem } from "../../entities/disk/model";
 import CreateFileDiskDialog from "../../features/createFileDisk/CreateFileDiskDialog.vue";
 import CreateMemoryDiskDialog from "../../features/createMemoryDisk/CreateMemoryDiskDialog.vue";
 import EditDiskDialog from "../../features/editDisk/EditDiskDialog.vue";
+import { useHomeBootstrap } from "../../features/homeBootstrap/useHomeBootstrap";
 import { DEFAULT_THEME, applyTheme, type AppTheme } from "../../shared/theme/theme";
 import {
-  connectDisk,
   deleteDisk,
   disconnectDisk,
-  queryHomeDiskList,
   rescanRuntimeDisks,
 } from "../../shared/api/diskClient";
 import { getErrorMessage } from "../../shared/api/sessionClient";
 import AppHeader from "../../widgets/AppHeader/AppHeader.vue";
 import DiskListPanel from "../../widgets/DiskListPanel/DiskListPanel.vue";
 import SettingsPage from "../../widgets/SettingsPage/SettingsPage.vue";
-
-defineProps<{
-  sessionReady: boolean;
-}>();
-
-const disks = ref<HomeDiskListItem[]>([]);
-const autoConnectCount = ref(0);
-const loading = ref(true);
-const errorText = ref<string | null>(null);
 const memoryCreateVisible = ref(false);
 const fileCreateVisible = ref(false);
 const editDiskVisible = ref(false);
 const settingsVisible = ref(false);
 const editingDisk = ref<HomeDiskListItem | null>(null);
-const actionLoadingDiskId = ref<string | null>(null);
 const currentTheme = ref<AppTheme>({ ...DEFAULT_THEME });
-const initialAutoConnectCompleted = ref(false);
 
-async function loadHomeDiskList(options: { showLoading?: boolean } = {}): Promise<HomeDiskListSnapshot | null> {
-  const showLoading = options.showLoading ?? true;
-  if (showLoading) {
-    loading.value = true;
-  }
-
-  errorText.value = null;
-
-  try {
-    const snapshot = await queryHomeDiskList();
-    disks.value = snapshot.disks;
-    autoConnectCount.value = snapshot.autoConnectCount;
-    return snapshot;
-  } catch (error) {
-    disks.value = [];
-    autoConnectCount.value = 0;
-    errorText.value = getErrorMessage(error);
-    return null;
-  } finally {
-    if (showLoading) {
-      loading.value = false;
-    }
-  }
-}
-
-async function runInitialAutoConnect(snapshot: HomeDiskListSnapshot) {
-  if (initialAutoConnectCompleted.value) {
-    return;
-  }
-
-  initialAutoConnectCompleted.value = true;
-
-  const diskIds = snapshot.disks
-    .filter((disk) => disk.autoConnect && disk.status === "disconnected")
-    .map((disk) => disk.diskId);
-
-  for (const diskId of diskIds) {
-    await handleConnectDisk(diskId, { silentSuccess: true });
-  }
-}
-
-async function bootstrapHomePage() {
-  const snapshot = await loadHomeDiskList({ showLoading: true });
-  if (snapshot === null) {
-    return;
-  }
-
-  await nextTick();
-  await runInitialAutoConnect(snapshot);
-}
-
-onMounted(() => {
-  void bootstrapHomePage();
-});
+const {
+  actionLoadingDiskId,
+  autoConnectCount,
+  disks,
+  errorText,
+  handleConnectDisk: runConnectDisk,
+  loadHomeDiskList,
+  loading,
+  sessionSnapshot,
+} = useHomeBootstrap();
 
 function handleOpenMemoryCreate() {
   memoryCreateVisible.value = true;
@@ -130,19 +74,17 @@ async function handleConnectDisk(
   diskId: string,
   options: { silentSuccess?: boolean } = {},
 ) {
-  actionLoadingDiskId.value = diskId;
+  const { ok, errorText: message } = await runConnectDisk(diskId, options);
 
-  try {
-    await connectDisk({ diskId });
+  if (ok) {
     if (!options.silentSuccess) {
       ElMessage.success("磁盘已连接");
     }
-    await loadHomeDiskList({ showLoading: false });
-  } catch (error) {
-    const message = getErrorMessage(error);
-    ElMessage.error(options.silentSuccess ? `自动连接失败：${message}` : message);
-  } finally {
-    actionLoadingDiskId.value = null;
+    return;
+  }
+
+  if (message) {
+    ElMessage.error(message);
   }
 }
 
@@ -201,7 +143,7 @@ function handleThemeChanged(theme: AppTheme) {
   <el-container class="app-shell home-page" direction="vertical">
     <el-header class="home-page__header" height="auto">
       <AppHeader
-        :session-ready="sessionReady"
+        :session-ready="sessionSnapshot?.ready ?? false"
         @open-settings="handleOpenSettings"
         @open-memory-create="handleOpenMemoryCreate"
         @open-file-create="handleOpenFileCreate"

@@ -1,8 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { InitializeClientResponse } from "../../entities/session/model";
+import type { SessionSnapshot } from "../../entities/session/model";
 
-export async function initializeClient(): Promise<InitializeClientResponse> {
-  return invoke<InitializeClientResponse>("initialize_client");
+export async function restoreClientState(): Promise<void> {
+  return invoke<void>("restore_client_state");
+}
+
+export async function openSession(): Promise<SessionSnapshot> {
+  return invoke<SessionSnapshot>("open_session");
 }
 
 export function getErrorMessage(error: unknown): string {

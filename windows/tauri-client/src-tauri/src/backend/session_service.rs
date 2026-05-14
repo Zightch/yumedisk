@@ -8,7 +8,7 @@ pub struct SessionSnapshot {
     pub state_text: String,
 }
 
-pub fn initialize_client(state: &ClientState) -> Result<SessionSnapshot, ApiError> {
+pub fn restore_client_state(state: &ClientState) -> Result<(), ApiError> {
     state.backend.close();
 
     let restored_state = persistence_service::load_client_state()?;
@@ -24,20 +24,24 @@ pub fn initialize_client(state: &ClientState) -> Result<SessionSnapshot, ApiErro
             )
         })?;
 
-    if !state.backend.open() {
-        return Err(ApiError::new(
-            "backend-session-open-failed",
-            "打开 BackendRust session 失败",
-            Some(state.backend.query_session_state_text()),
-        ));
-    }
-
     {
         let mut disk_runtime_store = state
             .disk_runtime_store
             .lock()
             .expect("disk runtime store mutex should not be poisoned");
         *disk_runtime_store = restored_state.disk_runtime_store;
+    }
+
+    Ok(())
+}
+
+pub fn open_session(state: &ClientState) -> Result<SessionSnapshot, ApiError> {
+    if !state.backend.open() {
+        return Err(ApiError::new(
+            "backend-session-open-failed",
+            "打开 BackendRust session 失败",
+            Some(state.backend.query_session_state_text()),
+        ));
     }
 
     Ok(SessionSnapshot {
