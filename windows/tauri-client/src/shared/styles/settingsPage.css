@@ -59,21 +59,49 @@
 }
 
 .settings-tabs.el-tabs {
+  --el-tabs-header-height: 34px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
 }
 
 .settings-tabs.el-tabs .el-tabs__header {
   margin: 0;
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.settings-tabs.el-tabs .el-tabs__nav-wrap {
+  padding: 0;
+  display: flex;
+  justify-content: flex-start;
+  flex: 0 0 auto;
 }
 
 .settings-tabs.el-tabs .el-tabs__nav-wrap::after {
   background: var(--border-soft);
 }
 
+.settings-tabs.el-tabs .el-tabs__nav-scroll {
+  width: auto;
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-start;
+  overflow: visible;
+}
+
+.settings-tabs.el-tabs .el-tabs__nav {
+  gap: 8px;
+  margin: 0;
+  border: 0;
+  flex: 0 0 auto;
+}
+
 .settings-tabs.el-tabs .el-tabs__item {
   height: 34px;
+  flex: 0 0 auto;
+  padding: 0 14px !important;
   color: var(--text-secondary);
   font-size: 13px;
   transition:
