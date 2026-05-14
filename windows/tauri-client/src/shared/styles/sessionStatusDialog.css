@@ -1,5 +1,6 @@
 .app-dialog.app-dialog--session.el-dialog {
   --app-dialog-width: 400px;
+  border-radius: 0 var(--radius-panel) var(--radius-panel) 0;
 }
 
 .session-status-dialog {

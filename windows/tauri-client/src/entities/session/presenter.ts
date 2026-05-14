@@ -16,16 +16,20 @@ export function formatSessionPhaseDescription(
   sessionPhase: SessionPhase,
   sessionStatusText: string | null,
 ): string {
-  if (sessionStatusText && sessionStatusText.trim().length > 0) {
-    return sessionStatusText;
-  }
-
   if (sessionPhase === "ready") {
     return "会话已打开，可以继续连接与管理磁盘。";
   }
 
   if (sessionPhase === "failed") {
+    if (sessionStatusText && sessionStatusText.trim().length > 0) {
+      return sessionStatusText;
+    }
+
     return "会话初始化失败，请重试。";
+  }
+
+  if (sessionStatusText && sessionStatusText.trim().length > 0) {
+    return sessionStatusText;
   }
 
   return "正在准备 Backend 会话与磁盘运行态。";
