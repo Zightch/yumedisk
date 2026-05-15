@@ -9,6 +9,9 @@ import type {
   CreateMemoryDiskRequest,
   CreateMemoryDiskResponse,
   DeleteDiskRequest,
+  DeleteDiskResponse,
+  UndoDeleteDiskRequest,
+  CommitDeletedDiskRequest,
   EjectDiskRequest,
   HomeDiskListSnapshot,
   PickRawFilePathResponse,
@@ -65,8 +68,20 @@ export async function ejectDisk(
 
 export async function deleteDisk(
   request: DeleteDiskRequest,
+): Promise<DeleteDiskResponse> {
+  return invoke<DeleteDiskResponse>("delete_disk", { request });
+}
+
+export async function undoDeleteDisk(
+  request: UndoDeleteDiskRequest,
 ): Promise<void> {
-  return invoke<void>("delete_disk", { request });
+  return invoke<void>("undo_delete_disk", { request });
+}
+
+export async function commitDeletedDisk(
+  request: CommitDeletedDiskRequest,
+): Promise<void> {
+  return invoke<void>("commit_deleted_disk", { request });
 }
 
 export async function updateDisk(

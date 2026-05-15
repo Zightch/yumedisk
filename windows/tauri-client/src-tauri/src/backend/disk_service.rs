@@ -41,10 +41,6 @@ pub struct HomeDiskListSnapshot {
     pub disks: Vec<HomeDiskListItemSnapshot>,
 }
 
-pub struct DeletedDiskState {
-    pub removed_runtime: RemovedDiskRuntime,
-}
-
 pub struct UpdatedDiskState {
     pub previous_snapshot: DiskRuntimeSnapshot,
 }
@@ -417,19 +413,10 @@ pub fn eject_disk(
     Ok(())
 }
 
-pub fn delete_disk(
+pub fn prepare_deleted_runtime(
     backend: &BackendContext,
-    runtime_store: &mut DiskRuntimeStore,
-    disk_id: &str,
-) -> Result<DeletedDiskState, ApiError> {
-    let Some(mut removed_runtime) = runtime_store.remove_runtime(disk_id) else {
-        return Err(ApiError::new(
-            "disk-not-found",
-            "磁盘不存在",
-            Some(disk_id.to_string()),
-        ));
-    };
-
+    removed_runtime: &mut RemovedDiskRuntime,
+) -> Result<(), ApiError> {
     if let Some(target_id) = removed_runtime.runtime.mounted_target_id() {
         let mut error_text = String::new();
         let media = backend
@@ -439,10 +426,34 @@ pub fn delete_disk(
         if removed_runtime.runtime.is_memory() {
             removed_runtime.runtime.restore_media(media);
             removed_runtime.runtime.set_unmounted();
+            return Ok(());
+        }
+
+        drop(media);
+        removed_runtime.runtime.media = None;
+
+        let file_path = removed_runtime.runtime.file_path().ok_or_else(|| {
+            ApiError::new(
+                "disk-not-found",
+                "磁盘不存在",
+                Some(removed_runtime.runtime.disk_id().to_string()),
+            )
+        })?;
+        match persistence_service::probe_raw_file_media(file_path) {
+            Ok(probe) => {
+                removed_runtime
+                    .runtime
+                    .set_file_unmounted(probe.capacity_bytes, probe.read_only);
+            }
+            Err(_) => {
+                removed_runtime
+                    .runtime
+                    .set_file_invalid(INVALID_FILE_REASON.to_string());
+            }
         }
     }
 
-    Ok(DeletedDiskState { removed_runtime })
+    Ok(())
 }
 
 pub fn update_disk(

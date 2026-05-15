@@ -25,11 +25,11 @@ pub fn restore_client_state(state: &ClientState) -> Result<(), ApiError> {
         })?;
 
     {
-        let mut disk_runtime_store = state
-            .disk_runtime_store
+        let mut disk_catalog = state
+            .disk_catalog
             .lock()
-            .expect("disk runtime store mutex should not be poisoned");
-        *disk_runtime_store = restored_state.disk_runtime_store;
+            .expect("disk catalog mutex should not be poisoned");
+        disk_catalog.replace_runtime_store(restored_state.disk_runtime_store);
     }
 
     Ok(())

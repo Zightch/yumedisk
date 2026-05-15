@@ -84,6 +84,19 @@ export interface DeleteDiskRequest {
   diskId: string;
 }
 
+export interface DeleteDiskResponse {
+  deletionId: string;
+  undoAvailable: boolean;
+}
+
+export interface UndoDeleteDiskRequest {
+  deletionId: string;
+}
+
+export interface CommitDeletedDiskRequest {
+  deletionId: string;
+}
+
 export interface UpdateDiskRequest {
   diskId: string;
   diskName: string;

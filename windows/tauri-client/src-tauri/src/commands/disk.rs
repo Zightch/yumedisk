@@ -6,6 +6,7 @@ use crate::api_error::ApiError;
 use crate::backend::disk_service;
 use crate::backend::persistence_service;
 use crate::state::client_state::ClientState;
+use crate::state::disk_catalog::PendingDiskDeletion;
 use crate::state::disk_runtime::DiskMediaConfig;
 use crate::state::disk_runtime::DiskRuntimeStatus;
 use crate::state::disk_runtime::FileMediaKind;
@@ -120,10 +121,29 @@ pub struct DeleteDiskRequestDto {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UndoDeleteDiskRequestDto {
+    pub deletion_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitDeletedDiskRequestDto {
+    pub deletion_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateDiskRequestDto {
     pub disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteDiskResponse {
+    pub deletion_id: String,
+    pub undo_available: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -298,12 +318,12 @@ pub fn query_managed_disks(state: State<'_, ClientState>) -> QueryManagedDisksRe
 #[tauri::command]
 pub fn query_home_disk_list(state: State<'_, ClientState>) -> QueryHomeDiskListResponse {
     let snapshot = {
-        let disk_runtime_store = state
-            .disk_runtime_store
+        let disk_catalog = state
+            .disk_catalog
             .lock()
-            .expect("disk runtime store mutex should not be poisoned");
+            .expect("disk catalog mutex should not be poisoned");
 
-        disk_service::query_home_disk_list(&state.backend, &disk_runtime_store)
+        disk_service::query_home_disk_list(&state.backend, disk_catalog.runtime_store())
     };
 
     build_home_disk_list_response(snapshot)
@@ -314,13 +334,14 @@ pub fn rescan_runtime_disks(
     state: State<'_, ClientState>,
 ) -> Result<QueryHomeDiskListResponse, ApiError> {
     let snapshot = {
-        let mut disk_runtime_store = state
-            .disk_runtime_store
+        let mut disk_catalog = state
+            .disk_catalog
             .lock()
-            .expect("disk runtime store mutex should not be poisoned");
+            .expect("disk catalog mutex should not be poisoned");
 
-        let snapshot = disk_service::rescan_runtime_disks(&state.backend, &mut disk_runtime_store);
-        persistence_service::save_client_state(&state.backend, &disk_runtime_store)?;
+        let snapshot =
+            disk_service::rescan_runtime_disks(&state.backend, disk_catalog.runtime_store_mut());
+        persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())?;
         snapshot
     };
 
@@ -333,13 +354,13 @@ pub fn create_memory_disk(
     request: CreateMemoryDiskRequestDto,
 ) -> Result<CreateMemoryDiskResponse, ApiError> {
     let disk_id = {
-        let mut disk_runtime_store = state
-            .disk_runtime_store
+        let mut disk_catalog = state
+            .disk_catalog
             .lock()
-            .expect("disk runtime store mutex should not be poisoned");
+            .expect("disk catalog mutex should not be poisoned");
 
         let disk_id = disk_service::create_memory_disk(
-            &mut disk_runtime_store,
+            disk_catalog.runtime_store_mut(),
             disk_service::CreateMemoryDiskRequest {
                 disk_name: request.disk_name,
                 capacity_mib: request.capacity_mib,
@@ -350,9 +371,9 @@ pub fn create_memory_disk(
             },
         )?;
         if let Err(error) =
-            persistence_service::save_client_state(&state.backend, &disk_runtime_store)
+            persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())
         {
-            let _ = disk_runtime_store.remove_runtime(&disk_id);
+            let _ = disk_catalog.remove_runtime(&disk_id);
             return Err(error);
         }
         disk_id
@@ -381,13 +402,13 @@ pub fn create_file_disk(
     request: CreateFileDiskRequestDto,
 ) -> Result<CreateFileDiskResponse, ApiError> {
     let disk_id = {
-        let mut disk_runtime_store = state
-            .disk_runtime_store
+        let mut disk_catalog = state
+            .disk_catalog
             .lock()
-            .expect("disk runtime store mutex should not be poisoned");
+            .expect("disk catalog mutex should not be poisoned");
 
         let disk_id = disk_service::create_file_disk(
-            &mut disk_runtime_store,
+            disk_catalog.runtime_store_mut(),
             disk_service::CreateFileDiskRequest {
                 disk_name: request.disk_name,
                 file_path: request.file_path,
@@ -395,9 +416,9 @@ pub fn create_file_disk(
             },
         )?;
         if let Err(error) =
-            persistence_service::save_client_state(&state.backend, &disk_runtime_store)
+            persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())
         {
-            let _ = disk_runtime_store.remove_runtime(&disk_id);
+            let _ = disk_catalog.remove_runtime(&disk_id);
             return Err(error);
         }
         disk_id
@@ -412,13 +433,13 @@ pub fn create_new_file_disk(
     request: CreateNewFileDiskRequestDto,
 ) -> Result<CreateFileDiskResponse, ApiError> {
     let disk_id = {
-        let mut disk_runtime_store = state
-            .disk_runtime_store
+        let mut disk_catalog = state
+            .disk_catalog
             .lock()
-            .expect("disk runtime store mutex should not be poisoned");
+            .expect("disk catalog mutex should not be poisoned");
 
         let disk_id = disk_service::create_new_file_disk(
-            &mut disk_runtime_store,
+            disk_catalog.runtime_store_mut(),
             disk_service::CreateNewFileDiskRequest {
                 disk_name: request.disk_name,
                 file_path: request.file_path,
@@ -428,9 +449,9 @@ pub fn create_new_file_disk(
             },
         )?;
         if let Err(error) =
-            persistence_service::save_client_state(&state.backend, &disk_runtime_store)
+            persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())
         {
-            let _ = disk_runtime_store.remove_runtime(&disk_id);
+            let _ = disk_catalog.remove_runtime(&disk_id);
             return Err(error);
         }
         disk_id
@@ -445,12 +466,16 @@ pub fn mount_disk(
     request: MountDiskRequestDto,
 ) -> Result<MountDiskResponse, ApiError> {
     let target_id = {
-        let mut disk_runtime_store = state
-            .disk_runtime_store
+        let mut disk_catalog = state
+            .disk_catalog
             .lock()
-            .expect("disk runtime store mutex should not be poisoned");
+            .expect("disk catalog mutex should not be poisoned");
 
-        disk_service::mount_disk(&state.backend, &mut disk_runtime_store, &request.disk_id)?
+        disk_service::mount_disk(
+            &state.backend,
+            disk_catalog.runtime_store_mut(),
+            &request.disk_id,
+        )?
     };
 
     Ok(MountDiskResponse { target_id })
@@ -461,32 +486,115 @@ pub fn eject_disk(
     state: State<'_, ClientState>,
     request: EjectDiskRequestDto,
 ) -> Result<(), ApiError> {
-    let mut disk_runtime_store = state
-        .disk_runtime_store
+    let mut disk_catalog = state
+        .disk_catalog
         .lock()
-        .expect("disk runtime store mutex should not be poisoned");
+        .expect("disk catalog mutex should not be poisoned");
 
-    disk_service::eject_disk(&state.backend, &mut disk_runtime_store, &request.disk_id)
+    disk_service::eject_disk(
+        &state.backend,
+        disk_catalog.runtime_store_mut(),
+        &request.disk_id,
+    )
 }
 
 #[tauri::command]
 pub fn delete_disk(
     state: State<'_, ClientState>,
     request: DeleteDiskRequestDto,
-) -> Result<(), ApiError> {
-    let mut disk_runtime_store = state
-        .disk_runtime_store
+) -> Result<DeleteDiskResponse, ApiError> {
+    let mut disk_catalog = state
+        .disk_catalog
         .lock()
-        .expect("disk runtime store mutex should not be poisoned");
+        .expect("disk catalog mutex should not be poisoned");
 
-    let deleted_state =
-        disk_service::delete_disk(&state.backend, &mut disk_runtime_store, &request.disk_id)?;
+    let Some(mut removed_runtime) = disk_catalog.remove_runtime(&request.disk_id) else {
+        return Err(ApiError::new(
+            "disk-not-found",
+            "磁盘不存在",
+            Some(request.disk_id),
+        ));
+    };
 
-    if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_runtime_store)
-    {
-        disk_runtime_store.restore_removed_runtime(deleted_state.removed_runtime);
+    if let Err(error) = disk_service::prepare_deleted_runtime(&state.backend, &mut removed_runtime) {
+        disk_catalog.restore_removed_runtime(removed_runtime);
         return Err(error);
     }
+
+    if let Err(error) =
+        persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())
+    {
+        disk_catalog.restore_removed_runtime(removed_runtime);
+        return Err(error);
+    }
+
+    let deletion_id = disk_catalog.stage_pending_deletion(removed_runtime);
+    Ok(DeleteDiskResponse {
+        deletion_id,
+        undo_available: true,
+    })
+}
+
+#[tauri::command]
+pub fn undo_delete_disk(
+    state: State<'_, ClientState>,
+    request: UndoDeleteDiskRequestDto,
+) -> Result<(), ApiError> {
+    let mut disk_catalog = state
+        .disk_catalog
+        .lock()
+        .expect("disk catalog mutex should not be poisoned");
+
+    let pending_deletion = disk_catalog
+        .take_pending_deletion(&request.deletion_id)
+        .ok_or_else(|| {
+            ApiError::new(
+                "pending-deletion-not-found",
+                "删除撤销窗口已结束",
+                Some(request.deletion_id.clone()),
+            )
+        })?;
+    let disk_id = pending_deletion.removed_runtime.runtime.disk_id().to_string();
+    let deletion_id = pending_deletion.deletion_id.clone();
+
+    disk_catalog.restore_removed_runtime(pending_deletion.removed_runtime);
+
+    if let Err(error) =
+        persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())
+    {
+        let removed_runtime = disk_catalog.remove_runtime(&disk_id).ok_or_else(|| {
+            ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.clone()))
+        })?;
+        disk_catalog.restore_pending_deletion(PendingDiskDeletion {
+            deletion_id,
+            removed_runtime,
+        });
+
+        return Err(error);
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn commit_deleted_disk(
+    state: State<'_, ClientState>,
+    request: CommitDeletedDiskRequestDto,
+) -> Result<(), ApiError> {
+    let mut disk_catalog = state
+        .disk_catalog
+        .lock()
+        .expect("disk catalog mutex should not be poisoned");
+
+    disk_catalog
+        .commit_pending_deletion(&request.deletion_id)
+        .ok_or_else(|| {
+            ApiError::new(
+                "pending-deletion-not-found",
+                "删除撤销窗口已结束",
+                Some(request.deletion_id),
+            )
+        })?;
 
     Ok(())
 }
@@ -496,13 +604,13 @@ pub fn update_disk(
     state: State<'_, ClientState>,
     request: UpdateDiskRequestDto,
 ) -> Result<(), ApiError> {
-    let mut disk_runtime_store = state
-        .disk_runtime_store
+    let mut disk_catalog = state
+        .disk_catalog
         .lock()
-        .expect("disk runtime store mutex should not be poisoned");
+        .expect("disk catalog mutex should not be poisoned");
 
     let updated_state = disk_service::update_disk(
-        &mut disk_runtime_store,
+        disk_catalog.runtime_store_mut(),
         disk_service::UpdateDiskRequest {
             disk_id: request.disk_id,
             disk_name: request.disk_name,
@@ -510,9 +618,11 @@ pub fn update_disk(
         },
     )?;
 
-    if let Err(error) = persistence_service::save_client_state(&state.backend, &disk_runtime_store)
+    if let Err(error) =
+        persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())
     {
-        let runtime = disk_runtime_store
+        let runtime = disk_catalog
+            .runtime_store_mut()
             .find_runtime_mut(&updated_state.previous_snapshot.disk_id)
             .ok_or_else(|| {
                 ApiError::new(

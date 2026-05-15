@@ -75,6 +75,31 @@ body .el-dialog {
   --el-dialog-border-radius: var(--radius-panel);
 }
 
+body .el-message-box {
+  border-radius: var(--radius-panel);
+  background: var(--bg-surface-elevated);
+  border-color: var(--border-soft);
+  box-shadow: var(--shadow-soft);
+}
+
+body .el-message-box__title,
+body .el-message-box__message {
+  color: var(--text-primary);
+}
+
+body .el-message-box__status.el-icon {
+  color: var(--warning);
+}
+
+body .el-message-box__btns .el-button--primary {
+  --el-button-bg-color: var(--danger);
+  --el-button-border-color: var(--danger);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--danger) 88%, white);
+  --el-button-hover-border-color: color-mix(in srgb, var(--danger) 88%, white);
+  --el-button-active-bg-color: color-mix(in srgb, var(--danger) 88%, black);
+  --el-button-active-border-color: color-mix(in srgb, var(--danger) 88%, black);
+}
+
 body .el-popover.el-popper {
   padding: 8px;
   border-radius: 14px;

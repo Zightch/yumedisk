@@ -118,6 +118,8 @@ pub fn run() {
             commands::disk::mount_disk,
             commands::disk::eject_disk,
             commands::disk::delete_disk,
+            commands::disk::undo_delete_disk,
+            commands::disk::commit_deleted_disk,
             commands::disk::update_disk
         ])
         .run(tauri::generate_context!())

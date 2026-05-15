@@ -7,10 +7,10 @@ import CreateMemoryDiskDialog from "../../features/createMemoryDisk/CreateMemory
 import EditDiskDialog from "../../features/editDisk/EditDiskDialog.vue";
 import { mapHomeDiskDisplayItems } from "../../features/homeBootstrap/homeDisplayMapper";
 import { useHomeBootstrap } from "../../features/homeBootstrap/useHomeBootstrap";
+import { useRemoveDiskFlow } from "../../features/removeDisk/useRemoveDiskFlow";
 import SessionStatusDialog from "../../features/sessionStatus/SessionStatusDialog.vue";
 import { DEFAULT_THEME, applyTheme, type AppTheme } from "../../shared/theme/theme";
 import {
-  deleteDisk,
   ejectDisk,
 } from "../../shared/api/diskClient";
 import { getErrorMessage } from "../../shared/api/sessionClient";
@@ -44,6 +44,10 @@ const displayDisks = computed(() => mapHomeDiskDisplayItems(runtimeDisks.value, 
   sessionPhase: sessionPhase.value,
   diskDisplayPhase: diskDisplayPhase.value,
 }));
+const { removeDisk } = useRemoveDiskFlow({
+  actionLoadingDiskId,
+  loadHomeDiskList,
+});
 
 function handleOpenMemoryCreate() {
   memoryCreateVisible.value = true;
@@ -118,17 +122,13 @@ async function handleEjectDisk(diskId: string) {
 }
 
 async function handleDeleteDisk(diskId: string) {
-  actionLoadingDiskId.value = diskId;
-
-  try {
-    await deleteDisk({ diskId });
-    ElMessage.success("磁盘已删除");
-    await loadHomeDiskList({ showLoading: false });
-  } catch (error) {
-    ElMessage.error(getErrorMessage(error));
-  } finally {
-    actionLoadingDiskId.value = null;
+  const disk = runtimeDisks.value.find((item) => item.diskId === diskId) ?? null;
+  if (disk === null) {
+    ElMessage.error("磁盘不存在");
+    return;
   }
+
+  await removeDisk(disk);
 }
 
 async function handleRescanRuntimeDisks() {

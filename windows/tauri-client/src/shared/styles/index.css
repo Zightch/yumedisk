@@ -5,5 +5,6 @@
 @import "./listPanel.css";
 @import "./diskCard.css";
 @import "./dialogs.css";
+@import "./removeDiskNotification.css";
 @import "./sessionStatusDialog.css";
 @import "./settingsPage.css";

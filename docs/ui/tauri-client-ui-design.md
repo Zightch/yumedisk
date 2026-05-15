@@ -644,12 +644,14 @@ Toast 用于轻量反馈，例如：
 
 位置：
 
-- 左下角固定堆叠。
+- 顶部右侧固定堆叠。
 
 行为：
 
 - 默认显示约 `3.4s` 到 `3.5s`。
 - 不阻塞主流程。
+- 删除成功通知内提供 `撤销` 动作。
+- 删除通知关闭后，还需等待其退场动画完成，再提交最终删除。
 - 后续实现优先使用 Element Plus `ElMessage` / `ElNotification`，但位置和视觉要贴合当前方案。
 
 ## 10. Element Plus 落地映射
@@ -800,7 +802,7 @@ UI 通过 Tauri command 调用宿主能力。
 | 查询主页磁盘 | `query_home_disk_list` | 获取当前主页需要的运行时磁盘快照 |
 | 打开会话 | `open_session` | 打开 `BackendRust` / `AppKernel` 会话并返回会话快照 |
 | 创建 | `createDisk` | 创建盘配置并在宿主侧立即生成对应 `Media` 实例，但不自动挂载 |
-| 删除 | `removeDisk` | 删除指定磁盘 |
+| 删除 | `removeDisk` | 删除指定磁盘并返回短暂撤销窗口 |
 | 挂载 | `mountDisk` | 使用 `DiskRuntime` 当前唯一 `media` 字段并正式建盘 |
 | 拔出 | `ejectDisk` | 从 `BackendRust` 拔出指定磁盘；内存盘回收 `media`，文件盘清空 `media` |
 | 更新 | `updateDiskConfig` | 修改名称、自动挂载、路径等配置 |
@@ -812,6 +814,14 @@ UI 通过 Tauri command 调用宿主能力。
 - 返回明确 DTO，不暴露 Rust 内部结构。
 - 错误返回包含 code、message、可选 detail。
 - UI 文案不直接展示底层错误原文，应映射成用户能理解的提示。
+
+删除命令边界补充：
+
+- `deleteDisk` 在宿主侧先删除 runtime 并立即同步配置，再返回 `deletionId`。
+- 内存盘删除后，`Media` 先进入宿主待提交删除区，不在通知显示期内直接释放。
+- 文件盘删除后，不进入 `Media` 回收站，不保留打开文件句柄，只保留可撤销的 runtime 记录。
+- `undoDeleteDisk` 会把 runtime 恢复回列表并重新写回配置。
+- `commitDeletedDisk` 只在撤销窗口结束后调用，用于最终丢弃待提交删除记录，不额外改写配置。
 
 创建命令边界：
 
