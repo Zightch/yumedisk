@@ -7,7 +7,7 @@ import { getErrorMessage } from "../../shared/api/sessionClient";
 
 interface EditDiskFormModel {
   diskName: string;
-  autoConnect: boolean;
+  autoMount: boolean;
 }
 
 const props = defineProps<{
@@ -29,7 +29,7 @@ const submitting = ref(false);
 const errorText = ref<string | null>(null);
 const form = reactive<EditDiskFormModel>({
   diskName: "",
-  autoConnect: false,
+  autoMount: false,
 });
 
 watch(
@@ -40,7 +40,7 @@ watch(
     }
 
     form.diskName = disk.diskName;
-    form.autoConnect = disk.autoConnect;
+    form.autoMount = disk.autoMount;
     errorText.value = null;
   },
   { immediate: true },
@@ -71,7 +71,7 @@ async function handleSubmit() {
   const request: UpdateDiskRequest = {
     diskId: props.disk.diskId,
     diskName: form.diskName.trim(),
-    autoConnect: form.autoConnect,
+    autoMount: form.autoMount,
   };
 
   submitting.value = true;
@@ -114,8 +114,8 @@ async function handleSubmit() {
           <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
         </el-form-item>
 
-        <el-form-item class="app-dialog-form__switch" label="启动自动连接">
-          <el-switch v-model="form.autoConnect" />
+        <el-form-item class="app-dialog-form__switch" label="启动自动挂载">
+          <el-switch v-model="form.autoMount" />
         </el-form-item>
       </el-form>
 

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  ConnectDiskRequest,
-  ConnectDiskResponse,
+  MountDiskRequest,
+  MountDiskResponse,
   CreateFileDiskRequest,
   CreateFileDiskResponse,
   CreateNewFileDiskRequest,
@@ -9,7 +9,7 @@ import type {
   CreateMemoryDiskRequest,
   CreateMemoryDiskResponse,
   DeleteDiskRequest,
-  DisconnectDiskRequest,
+  EjectDiskRequest,
   HomeDiskListSnapshot,
   PickRawFilePathResponse,
   UpdateDiskRequest,
@@ -51,16 +51,16 @@ export async function createNewFileDisk(
   return invoke<CreateNewFileDiskResponse>("create_new_file_disk", { request });
 }
 
-export async function connectDisk(
-  request: ConnectDiskRequest,
-): Promise<ConnectDiskResponse> {
-  return invoke<ConnectDiskResponse>("connect_disk", { request });
+export async function mountDisk(
+  request: MountDiskRequest,
+): Promise<MountDiskResponse> {
+  return invoke<MountDiskResponse>("mount_disk", { request });
 }
 
-export async function disconnectDisk(
-  request: DisconnectDiskRequest,
+export async function ejectDisk(
+  request: EjectDiskRequest,
 ): Promise<void> {
-  return invoke<void>("disconnect_disk", { request });
+  return invoke<void>("eject_disk", { request });
 }
 
 export async function deleteDisk(

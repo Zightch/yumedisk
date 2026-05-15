@@ -11,7 +11,7 @@ import SessionStatusDialog from "../../features/sessionStatus/SessionStatusDialo
 import { DEFAULT_THEME, applyTheme, type AppTheme } from "../../shared/theme/theme";
 import {
   deleteDisk,
-  disconnectDisk,
+  ejectDisk,
 } from "../../shared/api/diskClient";
 import { getErrorMessage } from "../../shared/api/sessionClient";
 import AppHeader from "../../widgets/AppHeader/AppHeader.vue";
@@ -27,10 +27,10 @@ const currentTheme = ref<AppTheme>({ ...DEFAULT_THEME });
 
 const {
   actionLoadingDiskId,
-  autoConnectCount,
+  autoMountCount,
   diskDisplayPhase,
   errorText,
-  handleConnectDisk: runConnectDisk,
+  handleMountDisk: runMountDisk,
   handleRescanRuntimeDisks: runRescanRuntimeDisks,
   loadHomeDiskList,
   loading,
@@ -85,15 +85,15 @@ async function handleDiskUpdated() {
   await loadHomeDiskList();
 }
 
-async function handleConnectDisk(
+async function handleMountDisk(
   diskId: string,
   options: { silentSuccess?: boolean } = {},
 ) {
-  const { ok, errorText: message } = await runConnectDisk(diskId, options);
+  const { ok, errorText: message } = await runMountDisk(diskId, options);
 
   if (ok) {
     if (!options.silentSuccess) {
-      ElMessage.success("磁盘已连接");
+      ElMessage.success("磁盘已挂载");
     }
     return;
   }
@@ -103,12 +103,12 @@ async function handleConnectDisk(
   }
 }
 
-async function handleDisconnectDisk(diskId: string) {
+async function handleEjectDisk(diskId: string) {
   actionLoadingDiskId.value = diskId;
 
   try {
-    await disconnectDisk({ diskId });
-    ElMessage.success("磁盘已断开");
+    await ejectDisk({ diskId });
+    ElMessage.success("磁盘已拔出");
     await loadHomeDiskList({ showLoading: false });
   } catch (error) {
     ElMessage.error(getErrorMessage(error));
@@ -170,13 +170,13 @@ function handleThemeChanged(theme: AppTheme) {
     <el-main class="home-page__main">
       <DiskListPanel
         :disks="displayDisks"
-        :auto-connect-count="autoConnectCount"
+        :auto-mount-count="autoMountCount"
         :loading="loading"
         :error-text="errorText"
         :action-loading-disk-id="actionLoadingDiskId"
         @rescan="handleRescanRuntimeDisks"
-        @connect="handleConnectDisk"
-        @disconnect="handleDisconnectDisk"
+        @mount="handleMountDisk"
+        @eject="handleEjectDisk"
         @edit="handleEditDisk"
         @delete="handleDeleteDisk"
       />

@@ -6,7 +6,7 @@ import DiskCard from "../DiskCard/DiskCard.vue";
 
 const props = defineProps<{
   disks: HomeDiskListItem[];
-  autoConnectCount: number;
+  autoMountCount: number;
   loading: boolean;
   errorText: string | null;
   actionLoadingDiskId: string | null;
@@ -14,8 +14,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   rescan: [];
-  connect: [diskId: string];
-  disconnect: [diskId: string];
+  mount: [diskId: string];
+  eject: [diskId: string];
   delete: [diskId: string];
   edit: [diskId: string];
 }>();
@@ -40,8 +40,8 @@ const diskCount = computed(() => props.disks.length);
           </el-button>
 
           <div class="list-panel__summary">
-            <span class="list-panel__summary-label">自动连接</span>
-            <span class="list-panel__summary-value">{{ autoConnectCount }} / {{ diskCount }}</span>
+            <span class="list-panel__summary-label">自动挂载</span>
+            <span class="list-panel__summary-value">{{ autoMountCount }} / {{ diskCount }}</span>
           </div>
         </div>
       </div>
@@ -59,8 +59,8 @@ const diskCount = computed(() => props.disks.length);
               :key="disk.diskId"
               :disk="disk"
               :action-loading="actionLoadingDiskId === disk.diskId"
-              @connect="emit('connect', $event)"
-              @disconnect="emit('disconnect', $event)"
+              @mount="emit('mount', $event)"
+              @eject="emit('eject', $event)"
               @edit="emit('edit', $event)"
               @delete="emit('delete', $event)"
             />

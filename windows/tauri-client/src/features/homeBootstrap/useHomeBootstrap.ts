@@ -2,7 +2,7 @@ import { nextTick, onMounted, ref } from "vue";
 import type { HomeDiskListItem, HomeDiskListSnapshot } from "../../entities/disk/model";
 import type { SessionPhase, SessionSnapshot } from "../../entities/session/model";
 import {
-  connectDisk,
+  mountDisk,
   queryHomeDiskList,
   rescanRuntimeDisks,
 } from "../../shared/api/diskClient";
@@ -16,7 +16,7 @@ import type { HomeDiskDisplayPhase } from "./homeDisplayMapper";
 
 export interface HomeBootstrapState {
   runtimeDisks: HomeDiskListItem[];
-  autoConnectCount: number;
+  autoMountCount: number;
   loading: boolean;
   errorText: string | null;
   sessionPhase: SessionPhase;
@@ -27,19 +27,19 @@ export interface HomeBootstrapState {
 
 export function useHomeBootstrap() {
   const runtimeDisks = ref<HomeDiskListItem[]>([]);
-  const autoConnectCount = ref(0);
+  const autoMountCount = ref(0);
   const loading = ref(true);
   const errorText = ref<string | null>(null);
   const sessionPhase = ref<SessionPhase>("initializing");
   const sessionStatusText = ref<string | null>("正在恢复配置");
   const diskDisplayPhase = ref<HomeDiskDisplayPhase>("startup");
   const sessionSnapshot = ref<SessionSnapshot | null>(null);
-  const initialAutoConnectCompleted = ref(false);
+  const initialAutoMountCompleted = ref(false);
   const actionLoadingDiskId = ref<string | null>(null);
 
   function applyHomeDiskListSnapshot(snapshot: HomeDiskListSnapshot): void {
     runtimeDisks.value = snapshot.disks;
-    autoConnectCount.value = snapshot.autoConnectCount;
+    autoMountCount.value = snapshot.autoMountCount;
   }
 
   async function runHomeDiskListOperation(
@@ -61,7 +61,7 @@ export function useHomeBootstrap() {
     } catch (error) {
       if (!preserveSnapshotOnError) {
         runtimeDisks.value = [];
-        autoConnectCount.value = 0;
+        autoMountCount.value = 0;
       }
       errorText.value = getErrorMessage(error);
       return null;
@@ -85,21 +85,21 @@ export function useHomeBootstrap() {
     });
   }
 
-  async function handleConnectDisk(
+  async function handleMountDisk(
     diskId: string,
     options: { silentSuccess?: boolean } = {},
   ): Promise<{ ok: boolean; errorText: string | null }> {
     actionLoadingDiskId.value = diskId;
 
     try {
-      await connectDisk({ diskId });
+      await mountDisk({ diskId });
       await loadHomeDiskList({ showLoading: false });
       return { ok: true, errorText: null };
     } catch (error) {
       return {
         ok: false,
         errorText: options.silentSuccess
-          ? `自动连接失败：${getErrorMessage(error)}`
+          ? `自动挂载失败：${getErrorMessage(error)}`
           : getErrorMessage(error),
       };
     } finally {
@@ -107,19 +107,19 @@ export function useHomeBootstrap() {
     }
   }
 
-  async function runInitialAutoConnect(snapshot: HomeDiskListSnapshot) {
-    if (initialAutoConnectCompleted.value) {
+  async function runInitialAutoMount(snapshot: HomeDiskListSnapshot) {
+    if (initialAutoMountCompleted.value) {
       return;
     }
 
-    initialAutoConnectCompleted.value = true;
+    initialAutoMountCompleted.value = true;
 
     const diskIds = snapshot.disks
-      .filter((disk) => disk.autoConnect && disk.status === "disconnected")
+      .filter((disk) => disk.autoMount && disk.status === "unmounted")
       .map((disk) => disk.diskId);
 
     for (const diskId of diskIds) {
-      await handleConnectDisk(diskId, { silentSuccess: true });
+      await handleMountDisk(diskId, { silentSuccess: true });
     }
   }
 
@@ -153,8 +153,8 @@ export function useHomeBootstrap() {
       diskDisplayPhase.value = "normal";
       await nextTick();
 
-      sessionStatusText.value = "正在执行自动连接";
-      await runInitialAutoConnect(rescanSnapshot);
+      sessionStatusText.value = "正在执行自动挂载";
+      await runInitialAutoMount(rescanSnapshot);
       sessionStatusText.value = sessionSnapshot.value.stateText;
       return true;
     } catch (error) {
@@ -173,7 +173,7 @@ export function useHomeBootstrap() {
     sessionPhase.value = "initializing";
     sessionStatusText.value = "正在恢复配置";
     diskDisplayPhase.value = "startup";
-    initialAutoConnectCompleted.value = false;
+    initialAutoMountCompleted.value = false;
 
     try {
       await restoreClientState();
@@ -200,7 +200,7 @@ export function useHomeBootstrap() {
   }
 
   async function retryOpenSessionFlow(): Promise<boolean> {
-    initialAutoConnectCompleted.value = false;
+    initialAutoMountCompleted.value = false;
     actionLoadingDiskId.value = null;
     return runOpenSessionFlow();
   }
@@ -211,10 +211,10 @@ export function useHomeBootstrap() {
 
   return {
     actionLoadingDiskId,
-    autoConnectCount,
+    autoMountCount,
     diskDisplayPhase,
     errorText,
-    handleConnectDisk,
+    handleMountDisk,
     handleRescanRuntimeDisks,
     loadHomeDiskList,
     loading,

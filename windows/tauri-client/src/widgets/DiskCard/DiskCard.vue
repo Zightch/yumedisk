@@ -13,15 +13,15 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  connect: [diskId: string];
-  disconnect: [diskId: string];
+  mount: [diskId: string];
+  eject: [diskId: string];
   delete: [diskId: string];
   edit: [diskId: string];
 }>();
 
 const detailText = computed(() => formatDiskDetailText(props.disk));
 const summaryText = computed(() => formatDiskSummaryText(props.disk));
-const isConnected = computed(() => props.disk.status === "connected");
+const isMounted = computed(() => props.disk.status === "mounted");
 const isInvalid = computed(() => props.disk.status === "invalid");
 const avatarText = computed(() => (props.disk.media.kind === "memory" ? "M" : "F"));
 const avatarClassName = computed(() =>
@@ -29,32 +29,32 @@ const avatarClassName = computed(() =>
 );
 
 const statusText = computed(() => {
-  if (props.disk.status === "connected") {
-    return "已连接";
+  if (props.disk.status === "mounted") {
+    return "已挂载";
   }
 
   if (props.disk.status === "invalid") {
     return "无效";
   }
 
-  return "未连接";
+  return "未挂载";
 });
 
 const statusClassName = computed(() => {
-  if (props.disk.status === "connected") {
-    return "disk-card__status--connected";
+  if (props.disk.status === "mounted") {
+    return "disk-card__status--mounted";
   }
 
   if (props.disk.status === "invalid") {
     return "disk-card__status--invalid";
   }
 
-  return "disk-card__status--disconnected";
+  return "disk-card__status--unmounted";
 });
 
-const primaryActionText = computed(() => (isConnected.value ? "断开" : "连接"));
+const primaryActionText = computed(() => (isMounted.value ? "拔出" : "挂载"));
 const primaryActionClassName = computed(() =>
-  isConnected.value ? "disk-card__primary-action--disconnect" : "disk-card__primary-action--connect",
+  isMounted.value ? "disk-card__primary-action--eject" : "disk-card__primary-action--mount",
 );
 
 function handlePrimaryAction(): void {
@@ -62,12 +62,12 @@ function handlePrimaryAction(): void {
     return;
   }
 
-  if (isConnected.value) {
-    emit("disconnect", props.disk.diskId);
+  if (isMounted.value) {
+    emit("eject", props.disk.diskId);
     return;
   }
 
-  emit("connect", props.disk.diskId);
+  emit("mount", props.disk.diskId);
 }
 
 function handleEdit(): void {
@@ -88,10 +88,10 @@ function handleDelete(): void {
 </script>
 
 <template>
-  <article class="disk-card" :class="{ 'is-connected': isConnected }">
+  <article class="disk-card" :class="{ 'is-mounted': isMounted }">
     <div class="disk-card__badges">
-      <span v-if="disk.autoConnect" class="disk-card__status disk-card__status--auto">
-        自动连接
+      <span v-if="disk.autoMount" class="disk-card__status disk-card__status--auto">
+        自动挂载
       </span>
 
       <el-tooltip

@@ -12,7 +12,7 @@ interface MemoryDiskFormModel {
   diskName: string;
   capacityMiB: number | null;
   requestedMemoryKind: MemoryCreateKind;
-  autoConnect: boolean;
+  autoMount: boolean;
 }
 
 const props = defineProps<{
@@ -35,7 +35,7 @@ const form = reactive<MemoryDiskFormModel>({
   diskName: "",
   capacityMiB: 64,
   requestedMemoryKind: "auto",
-  autoConnect: false,
+  autoMount: false,
 });
 
 watch(
@@ -52,7 +52,7 @@ function resetForm() {
   form.diskName = "";
   form.capacityMiB = 64;
   form.requestedMemoryKind = "auto";
-  form.autoConnect = false;
+  form.autoMount = false;
 }
 
 function handleCancel() {
@@ -85,7 +85,7 @@ async function handleSubmit() {
     diskName: form.diskName.trim(),
     capacityMiB: form.capacityMiB ?? 0,
     requestedMemoryKind: form.requestedMemoryKind,
-    autoConnect: form.autoConnect,
+    autoMount: form.autoMount,
   };
 
   submitting.value = true;
@@ -148,8 +148,8 @@ async function handleSubmit() {
               </el-radio-group>
             </el-form-item>
 
-            <el-form-item class="app-dialog-form__switch" label="启动自动连接">
-              <el-switch v-model="form.autoConnect" />
+            <el-form-item class="app-dialog-form__switch" label="启动自动挂载">
+              <el-switch v-model="form.autoMount" />
             </el-form-item>
           </el-form>
 

@@ -49,7 +49,7 @@ pub fn save_client_state(
     runtime_store: &DiskRuntimeStore,
 ) -> Result<(), ApiError> {
     let persisted_config = PersistedClientConfig {
-        version: 1,
+        version: client_config::CONFIG_VERSION,
         session_config: map_session_config(backend.session_config()),
         disks: runtime_store
             .snapshots()
@@ -98,7 +98,7 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
             Ok(DiskRuntime::new_memory(
                 persisted_disk.disk_id,
                 persisted_disk.disk_name,
-                persisted_disk.auto_connect,
+                persisted_disk.auto_mount,
                 memory_kind,
                 capacity_bytes,
                 media,
@@ -116,18 +116,18 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
                 Ok(probe) => Ok(DiskRuntime::new_file(
                     persisted_disk.disk_id,
                     persisted_disk.disk_name,
-                    persisted_disk.auto_connect,
+                    persisted_disk.auto_mount,
                     file_kind,
                     file_path,
                     probe.capacity_bytes,
                     probe.read_only,
-                    crate::state::disk_runtime::DiskRuntimeStatus::Disconnected,
+                    crate::state::disk_runtime::DiskRuntimeStatus::Unmounted,
                     None,
                 )),
                 Err(error) => Ok(DiskRuntime::new_file(
                     persisted_disk.disk_id,
                     persisted_disk.disk_name,
-                    persisted_disk.auto_connect,
+                    persisted_disk.auto_mount,
                     file_kind,
                     file_path,
                     0,
@@ -159,7 +159,7 @@ fn map_persisted_disk_record(
     PersistedDiskRecord {
         disk_id: snapshot.disk_id,
         disk_name: snapshot.disk_name,
-        auto_connect: snapshot.auto_connect,
+        auto_mount: snapshot.auto_mount,
         media: match snapshot.media {
             crate::state::disk_runtime::DiskMediaConfig::Memory {
                 memory_kind,
@@ -212,8 +212,8 @@ pub fn probe_raw_file_media(file_path: &str) -> Result<RawFileProbe, ApiError> {
         ));
     }
 
-    let media =
-        RawFileMedia::open(&file_path_buf).map_err(|error| map_raw_file_media_error(error, file_path))?;
+    let media = RawFileMedia::open(&file_path_buf)
+        .map_err(|error| map_raw_file_media_error(error, file_path))?;
 
     Ok(RawFileProbe {
         capacity_bytes: media.size_bytes(),

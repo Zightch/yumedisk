@@ -2,7 +2,7 @@ export type MemoryMediaKind = "denseMem" | "sparseMem";
 export type FileMediaKind = "rawFile";
 export type CreateFileFormat = "raw" | "vmdk" | "vhd" | "vhdx" | "vdi" | "qcow2";
 export type MemoryCreateKind = "auto" | MemoryMediaKind;
-export type DiskStatus = "disconnected" | "connected" | "invalid";
+export type DiskStatus = "unmounted" | "mounted" | "invalid";
 
 export type HomeDiskMedia =
   | {
@@ -20,7 +20,7 @@ export type HomeDiskMedia =
 export interface HomeDiskListItem {
   diskId: string;
   diskName: string;
-  autoConnect: boolean;
+  autoMount: boolean;
   readOnly: boolean;
   status: DiskStatus;
   invalidReason: string | null;
@@ -32,14 +32,14 @@ export interface HomeDiskListItem {
 
 export interface HomeDiskListSnapshot {
   disks: HomeDiskListItem[];
-  autoConnectCount: number;
+  autoMountCount: number;
 }
 
 export interface CreateMemoryDiskRequest {
   diskName: string;
   capacityMiB: number;
   requestedMemoryKind: MemoryCreateKind;
-  autoConnect: boolean;
+  autoMount: boolean;
 }
 
 export interface CreateMemoryDiskResponse {
@@ -49,7 +49,7 @@ export interface CreateMemoryDiskResponse {
 export interface CreateFileDiskRequest {
   diskName: string;
   filePath: string;
-  autoConnect: boolean;
+  autoMount: boolean;
 }
 
 export interface CreateFileDiskResponse {
@@ -61,22 +61,22 @@ export interface CreateNewFileDiskRequest {
   filePath: string;
   capacityMiB: number;
   fileFormat: CreateFileFormat;
-  autoConnect: boolean;
+  autoMount: boolean;
 }
 
 export interface CreateNewFileDiskResponse {
   diskId: string;
 }
 
-export interface ConnectDiskRequest {
+export interface MountDiskRequest {
   diskId: string;
 }
 
-export interface ConnectDiskResponse {
+export interface MountDiskResponse {
   targetId: number;
 }
 
-export interface DisconnectDiskRequest {
+export interface EjectDiskRequest {
   diskId: string;
 }
 
@@ -87,7 +87,7 @@ export interface DeleteDiskRequest {
 export interface UpdateDiskRequest {
   diskId: string;
   diskName: string;
-  autoConnect: boolean;
+  autoMount: boolean;
 }
 
 export interface PickRawFilePathResponse {

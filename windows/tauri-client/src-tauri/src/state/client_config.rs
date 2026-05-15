@@ -1,3 +1,4 @@
+use std::convert::TryFrom;
 use std::env;
 use std::fmt;
 use std::fs;
@@ -6,8 +7,9 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 
-const CONFIG_VERSION: u32 = 1;
+pub const CONFIG_VERSION: u32 = 2;
 const CONFIG_DIR_NAME: &str = ".yumedisk";
 const CONFIG_FILE_NAME: &str = "client.json";
 
@@ -46,7 +48,7 @@ pub enum PersistedDiskMediaConfig {
 pub struct PersistedDiskRecord {
     pub disk_id: String,
     pub disk_name: String,
-    pub auto_connect: bool,
+    pub auto_mount: bool,
     pub media: PersistedDiskMediaConfig,
 }
 
@@ -158,15 +160,27 @@ pub fn load_client_config() -> Result<PersistedClientConfig, ClientConfigStoreEr
         path: path.clone(),
         source,
     })?;
-    let config: PersistedClientConfig =
+    let config_value: Value =
         serde_json::from_str(&text).map_err(|source| ClientConfigStoreError::ParseFailed {
             path: path.clone(),
             source,
         })?;
+    let version = config_value
+        .get("version")
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(0);
 
-    if config.version != CONFIG_VERSION {
-        return Err(ClientConfigStoreError::UnsupportedVersion(config.version));
+    if version != CONFIG_VERSION {
+        return Err(ClientConfigStoreError::UnsupportedVersion(version));
     }
+
+    let config: PersistedClientConfig = serde_json::from_value(config_value).map_err(|source| {
+        ClientConfigStoreError::ParseFailed {
+            path: path.clone(),
+            source,
+        }
+    })?;
 
     Ok(config)
 }

@@ -43,7 +43,7 @@ pub struct CreateMemoryDiskRequestDto {
     #[serde(rename = "capacityMiB")]
     pub capacity_mib: u64,
     pub requested_memory_kind: RequestedMemoryMediaKindDto,
-    pub auto_connect: bool,
+    pub auto_mount: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -51,7 +51,7 @@ pub struct CreateMemoryDiskRequestDto {
 pub struct CreateFileDiskRequestDto {
     pub disk_name: String,
     pub file_path: String,
-    pub auto_connect: bool,
+    pub auto_mount: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,7 +73,7 @@ pub struct CreateNewFileDiskRequestDto {
     #[serde(rename = "capacityMiB")]
     pub capacity_mib: u64,
     pub file_format: CreateFileFormatDto,
-    pub auto_connect: bool,
+    pub auto_mount: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,19 +96,19 @@ pub struct CreateFileDiskResponse {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConnectDiskRequestDto {
+pub struct MountDiskRequestDto {
     pub disk_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ConnectDiskResponse {
+pub struct MountDiskResponse {
     pub target_id: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DisconnectDiskRequestDto {
+pub struct EjectDiskRequestDto {
     pub disk_id: String,
 }
 
@@ -123,7 +123,7 @@ pub struct DeleteDiskRequestDto {
 pub struct UpdateDiskRequestDto {
     pub disk_id: String,
     pub disk_name: String,
-    pub auto_connect: bool,
+    pub auto_mount: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -142,8 +142,8 @@ pub enum FileMediaKindDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DiskStatusDto {
-    Disconnected,
-    Connected,
+    Unmounted,
+    Mounted,
     Invalid,
 }
 
@@ -171,7 +171,7 @@ pub enum HomeDiskMediaDto {
 pub struct HomeDiskListItemDto {
     pub disk_id: String,
     pub disk_name: String,
-    pub auto_connect: bool,
+    pub auto_mount: bool,
     pub read_only: bool,
     pub status: DiskStatusDto,
     pub invalid_reason: Option<String>,
@@ -185,7 +185,7 @@ pub struct HomeDiskListItemDto {
 #[serde(rename_all = "camelCase")]
 pub struct QueryHomeDiskListResponse {
     pub disks: Vec<HomeDiskListItemDto>,
-    pub auto_connect_count: u32,
+    pub auto_mount_count: u32,
 }
 
 fn map_managed_disk_snapshot_dto(
@@ -233,11 +233,11 @@ fn map_home_disk_list_item_dto(
     HomeDiskListItemDto {
         disk_id: snapshot.disk_id,
         disk_name: snapshot.disk_name,
-        auto_connect: snapshot.auto_connect,
+        auto_mount: snapshot.auto_mount,
         read_only: snapshot.read_only,
         status: match snapshot.status {
-            DiskRuntimeStatus::Disconnected => DiskStatusDto::Disconnected,
-            DiskRuntimeStatus::Connected { .. } => DiskStatusDto::Connected,
+            DiskRuntimeStatus::Unmounted => DiskStatusDto::Unmounted,
+            DiskRuntimeStatus::Mounted { .. } => DiskStatusDto::Mounted,
             DiskRuntimeStatus::Invalid { .. } => DiskStatusDto::Invalid,
         },
         invalid_reason: snapshot.invalid_reason,
@@ -272,11 +272,7 @@ fn map_create_file_format(file_format: CreateFileFormatDto) -> disk_service::Cre
 fn build_home_disk_list_response(
     snapshot: disk_service::HomeDiskListSnapshot,
 ) -> QueryHomeDiskListResponse {
-    let auto_connect_count = snapshot
-        .disks
-        .iter()
-        .filter(|disk| disk.auto_connect)
-        .count() as u32;
+    let auto_mount_count = snapshot.disks.iter().filter(|disk| disk.auto_mount).count() as u32;
     let disks = snapshot
         .disks
         .into_iter()
@@ -285,7 +281,7 @@ fn build_home_disk_list_response(
 
     QueryHomeDiskListResponse {
         disks,
-        auto_connect_count,
+        auto_mount_count,
     }
 }
 
@@ -350,7 +346,7 @@ pub fn create_memory_disk(
                 requested_memory_kind: map_requested_memory_media_kind(
                     request.requested_memory_kind,
                 ),
-                auto_connect: request.auto_connect,
+                auto_mount: request.auto_mount,
             },
         )?;
         if let Err(error) =
@@ -395,7 +391,7 @@ pub fn create_file_disk(
             disk_service::CreateFileDiskRequest {
                 disk_name: request.disk_name,
                 file_path: request.file_path,
-                auto_connect: request.auto_connect,
+                auto_mount: request.auto_mount,
             },
         )?;
         if let Err(error) =
@@ -428,7 +424,7 @@ pub fn create_new_file_disk(
                 file_path: request.file_path,
                 capacity_mib: request.capacity_mib,
                 file_format: map_create_file_format(request.file_format),
-                auto_connect: request.auto_connect,
+                auto_mount: request.auto_mount,
             },
         )?;
         if let Err(error) =
@@ -444,33 +440,33 @@ pub fn create_new_file_disk(
 }
 
 #[tauri::command]
-pub fn connect_disk(
+pub fn mount_disk(
     state: State<'_, ClientState>,
-    request: ConnectDiskRequestDto,
-) -> Result<ConnectDiskResponse, ApiError> {
+    request: MountDiskRequestDto,
+) -> Result<MountDiskResponse, ApiError> {
     let target_id = {
         let mut disk_runtime_store = state
             .disk_runtime_store
             .lock()
             .expect("disk runtime store mutex should not be poisoned");
 
-        disk_service::connect_disk(&state.backend, &mut disk_runtime_store, &request.disk_id)?
+        disk_service::mount_disk(&state.backend, &mut disk_runtime_store, &request.disk_id)?
     };
 
-    Ok(ConnectDiskResponse { target_id })
+    Ok(MountDiskResponse { target_id })
 }
 
 #[tauri::command]
-pub fn disconnect_disk(
+pub fn eject_disk(
     state: State<'_, ClientState>,
-    request: DisconnectDiskRequestDto,
+    request: EjectDiskRequestDto,
 ) -> Result<(), ApiError> {
     let mut disk_runtime_store = state
         .disk_runtime_store
         .lock()
         .expect("disk runtime store mutex should not be poisoned");
 
-    disk_service::disconnect_disk(&state.backend, &mut disk_runtime_store, &request.disk_id)
+    disk_service::eject_disk(&state.backend, &mut disk_runtime_store, &request.disk_id)
 }
 
 #[tauri::command]
@@ -510,7 +506,7 @@ pub fn update_disk(
         disk_service::UpdateDiskRequest {
             disk_id: request.disk_id,
             disk_name: request.disk_name,
-            auto_connect: request.auto_connect,
+            auto_mount: request.auto_mount,
         },
     )?;
 
@@ -527,7 +523,7 @@ pub fn update_disk(
             })?;
         runtime.set_identity(
             updated_state.previous_snapshot.disk_name,
-            updated_state.previous_snapshot.auto_connect,
+            updated_state.previous_snapshot.auto_mount,
         );
         return Err(error);
     }

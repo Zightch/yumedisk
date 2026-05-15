@@ -17,7 +17,7 @@ import { getErrorMessage } from "../../shared/api/sessionClient";
 interface FileDiskFormModel {
   diskName: string;
   filePath: string;
-  autoConnect: boolean;
+  autoMount: boolean;
 }
 
 interface NewFileDiskFormModel {
@@ -25,7 +25,7 @@ interface NewFileDiskFormModel {
   filePath: string;
   capacityMiB: number | null;
   fileFormat: CreateFileFormat;
-  autoConnect: boolean;
+  autoMount: boolean;
 }
 
 const props = defineProps<{
@@ -49,14 +49,14 @@ const activeTab = ref("pickExisting");
 const form = reactive<FileDiskFormModel>({
   diskName: "",
   filePath: "",
-  autoConnect: false,
+  autoMount: false,
 });
 const newFileForm = reactive<NewFileDiskFormModel>({
   diskName: "",
   filePath: "",
   capacityMiB: null,
   fileFormat: "raw",
-  autoConnect: false,
+  autoMount: false,
 });
 
 const createFileFormats: Array<{
@@ -88,12 +88,12 @@ watch(
 function resetForm() {
   form.diskName = "";
   form.filePath = "";
-  form.autoConnect = false;
+  form.autoMount = false;
   newFileForm.diskName = "";
   newFileForm.filePath = "";
   newFileForm.capacityMiB = null;
   newFileForm.fileFormat = "raw";
-  newFileForm.autoConnect = false;
+  newFileForm.autoMount = false;
 }
 
 function handleCancel() {
@@ -175,7 +175,7 @@ async function handleSubmit() {
   const request: CreateFileDiskRequest = {
     diskName: form.diskName.trim(),
     filePath: form.filePath.trim(),
-    autoConnect: form.autoConnect,
+    autoMount: form.autoMount,
   };
 
   submitting.value = true;
@@ -203,7 +203,7 @@ async function handleCreateNewFileSubmit() {
     filePath: newFileForm.filePath.trim(),
     capacityMiB: newFileForm.capacityMiB ?? 0,
     fileFormat: newFileForm.fileFormat,
-    autoConnect: newFileForm.autoConnect,
+    autoMount: newFileForm.autoMount,
   };
 
   submitting.value = true;
@@ -266,8 +266,8 @@ async function handleCreateNewFileSubmit() {
               </div>
             </el-form-item>
 
-            <el-form-item class="app-dialog-form__switch" label="启动自动连接">
-              <el-switch v-model="form.autoConnect" />
+            <el-form-item class="app-dialog-form__switch" label="启动自动挂载">
+              <el-switch v-model="form.autoMount" />
             </el-form-item>
           </el-form>
 
@@ -340,8 +340,8 @@ async function handleCreateNewFileSubmit() {
               </el-radio-group>
             </el-form-item>
 
-            <el-form-item class="app-dialog-form__switch" label="启动自动连接">
-              <el-switch v-model="newFileForm.autoConnect" />
+            <el-form-item class="app-dialog-form__switch" label="启动自动挂载">
+              <el-switch v-model="newFileForm.autoMount" />
             </el-form-item>
           </el-form>
 

@@ -17,7 +17,7 @@ export function formatSessionPhaseDescription(
   sessionStatusText: string | null,
 ): string {
   if (sessionPhase === "ready") {
-    return "会话已打开，可以继续连接与管理磁盘。";
+    return "会话已打开，可以继续挂载与管理磁盘。";
   }
 
   if (sessionPhase === "failed") {

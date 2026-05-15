@@ -26,7 +26,7 @@ use crate::state::disk_runtime::RemovedDiskRuntime;
 pub struct HomeDiskListItemSnapshot {
     pub disk_id: String,
     pub disk_name: String,
-    pub auto_connect: bool,
+    pub auto_mount: bool,
     pub read_only: bool,
     pub status: DiskRuntimeStatus,
     pub invalid_reason: Option<String>,
@@ -61,14 +61,14 @@ pub struct CreateMemoryDiskRequest {
     pub disk_name: String,
     pub capacity_mib: u64,
     pub requested_memory_kind: RequestedMemoryMediaKind,
-    pub auto_connect: bool,
+    pub auto_mount: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateFileDiskRequest {
     pub disk_name: String,
     pub file_path: String,
-    pub auto_connect: bool,
+    pub auto_mount: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,14 +87,14 @@ pub struct CreateNewFileDiskRequest {
     pub file_path: String,
     pub capacity_mib: u64,
     pub file_format: CreateFileFormat,
-    pub auto_connect: bool,
+    pub auto_mount: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateDiskRequest {
     pub disk_id: String,
     pub disk_name: String,
-    pub auto_connect: bool,
+    pub auto_mount: bool,
 }
 
 const MIB_BYTES: u64 = 1024 * 1024;
@@ -156,7 +156,7 @@ pub fn create_memory_disk(
     runtime_store.insert_runtime(DiskRuntime::new_memory(
         disk_id.clone(),
         disk_name.to_string(),
-        request.auto_connect,
+        request.auto_mount,
         memory_kind,
         capacity_bytes,
         media,
@@ -199,18 +199,18 @@ pub fn create_file_disk(
         Ok(probe) => DiskRuntime::new_file(
             disk_id.clone(),
             disk_name.to_string(),
-            request.auto_connect,
+            request.auto_mount,
             FileMediaKind::RawFile,
             file_path.to_string(),
             probe.capacity_bytes,
             probe.read_only,
-            DiskRuntimeStatus::Disconnected,
+            DiskRuntimeStatus::Unmounted,
             None,
         ),
         Err(_) => DiskRuntime::new_file(
             disk_id.clone(),
             disk_name.to_string(),
-            request.auto_connect,
+            request.auto_mount,
             FileMediaKind::RawFile,
             file_path.to_string(),
             0,
@@ -296,7 +296,7 @@ pub fn create_new_file_disk(
         CreateFileDiskRequest {
             disk_name: request.disk_name,
             file_path: request.file_path,
-            auto_connect: request.auto_connect,
+            auto_mount: request.auto_mount,
         },
     ) {
         Ok(disk_id) => Ok(disk_id),
@@ -307,7 +307,7 @@ pub fn create_new_file_disk(
     }
 }
 
-pub fn connect_disk(
+pub fn mount_disk(
     backend: &BackendContext,
     runtime_store: &mut DiskRuntimeStore,
     disk_id: &str,
@@ -316,10 +316,10 @@ pub fn connect_disk(
         .find_runtime_mut(disk_id)
         .ok_or_else(|| ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string())))?;
 
-    if let Some(target_id) = runtime.connected_target_id() {
+    if let Some(target_id) = runtime.mounted_target_id() {
         return Err(ApiError::new(
-            "disk-already-connected",
-            "磁盘已经处于连接状态",
+            "disk-already-mounted",
+            "磁盘已经处于挂载状态",
             Some(target_id.to_string()),
         ));
     }
@@ -327,7 +327,7 @@ pub fn connect_disk(
     if runtime.invalid_reason().is_some() {
         return Err(ApiError::new(
             "disk-invalid",
-            "磁盘当前无效，不能连接",
+            "磁盘当前无效，不能挂载",
             Some(INVALID_FILE_REASON.to_string()),
         ));
     }
@@ -357,21 +357,21 @@ pub fn connect_disk(
 
     match backend.try_create_managed_disk(disk_config, media, Some(&mut error_text)) {
         Ok(target_id) => {
-            runtime.set_connected(target_id);
+            runtime.set_mounted(target_id);
             Ok(target_id)
         }
         Err(media) => {
             runtime.restore_media(media);
             Err(ApiError::new(
-                "connect-disk-failed",
-                "连接磁盘失败",
+                "mount-disk-failed",
+                "挂载磁盘失败",
                 Some(error_text),
             ))
         }
     }
 }
 
-pub fn disconnect_disk(
+pub fn eject_disk(
     backend: &BackendContext,
     runtime_store: &mut DiskRuntimeStore,
     disk_id: &str,
@@ -380,10 +380,10 @@ pub fn disconnect_disk(
         .find_runtime_mut(disk_id)
         .ok_or_else(|| ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string())))?;
 
-    let Some(target_id) = runtime.connected_target_id() else {
+    let Some(target_id) = runtime.mounted_target_id() else {
         return Err(ApiError::new(
-            "disk-not-connected",
-            "磁盘当前未连接",
+            "disk-not-mounted",
+            "磁盘当前未挂载，不能拔出",
             Some(disk_id.to_string()),
         ));
     };
@@ -391,11 +391,11 @@ pub fn disconnect_disk(
     let mut error_text = String::new();
     let media = backend
         .remove_managed_disk_with_media(target_id, Some(&mut error_text))
-        .ok_or_else(|| ApiError::new("disconnect-disk-failed", "断开磁盘失败", Some(error_text)))?;
+        .ok_or_else(|| ApiError::new("eject-disk-failed", "拔出磁盘失败", Some(error_text)))?;
 
     if runtime.is_memory() {
         runtime.restore_media(media);
-        runtime.set_disconnected();
+        runtime.set_unmounted();
         return Ok(());
     }
 
@@ -407,7 +407,7 @@ pub fn disconnect_disk(
         .ok_or_else(|| ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string())))?;
     match persistence_service::probe_raw_file_media(file_path) {
         Ok(probe) => {
-            runtime.set_file_disconnected(probe.capacity_bytes, probe.read_only);
+            runtime.set_file_unmounted(probe.capacity_bytes, probe.read_only);
         }
         Err(_) => {
             runtime.set_file_invalid(INVALID_FILE_REASON.to_string());
@@ -430,7 +430,7 @@ pub fn delete_disk(
         ));
     };
 
-    if let Some(target_id) = removed_runtime.runtime.connected_target_id() {
+    if let Some(target_id) = removed_runtime.runtime.mounted_target_id() {
         let mut error_text = String::new();
         let media = backend
             .remove_managed_disk_with_media(target_id, Some(&mut error_text))
@@ -438,7 +438,7 @@ pub fn delete_disk(
 
         if removed_runtime.runtime.is_memory() {
             removed_runtime.runtime.restore_media(media);
-            removed_runtime.runtime.set_disconnected();
+            removed_runtime.runtime.set_unmounted();
         }
     }
 
@@ -465,7 +465,7 @@ pub fn update_disk(
         })?;
 
     let previous_snapshot = runtime.snapshot();
-    runtime.set_identity(disk_name.to_string(), request.auto_connect);
+    runtime.set_identity(disk_name.to_string(), request.auto_mount);
 
     Ok(UpdatedDiskState { previous_snapshot })
 }
@@ -483,7 +483,7 @@ pub fn rescan_runtime_disks(
             continue;
         };
 
-        if let Some(target_id) = runtime.connected_target_id() {
+        if let Some(target_id) = runtime.mounted_target_id() {
             if persistence_service::probe_raw_file_media(&file_path).is_err() {
                 let mut error_text = String::new();
                 if let Some(media) =
@@ -499,7 +499,7 @@ pub fn rescan_runtime_disks(
         }
 
         match persistence_service::probe_raw_file_media(&file_path) {
-            Ok(probe) => runtime.set_file_disconnected(probe.capacity_bytes, probe.read_only),
+            Ok(probe) => runtime.set_file_unmounted(probe.capacity_bytes, probe.read_only),
             Err(_) => runtime.set_file_invalid(INVALID_FILE_REASON.to_string()),
         }
     }
@@ -578,19 +578,19 @@ fn map_home_disk_list_item_snapshot(
     runtime_by_target: &HashMap<u32, ManagedDiskSnapshot>,
 ) -> HomeDiskListItemSnapshot {
     let target_id = match runtime.status {
-        DiskRuntimeStatus::Connected { target_id } => Some(target_id),
-        DiskRuntimeStatus::Disconnected | DiskRuntimeStatus::Invalid { .. } => None,
+        DiskRuntimeStatus::Mounted { target_id } => Some(target_id),
+        DiskRuntimeStatus::Unmounted | DiskRuntimeStatus::Invalid { .. } => None,
     };
     let runtime_snapshot = target_id.and_then(|value| runtime_by_target.get(&value));
 
     HomeDiskListItemSnapshot {
         disk_id: runtime.disk_id,
         disk_name: runtime.disk_name,
-        auto_connect: runtime.auto_connect,
+        auto_mount: runtime.auto_mount,
         read_only: runtime.read_only,
         invalid_reason: match &runtime.status {
             DiskRuntimeStatus::Invalid { reason } => Some(reason.clone()),
-            DiskRuntimeStatus::Disconnected | DiskRuntimeStatus::Connected { .. } => None,
+            DiskRuntimeStatus::Unmounted | DiskRuntimeStatus::Mounted { .. } => None,
         },
         status: runtime.status,
         online: runtime_snapshot

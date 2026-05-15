@@ -86,7 +86,10 @@ pub fn run() {
             }
 
             if let WindowEvent::CloseRequested { api, .. } = event {
-                let Some(state) = window.app_handle().try_state::<state::client_state::ClientState>() else {
+                let Some(state) = window
+                    .app_handle()
+                    .try_state::<state::client_state::ClientState>()
+                else {
                     return;
                 };
 
@@ -112,8 +115,8 @@ pub fn run() {
             commands::disk::pick_new_raw_file_path,
             commands::disk::create_file_disk,
             commands::disk::create_new_file_disk,
-            commands::disk::connect_disk,
-            commands::disk::disconnect_disk,
+            commands::disk::mount_disk,
+            commands::disk::eject_disk,
             commands::disk::delete_disk,
             commands::disk::update_disk
         ])

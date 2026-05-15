@@ -54,7 +54,7 @@
 
 ### 3.3 交互目标
 
-- 连接 / 断开是盘卡片主动作；
+- 挂载 / 拔出是盘卡片主动作；
 - 编辑 / 删除是悬停后出现的次动作；
 - 添加磁盘先弹轻量模式气泡，再进入具体对话框；
 - 主题切换影响整体颜色族，但不改变组件语义。
@@ -255,7 +255,7 @@
 - `windows/tauri-client/src/shared/styles/listPanel.css`
   - 磁盘列表面板、滚动区、列表内容间距
 - `windows/tauri-client/src/shared/styles/diskCard.css`
-  - 磁盘卡片外观、连接态、动作按钮
+  - 磁盘卡片外观、挂载态、动作按钮
 - `windows/tauri-client/src/shared/styles/dialogs.css`
   - 创建 / 编辑对话框视觉
 - `windows/tauri-client/src/shared/styles/settingsPage.css`
@@ -327,8 +327,8 @@
 
 盘卡片主按钮是 `el-button`，但为了满足业务视觉，做了局部收口：
 
-- `连接` 使用绿色强调；
-- `断开` 使用红色强调；
+- `挂载` 使用绿色强调；
+- `拔出` 使用红色强调；
 - `loading` 不使用默认全灰，而使用“当前按钮语义色灰化”；
 - `invalid` 盘仍使用 Element 的 disabled 语义；
 - 局部移除默认黑边 / focus 干扰。
@@ -336,14 +336,14 @@
 这一块属于合理接管，因为：
 
 - 这是项目最核心的业务动作；
-- 默认 Element primary 按钮无法表达“连接/断开/连接中”的业务含义；
+- 默认 Element primary 按钮无法表达“挂载/拔出/挂载中”的业务含义；
 - 需求明确需要不同语义色。
 
 这里还需要明确一个额外边界：
 
 - `loading` 不能简单回退到全局主题色；
-- `连接` 的 `loading` 应从绿色主动作延续；
-- `断开` 的 `loading` 应从红色主动作延续。
+- `挂载` 的 `loading` 应从绿色主动作延续；
+- `拔出` 的 `loading` 应从红色主动作延续。
 
 也就是说，`loading` 视觉必须挂在**按钮语义层**，而不是挂在**全局主题层**。
 
@@ -533,7 +533,7 @@
 
 原因：
 
-- 连接 / 断开 / loading / invalid 都有明确业务语义；
+- 挂载 / 拔出 / loading / invalid 都有明确业务语义；
 - 默认 primary / danger 不足以表达。
 
 ---
