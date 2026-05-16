@@ -106,6 +106,7 @@ fn map_network_error_to_backend_error(error: NetworkClientError) -> BackendError
         | NetworkClientError::UnknownPendingRequest { .. }
         | NetworkClientError::Protocol(_)
         | NetworkClientError::Transport(_)
+        | NetworkClientError::Crypto(_)
         | NetworkClientError::UnauthorizedDisk { .. }
         | NetworkClientError::ConnectionClosed
         | NetworkClientError::Unimplemented(_) => BackendError::SessionNotOpen,

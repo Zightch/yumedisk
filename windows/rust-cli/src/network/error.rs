@@ -14,6 +14,7 @@ pub enum NetworkClientError {
     UnknownPendingRequest { request_id: u64 },
     Protocol(ProtocolClientError),
     Transport(String),
+    Crypto(String),
     Unimplemented(&'static str),
 }
 
@@ -33,6 +34,7 @@ impl fmt::Display for NetworkClientError {
             }
             Self::Protocol(error) => write!(formatter, "protocol: {}", error),
             Self::Transport(message) => write!(formatter, "transport: {}", message),
+            Self::Crypto(message) => write!(formatter, "crypto: {}", message),
             Self::Unimplemented(area) => write!(formatter, "unimplemented: {}", area),
         }
     }

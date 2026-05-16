@@ -1,4 +1,5 @@
 mod connection_authenticator;
+mod crypto_win32;
 mod disk_session;
 mod error;
 mod gateway_connection;
@@ -7,7 +8,6 @@ mod protocol_client;
 mod session_opener;
 mod transport_client;
 
-pub use connection_authenticator::AuthGrant;
 pub use connection_authenticator::ConnectionAuthenticator;
 pub use disk_session::DiskSession;
 pub use error::NetworkClientError;
