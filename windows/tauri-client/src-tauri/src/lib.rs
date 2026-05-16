@@ -1,6 +1,7 @@
 mod api_error;
 mod backend;
 mod commands;
+mod single_instance;
 mod state;
 
 use tauri::image::Image;
@@ -73,11 +74,21 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let single_instance_guard = match single_instance::initialize() {
+        single_instance::StartupAction::Continue(guard) => guard,
+        single_instance::StartupAction::Exit => return,
+    };
+
     tauri::Builder::default()
         .manage(state::client_state::ClientState::default())
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
+        .setup(move |app| {
             build_tray(app.handle())?;
+            single_instance::spawn_wake_listener(
+                app.handle(),
+                &single_instance_guard,
+                show_main_window,
+            );
             Ok(())
         })
         .on_window_event(|window, event| {
