@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"sync/atomic"
@@ -44,6 +43,13 @@ func NewService(cfg config.Config) (*Service, error) {
 		sessions: session.NewManager(),
 		gateway:  gateway.NewHandler(),
 	}, nil
+}
+
+func (s *Service) Close() error {
+	if s.storage == nil {
+		return nil
+	}
+	return s.storage.Close()
 }
 
 func (s *Service) ListenAddr() string {
@@ -86,42 +92,30 @@ func (s *Service) Run(ctx context.Context) error {
 
 		connectionID := s.nextConn.Add(1)
 		state := s.gateway.NewConnectionState(connectionID)
-		go s.handleConnection(ctx, state, conn)
+		go s.serveAcceptedConnection(ctx, state, conn)
 	}
 }
 
-func (s *Service) handleConnection(ctx context.Context, state *gateway.ConnectionState, conn net.Conn) {
-	defer conn.Close()
+func (s *Service) serveAcceptedConnection(ctx context.Context, state *gateway.ConnectionState, conn net.Conn) {
 	defer s.sessions.CloseConnection(state.ID)
+	defer conn.Close()
 
 	log.Printf("connection %d accepted from %s", state.ID, conn.RemoteAddr())
 
-	buffer := make([]byte, transport.MaxPayloadSize)
-	for {
-		if ctx.Err() != nil {
-			return
-		}
+	runtime := transport.NewRuntime(conn, s.gateway.Bind(state))
 
-		payload, err := transport.ReadFrameInto(conn, buffer)
-		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-				return
-			}
-			log.Printf("connection %d read frame: %v", state.ID, err)
-			return
-		}
+	done := make(chan error, 1)
+	go func() {
+		done <- runtime.Run()
+	}()
 
-		response, err := s.gateway.HandlePayload(state, payload)
-		if err != nil {
-			log.Printf("connection %d handle payload: %v", state.ID, err)
-			return
-		}
-		if response == nil {
-			continue
-		}
-		if err := transport.WriteFrame(conn, response); err != nil {
-			log.Printf("connection %d write frame: %v", state.ID, err)
-			return
+	select {
+	case <-ctx.Done():
+		_ = runtime.Close()
+		<-done
+	case err := <-done:
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			log.Printf("connection %d transport runtime: %v", state.ID, err)
 		}
 	}
 }
