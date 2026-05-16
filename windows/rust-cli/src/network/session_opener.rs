@@ -44,6 +44,7 @@ impl SessionOpener {
             response.disk_size_bytes,
             response.read_only,
             response.max_io_bytes,
+            response.session_ttl_seconds,
         )
     }
 }
@@ -125,6 +126,7 @@ mod tests {
         assert_eq!(session.session_id(), 77);
         assert_eq!(session.disk_size_bytes(), 4096);
         assert_eq!(session.max_io_bytes(), 60_000);
+        assert_eq!(session.session_ttl_seconds(), 300);
         assert!(session.read_only());
 
         connection.close().expect("close should succeed");

@@ -8,6 +8,8 @@ pub enum NetworkClientError {
     InvalidArgument(&'static str),
     UnauthorizedDisk { disk_id: String },
     ReadOnlySession,
+    SessionClosed,
+    SessionExpired,
     ConnectionClosed,
     AlreadyConnected,
     PendingRequestConflict { request_id: u64 },
@@ -24,6 +26,8 @@ impl fmt::Display for NetworkClientError {
             Self::InvalidArgument(name) => write!(formatter, "invalid-argument: {}", name),
             Self::UnauthorizedDisk { disk_id } => write!(formatter, "unauthorized-disk: {}", disk_id),
             Self::ReadOnlySession => formatter.write_str("read-only-session"),
+            Self::SessionClosed => formatter.write_str("session-closed"),
+            Self::SessionExpired => formatter.write_str("session-expired"),
             Self::ConnectionClosed => formatter.write_str("connection-closed"),
             Self::AlreadyConnected => formatter.write_str("already-connected"),
             Self::PendingRequestConflict { request_id } => {

@@ -101,7 +101,9 @@ fn map_network_error_to_backend_error(error: NetworkClientError) -> BackendError
     match error {
         NetworkClientError::InvalidArgument(_) => BackendError::InvalidParameter,
         NetworkClientError::ReadOnlySession => BackendError::InvalidParameter,
-        NetworkClientError::AlreadyConnected
+        NetworkClientError::SessionClosed
+        | NetworkClientError::SessionExpired
+        | NetworkClientError::AlreadyConnected
         | NetworkClientError::PendingRequestConflict { .. }
         | NetworkClientError::UnknownPendingRequest { .. }
         | NetworkClientError::Protocol(_)
@@ -123,7 +125,7 @@ mod tests {
     #[test]
     fn bind_requires_session_metadata_to_match_media_metadata() {
         let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:9000"));
-        let session = DiskSession::new(connection, "disk-1", 7, 4096, false, 1024)
+        let session = DiskSession::new(connection, "disk-1", 7, 4096, false, 1024, 300)
             .expect("session should build");
 
         let error = NetworkMedia::bind(session, 2048, false, 1024).expect_err("bind should fail");
