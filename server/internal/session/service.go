@@ -1,9 +1,21 @@
 package session
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	filestorage "yumedisk/server/internal/storage/file"
+)
+
+var (
+	ErrSessionNotFound = errors.New("session not found")
+	ErrSessionClosed   = errors.New("session closed")
+	ErrSessionExpired  = errors.New("session expired")
+	ErrIOLimit         = errors.New("io limit exceeded")
+	ErrOutOfRange      = errors.New("io out of range")
+	ErrReadOnly        = errors.New("session is read only")
+	ErrIOFailed        = errors.New("io failed")
 )
 
 type Service struct {
@@ -62,4 +74,69 @@ func (s *Service) TTLSeconds() uint32 {
 
 func (s *Service) Manager() *Manager {
 	return s.manager
+}
+
+func (s *Service) Read(sessionID uint64, offset uint64, length uint32) ([]byte, error) {
+	desc, err := s.validate(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if length == 0 || length > desc.MaxIOBytes {
+		return nil, ErrIOLimit
+	}
+	if offset > desc.DiskSize || uint64(length) > desc.DiskSize-offset {
+		return nil, ErrOutOfRange
+	}
+
+	data := make([]byte, length)
+	if err := s.storage.ReadAt(offset, data); err != nil {
+		return nil, mapStorageError(err)
+	}
+	return data, nil
+}
+
+func (s *Service) Write(sessionID uint64, offset uint64, data []byte) error {
+	desc, err := s.validate(sessionID)
+	if err != nil {
+		return err
+	}
+	if desc.ReadOnly {
+		return ErrReadOnly
+	}
+	if len(data) == 0 || uint32(len(data)) > desc.MaxIOBytes {
+		return ErrIOLimit
+	}
+	if offset > desc.DiskSize || uint64(len(data)) > desc.DiskSize-offset {
+		return ErrOutOfRange
+	}
+
+	if err := s.storage.WriteAt(offset, data); err != nil {
+		return mapStorageError(err)
+	}
+	return nil
+}
+
+func (s *Service) validate(sessionID uint64) (Descriptor, error) {
+	desc, ok := s.manager.Get(sessionID)
+	if !ok {
+		return Descriptor{}, ErrSessionNotFound
+	}
+	if time.Now().After(desc.ExpiresAt) {
+		s.manager.Close(sessionID)
+		return Descriptor{}, ErrSessionExpired
+	}
+	return desc, nil
+}
+
+func mapStorageError(err error) error {
+	switch {
+	case errors.Is(err, filestorage.ErrReadOnly):
+		return ErrReadOnly
+	case errors.Is(err, filestorage.ErrOutOfRange):
+		return ErrOutOfRange
+	case errors.Is(err, filestorage.ErrIOFailed):
+		return ErrIOFailed
+	default:
+		return fmt.Errorf("storage error: %w", err)
+	}
 }

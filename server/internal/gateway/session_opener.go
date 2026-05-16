@@ -73,3 +73,57 @@ func (o *sessionOpener) handleClose(header proto.Header, body []byte) ([]byte, e
 	o.sessions.Close(header.SessionID)
 	return proto.BuildSuccessResponse(header, nil), nil
 }
+
+func (o *sessionOpener) handleRead(header proto.Header, body []byte) ([]byte, error) {
+	if header.SessionID == 0 {
+		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
+	}
+
+	offset, length, err := proto.ParseReadBody(body)
+	if err != nil {
+		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
+	}
+
+	data, err := o.sessions.Read(header.SessionID, offset, length)
+	if err != nil {
+		return o.mapSessionError(header, err), nil
+	}
+	return proto.BuildSuccessResponse(header, data), nil
+}
+
+func (o *sessionOpener) handleWrite(header proto.Header, body []byte) ([]byte, error) {
+	if header.SessionID == 0 {
+		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
+	}
+
+	offset, _, data, err := proto.ParseReadWriteBody(body)
+	if err != nil {
+		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
+	}
+
+	if err := o.sessions.Write(header.SessionID, offset, data); err != nil {
+		return o.mapSessionError(header, err), nil
+	}
+	return proto.BuildSuccessResponse(header, nil), nil
+}
+
+func (o *sessionOpener) mapSessionError(header proto.Header, err error) []byte {
+	switch err {
+	case session.ErrSessionNotFound:
+		return proto.BuildErrorResponse(header, proto.StatusSessionNotFound)
+	case session.ErrSessionExpired:
+		return proto.BuildErrorResponse(header, proto.StatusSessionExpired)
+	case session.ErrSessionClosed:
+		return proto.BuildErrorResponse(header, proto.StatusSessionClosed)
+	case session.ErrReadOnly:
+		return proto.BuildErrorResponse(header, proto.StatusIOReadOnly)
+	case session.ErrIOLimit:
+		return proto.BuildErrorResponse(header, proto.StatusIOLarge)
+	case session.ErrOutOfRange:
+		return proto.BuildErrorResponse(header, proto.StatusIOOutOfRange)
+	case session.ErrIOFailed:
+		return proto.BuildErrorResponse(header, proto.StatusIOFailed)
+	default:
+		return proto.BuildErrorResponse(header, proto.StatusIOFailed)
+	}
+}

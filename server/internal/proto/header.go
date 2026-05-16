@@ -35,6 +35,10 @@ const (
 	StatusSessionNotFound      = 0x1201
 	StatusSessionExpired       = 0x1202
 	StatusSessionClosed        = 0x1203
+	StatusIOOutOfRange         = 0x1301
+	StatusIOLarge              = 0x1302
+	StatusIOReadOnly           = 0x1303
+	StatusIOFailed             = 0x1304
 )
 
 var (

@@ -71,6 +71,10 @@ func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte,
 		return h.sessionOpener.handlePing(header, body)
 	case proto.OpClose:
 		return h.sessionOpener.handleClose(header, body)
+	case proto.OpReadAt:
+		return h.sessionOpener.handleRead(header, body)
+	case proto.OpWriteAt:
+		return h.sessionOpener.handleWrite(header, body)
 	default:
 		return proto.BuildErrorResponse(header, proto.StatusUnsupportedOp), nil
 	}

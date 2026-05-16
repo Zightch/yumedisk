@@ -10,6 +10,7 @@ const (
 	SessionOpenResponseSize = 20
 	SessionFlagReadOnly     = 1 << 0
 	PingBodySize            = 8
+	ReadWriteHeaderSize     = 12
 )
 
 var ErrSessionBody = errors.New("session body invalid")
@@ -46,5 +47,44 @@ func ParsePingRequestBody(body []byte) (uint64, error) {
 func BuildPingResponseBody(nonce uint64) []byte {
 	body := make([]byte, PingBodySize)
 	binary.BigEndian.PutUint64(body, nonce)
+	return body
+}
+
+func ParseReadWriteBody(body []byte) (offset uint64, length uint32, data []byte, err error) {
+	if len(body) < ReadWriteHeaderSize {
+		return 0, 0, nil, ErrSessionBody
+	}
+
+	offset = binary.BigEndian.Uint64(body[0:8])
+	length = binary.BigEndian.Uint32(body[8:12])
+	if uint64(len(body)) != uint64(ReadWriteHeaderSize)+uint64(length) {
+		return 0, 0, nil, ErrSessionBody
+	}
+
+	data = make([]byte, length)
+	copy(data, body[12:])
+	return offset, length, data, nil
+}
+
+func ParseReadBody(body []byte) (offset uint64, length uint32, err error) {
+	if len(body) != ReadWriteHeaderSize {
+		return 0, 0, ErrSessionBody
+	}
+	offset = binary.BigEndian.Uint64(body[0:8])
+	length = binary.BigEndian.Uint32(body[8:12])
+	return offset, length, nil
+}
+
+func BuildReadBody(offset uint64, length uint32) []byte {
+	body := make([]byte, ReadWriteHeaderSize)
+	binary.BigEndian.PutUint64(body[0:8], offset)
+	binary.BigEndian.PutUint32(body[8:12], length)
+	return body
+}
+
+func BuildReadWriteBody(offset uint64, length uint32) []byte {
+	body := make([]byte, ReadWriteHeaderSize)
+	binary.BigEndian.PutUint64(body[0:8], offset)
+	binary.BigEndian.PutUint32(body[8:12], length)
 	return body
 }
