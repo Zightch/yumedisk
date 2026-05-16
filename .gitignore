@@ -41,7 +41,7 @@
 # Project-local runtime / assets
 symbol/
 symbol.txt
-storage/
+/storage/
 jsoncpp/
 
 # Temporary docs / scratch
