@@ -238,6 +238,13 @@ impl CliHost {
     }
 
     pub fn remove_disk(&mut self, target_id: u32) -> AppResult<()> {
+        if let Some(mounted) = self.mounted_network_disks.get(&target_id) {
+            mounted
+                .session
+                .close()
+                .map_err(|error| error.to_string())?;
+        }
+
         let mut error_text = String::new();
         let media = self
             .context
@@ -249,9 +256,7 @@ impl CliHost {
             return Err(error_text);
         };
 
-        if let Some(mounted) = self.mounted_network_disks.remove(&target_id) {
-            mounted.session.close();
-        }
+        self.mounted_network_disks.remove(&target_id);
 
         Ok(())
     }

@@ -5,6 +5,7 @@ use std::time::Duration;
 use std::time::SystemTime;
 
 use super::error::NetworkClientError;
+use super::protocol_client::CloseRequest;
 use super::gateway_connection::GatewayConnection;
 use super::protocol_client::PingRequest;
 use super::protocol_client::PingResponse;
@@ -163,8 +164,25 @@ impl DiskSession {
         Ok(response.nonce)
     }
 
-    pub fn close(&self) {
+    pub fn close(&self) -> Result<(), NetworkClientError> {
+        if self.is_closed() {
+            return Ok(());
+        }
+
+        self.ensure_usable()?;
+
+        let request_id = self.connection.allocate_request_id();
+        let payload = CloseRequest {
+            session_id: self.session_id,
+        }
+        .encode_request(request_id)
+        .map_err(NetworkClientError::Protocol)?;
+
+        let response_payload = self.connection.send_request_and_wait(payload)?;
+        let close_result = CloseRequest::decode_response(&response_payload, request_id, self.session_id)
+            .map_err(map_data_plane_error);
         self.mark_closed();
+        close_result
     }
 
     pub fn read_at(&self, offset: u64, buffer: &mut [u8]) -> Result<(), NetworkClientError> {
@@ -427,6 +445,57 @@ mod tests {
         assert_eq!(&read_buffer, b"YUME");
 
         session.write_at(12, b"DISK").expect("write should succeed");
+
+        connection.close().expect("close should succeed");
+        server.join().expect("server should join");
+    }
+
+    #[test]
+    fn disk_session_close_uses_close_request_and_marks_closed() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
+        let address = listener.local_addr().expect("local addr should succeed");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            let mut buffer = vec![0u8; MAX_FRAME_PAYLOAD_BYTES];
+
+            let close_request = read_frame_into(&mut stream, &mut buffer)
+                .expect("close request should succeed")
+                .to_vec();
+            let close_header =
+                crate::network::parse_request_header(&close_request).expect("parse close request");
+            assert_eq!(close_header.op_code, ClientOperationCode::Close);
+            assert!(close_request[HEADER_SIZE..].is_empty());
+
+            let close_response = ProtocolHeader {
+                protocol_version: PROTOCOL_VERSION,
+                header_len: HEADER_SIZE as u8,
+                op_code: ClientOperationCode::Close,
+                flags: FLAG_RESPONSE,
+                status_code: ProtocolStatusCode::Ok,
+                reserved: 0,
+                request_id: close_header.request_id,
+                session_id: close_header.session_id,
+            }
+            .encode(&[]);
+            write_frame(&mut stream, &close_response).expect("write close response");
+        });
+
+        let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
+        connection.connect().expect("connect should succeed");
+        let session = DiskSession::new(
+            connection.clone(),
+            "A1b2C3d4E5f6G7h8",
+            77,
+            4096,
+            false,
+            60_000,
+            300,
+        )
+        .expect("session should build");
+
+        session.close().expect("close should succeed");
+        assert!(session.is_closed());
 
         connection.close().expect("close should succeed");
         server.join().expect("server should join");

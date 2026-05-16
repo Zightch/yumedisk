@@ -237,9 +237,9 @@ pub fn write_frame<W: Write>(writer: &mut W, payload: &[u8]) -> Result<(), Trans
         .expect("payload length already validated")
         .to_be_bytes();
 
-    writer.write_all(&header).map_err(TransportError::Io)?;
-    writer.write_all(payload).map_err(TransportError::Io)?;
-    writer.flush().map_err(TransportError::Io)
+    writer.write_all(&header).map_err(map_io_error_for_write)?;
+    writer.write_all(payload).map_err(map_io_error_for_write)?;
+    writer.flush().map_err(map_io_error_for_write)
 }
 
 fn spawn_reader_loop(stream: Arc<TcpStream>, incoming_tx: mpsc::Sender<InboundEvent>) {
@@ -297,6 +297,19 @@ fn map_io_error_for_read(error: io::Error) -> TransportError {
         error.kind(),
         io::ErrorKind::UnexpectedEof
             | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::BrokenPipe
+            | io::ErrorKind::NotConnected
+    ) {
+        return TransportError::ConnectionClosed;
+    }
+    TransportError::Io(error)
+}
+
+fn map_io_error_for_write(error: io::Error) -> TransportError {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::ConnectionAborted
             | io::ErrorKind::ConnectionReset
             | io::ErrorKind::BrokenPipe
             | io::ErrorKind::NotConnected

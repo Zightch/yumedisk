@@ -53,3 +53,10 @@ docs/tmp/*
 
 # Local environment
 **/env.cmake
+
+# Go
+**/go.sum
+**/go.work
+**/*.exe
+**/*.toml
+**/*.img
