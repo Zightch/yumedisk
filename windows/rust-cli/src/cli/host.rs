@@ -97,7 +97,7 @@ impl CliHost {
     }
 
     pub fn shutdown(&mut self) {
-        let _ = self.remove_all_disks();
+        self.remove_all_disks_for_shutdown();
         self.context.close();
         self.mounted_network_disks
             .lock()
@@ -294,6 +294,26 @@ impl CliHost {
             self.remove_disk(target_id)?;
         }
         Ok(())
+    }
+
+    fn remove_all_disks_for_shutdown(&mut self) {
+        let target_ids = self
+            .context
+            .snapshot_managed_disks()
+            .into_iter()
+            .map(|disk| disk.target_id)
+            .collect::<Vec<_>>();
+
+        for target_id in target_ids {
+            let mut error_text = String::new();
+            let _ = self
+                .context
+                .remove_managed_disk_with_media(target_id, Some(&mut error_text));
+            self.mounted_network_disks
+                .lock()
+                .expect("mounted_network_disks poisoned")
+                .remove(&target_id);
+        }
     }
 
     pub fn reap_dead_network_disks(&mut self) -> AppResult<Vec<u32>> {
