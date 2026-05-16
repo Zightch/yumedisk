@@ -1,12 +1,12 @@
 # Windows驱动问题排查笔记
 
-本文档记录当前 `YumeDiskKMDF`、`YumeDiskSCSI`、`TestApp` 在重建 App-owned media queue 过程中已经遇到过的典型问题、确认过的根因、修复方式和后续注意事项。
+本文档记录当前 `YumeDiskKMDF`、`YumeDiskSCSI`、`AppKernel` 以及正式宿主链路在重建 App-owned media queue 过程中已经遇到过的典型问题、确认过的根因、修复方式和后续注意事项。
 
 目标不是复述协议设计，而是把真实踩坑过程收成一本可复用的排查笔记，方便后续重构、回归和多盘并发验证时快速对照。
 
 ## 1. 适用范围
 
-- 用户态后端：`windows/TestApp/src/`
+- 当前正式宿主链路：`windows/tauri-client/` + `windows/BackendRust/` + `windows/AppKernel/`
 - KMDF 控制驱动：`windows/YumeDiskKMDF/YumeDiskKMDF`
 - Storport miniport：`windows/YumeDiskSCSI/YumeDiskSCSI`
 - 当前协议：`POST_READ_SLOT`、`POST_WRITE_SLOT`、`READ_ACK`、`WRITE_ACK_BATCH`
@@ -206,7 +206,7 @@ active_read_slots=1
 
 - `Q1` 能跑，`Q2/Q8/Q32` 更容易在跑一段后挂死。
 - 磁盘 100%，但没有实际吞吐。
-- `diskspd` `Ctrl+C` 也停不下来，经常只能强杀 `TestApp`。
+- `diskspd` `Ctrl+C` 也停不下来，经常只能强杀宿主进程。
 - `debug_snapshot` 里常见：
 
 ```text
@@ -341,7 +341,7 @@ POST_READ_SLOT transient failure, error=995
 
 - 正常压测时直接 `Ctrl+C`，也可能把虚拟盘打成 100% 无读写。
 - `rm all` 曾出现卡住或误判“链路坏了”。
-- 结束 `TestApp` 后，`diskspd` 才被迫返回。
+- 结束宿主进程后，`diskspd` 才被迫返回。
 
 根因：
 

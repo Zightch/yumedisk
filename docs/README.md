@@ -17,7 +17,7 @@
 - `windows/cpp-cli` + `windows/BackendCore`：并行 C++ 宿主线和调试入口。
 - `windows/rust-cli`：最小 Rust 控制台验证入口。
 
-早期文档中的 `MyCtl`、`MyDisk`、`MyApp` 只作为历史逻辑名保留；已经不存在的 `windows/TestApp/` 和 `windows/client/backendHost/` 不再作为当前事实引用。
+正式文档只使用当前组件名，不再引用已废弃的 dev 项目名或旧宿主目录。
 
 ## 目录结构
 
