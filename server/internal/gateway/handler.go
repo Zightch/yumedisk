@@ -5,10 +5,12 @@ import (
 	"sync"
 
 	"yumedisk/server/internal/proto"
+	"yumedisk/server/internal/session"
 )
 
 type Handler struct {
 	authenticator *authenticator
+	sessionOpener *sessionOpener
 }
 
 type ConnectionState struct {
@@ -23,13 +25,14 @@ type ConnectionHandler struct {
 	state  *ConnectionState
 }
 
-func NewHandler(realDiskID string, authVerifier [64]byte) (*Handler, error) {
+func NewHandler(realDiskID string, authVerifier [64]byte, sessions *session.Service) (*Handler, error) {
 	authenticator, err := newAuthenticator(realDiskID, authVerifier)
 	if err != nil {
 		return nil, err
 	}
 	return &Handler{
 		authenticator: authenticator,
+		sessionOpener: newSessionOpener(realDiskID, sessions),
 	}, nil
 }
 
@@ -62,6 +65,12 @@ func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte,
 		return h.authenticator.handleAuthStart(state, header, body)
 	case proto.OpAuthFinish:
 		return h.authenticator.handleAuthFinish(state, header, body)
+	case proto.OpSessionOpen:
+		return h.sessionOpener.handleSessionOpen(state, header, body)
+	case proto.OpPing:
+		return h.sessionOpener.handlePing(header, body)
+	case proto.OpClose:
+		return h.sessionOpener.handleClose(header, body)
 	default:
 		return proto.BuildErrorResponse(header, proto.StatusUnsupportedOp), nil
 	}

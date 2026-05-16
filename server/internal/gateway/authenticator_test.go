@@ -4,8 +4,12 @@ import (
 	"testing"
 	"time"
 
+	"os"
+	"path/filepath"
 	"yumedisk/server/internal/auth"
 	"yumedisk/server/internal/proto"
+	"yumedisk/server/internal/session"
+	filestorage "yumedisk/server/internal/storage/file"
 )
 
 func TestAuthenticatorAuthStartAndFinishSuccess(t *testing.T) {
@@ -20,12 +24,10 @@ func TestAuthenticatorAuthStartAndFinishSuccess(t *testing.T) {
 		t.Fatalf("parse claim code: %v", err)
 	}
 
-	handler, err := NewHandler(material.DiskID, material.AuthVerifier)
+	handler, err := newAuthHandler(t, material)
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
 	}
-	handler.authenticator.sleep = func(time.Duration) {}
-	handler.authenticator.randomDelay = func() time.Duration { return 0 }
 
 	state := handler.NewConnectionState(42)
 	startReq := buildRequest(proto.OpAuthStart, 1, 0, []byte(material.DiskID))
@@ -79,12 +81,10 @@ func TestAuthenticatorFakeDiskUsesUnifiedFailure(t *testing.T) {
 		t.Fatalf("parse claim code: %v", err)
 	}
 
-	handler, err := NewHandler(material.DiskID, material.AuthVerifier)
+	handler, err := newAuthHandler(t, material)
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
 	}
-	handler.authenticator.sleep = func(time.Duration) {}
-	handler.authenticator.randomDelay = func() time.Duration { return 0 }
 
 	state := handler.NewConnectionState(7)
 	fakeDiskID := "ZZZZZZZZZZZZZZZZ"
@@ -133,4 +133,29 @@ func buildRequest(opCode uint8, requestID uint64, sessionID uint64, body []byte)
 	}, payload)
 	copy(payload[proto.HeaderSize:], body)
 	return payload
+}
+
+func newAuthHandler(t *testing.T, material auth.Material) (*Handler, error) {
+	t.Helper()
+
+	tempDir := t.TempDir()
+	rawPath := filepath.Join(tempDir, "disk.raw")
+	if err := os.WriteFile(rawPath, make([]byte, 1024), 0o644); err != nil {
+		return nil, err
+	}
+
+	storage, err := filestorage.Open(rawPath, false)
+	if err != nil {
+		return nil, err
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+
+	sessions := session.NewService(session.NewManager(), storage, 30*time.Second, 60*1024)
+	handler, err := NewHandler(material.DiskID, material.AuthVerifier, sessions)
+	if err != nil {
+		return nil, err
+	}
+	handler.authenticator.sleep = func(time.Duration) {}
+	handler.authenticator.randomDelay = func() time.Duration { return 0 }
+	return handler, nil
 }

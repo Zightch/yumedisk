@@ -32,6 +32,9 @@ const (
 	StatusAuthExpired          = 0x1102
 	StatusAuthChallengeInvalid = 0x1103
 	StatusAuthRequired         = 0x1104
+	StatusSessionNotFound      = 0x1201
+	StatusSessionExpired       = 0x1202
+	StatusSessionClosed        = 0x1203
 )
 
 var (

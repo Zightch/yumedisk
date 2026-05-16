@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"sync/atomic"
+	"time"
 
 	"yumedisk/server/internal/auth"
 	"yumedisk/server/internal/config"
@@ -36,7 +37,8 @@ func NewService(cfg config.Config) (*Service, error) {
 		return nil, err
 	}
 
-	gatewayHandler, err := gateway.NewHandler(material.DiskID, material.AuthVerifier)
+	sessions := session.NewService(session.NewManager(), storage, 30*time.Second, 60*1024)
+	gatewayHandler, err := gateway.NewHandler(material.DiskID, material.AuthVerifier, sessions)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +47,7 @@ func NewService(cfg config.Config) (*Service, error) {
 		cfg:      cfg,
 		material: material,
 		storage:  storage,
-		sessions: session.NewManager(),
+		sessions: sessions.Manager(),
 		gateway:  gatewayHandler,
 	}, nil
 }

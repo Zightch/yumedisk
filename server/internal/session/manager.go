@@ -47,6 +47,12 @@ func (m *Manager) Get(id uint64) (Descriptor, bool) {
 	return desc, ok
 }
 
+func (m *Manager) Update(desc Descriptor) {
+	m.mu.Lock()
+	m.items[desc.ID] = desc
+	m.mu.Unlock()
+}
+
 func (m *Manager) Close(id uint64) {
 	m.mu.Lock()
 	delete(m.items, id)
