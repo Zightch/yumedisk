@@ -2,14 +2,20 @@ package gateway
 
 import (
 	"fmt"
+	"sync"
 
 	"yumedisk/server/internal/proto"
 )
 
-type Handler struct{}
+type Handler struct {
+	authenticator *authenticator
+}
 
 type ConnectionState struct {
 	ID uint64
+
+	mu                sync.RWMutex
+	authenticatedDisk map[string]struct{}
 }
 
 type ConnectionHandler struct {
@@ -17,12 +23,21 @@ type ConnectionHandler struct {
 	state  *ConnectionState
 }
 
-func NewHandler() *Handler {
-	return &Handler{}
+func NewHandler(realDiskID string, authVerifier [64]byte) (*Handler, error) {
+	authenticator, err := newAuthenticator(realDiskID, authVerifier)
+	if err != nil {
+		return nil, err
+	}
+	return &Handler{
+		authenticator: authenticator,
+	}, nil
 }
 
 func (h *Handler) NewConnectionState(id uint64) *ConnectionState {
-	return &ConnectionState{ID: id}
+	return &ConnectionState{
+		ID:                id,
+		authenticatedDisk: make(map[string]struct{}),
+	}
 }
 
 func (h *Handler) Bind(state *ConnectionState) *ConnectionHandler {
@@ -40,9 +55,31 @@ func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte,
 	if err := proto.ValidateRequestHeader(header); err != nil {
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
-	return proto.BuildErrorResponse(header, proto.StatusUnsupportedOp), nil
+
+	body := payload[proto.HeaderSize:]
+	switch header.OpCode {
+	case proto.OpAuthStart:
+		return h.authenticator.handleAuthStart(state, header, body)
+	case proto.OpAuthFinish:
+		return h.authenticator.handleAuthFinish(state, header, body)
+	default:
+		return proto.BuildErrorResponse(header, proto.StatusUnsupportedOp), nil
+	}
 }
 
 func (h *ConnectionHandler) HandlePayload(payload []byte) ([]byte, error) {
 	return h.parent.HandlePayload(h.state, payload)
+}
+
+func (s *ConnectionState) markAuthenticated(diskID string) {
+	s.mu.Lock()
+	s.authenticatedDisk[diskID] = struct{}{}
+	s.mu.Unlock()
+}
+
+func (s *ConnectionState) isAuthenticated(diskID string) bool {
+	s.mu.RLock()
+	_, ok := s.authenticatedDisk[diskID]
+	s.mu.RUnlock()
+	return ok
 }

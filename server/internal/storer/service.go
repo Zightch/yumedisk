@@ -36,12 +36,17 @@ func NewService(cfg config.Config) (*Service, error) {
 		return nil, err
 	}
 
+	gatewayHandler, err := gateway.NewHandler(material.DiskID, material.AuthVerifier)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Service{
 		cfg:      cfg,
 		material: material,
 		storage:  storage,
 		sessions: session.NewManager(),
-		gateway:  gateway.NewHandler(),
+		gateway:  gatewayHandler,
 	}, nil
 }
 

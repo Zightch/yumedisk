@@ -22,12 +22,16 @@ const (
 )
 
 const (
-	StatusOK              = 0x0000
-	StatusProtocolVersion = 0x1001
-	StatusBadHeader       = 0x1002
-	StatusBadBody         = 0x1003
-	StatusInvalidRequest  = 0x1004
-	StatusUnsupportedOp   = 0x1005
+	StatusOK                   = 0x0000
+	StatusProtocolVersion      = 0x1001
+	StatusBadHeader            = 0x1002
+	StatusBadBody              = 0x1003
+	StatusInvalidRequest       = 0x1004
+	StatusUnsupportedOp        = 0x1005
+	StatusAuthFailed           = 0x1101
+	StatusAuthExpired          = 0x1102
+	StatusAuthChallengeInvalid = 0x1103
+	StatusAuthRequired         = 0x1104
 )
 
 var (
@@ -105,7 +109,15 @@ func EncodeHeader(header Header, payload []byte) {
 }
 
 func BuildErrorResponse(req Header, status uint16) []byte {
-	payload := make([]byte, HeaderSize)
+	return BuildResponse(req, status, nil)
+}
+
+func BuildSuccessResponse(req Header, body []byte) []byte {
+	return BuildResponse(req, StatusOK, body)
+}
+
+func BuildResponse(req Header, status uint16, body []byte) []byte {
+	payload := make([]byte, HeaderSize+len(body))
 	EncodeHeader(Header{
 		ProtocolVersion: ProtocolVersion,
 		HeaderLen:       HeaderSize,
@@ -116,5 +128,6 @@ func BuildErrorResponse(req Header, status uint16) []byte {
 		RequestID:       req.RequestID,
 		SessionID:       req.SessionID,
 	}, payload)
+	copy(payload[HeaderSize:], body)
 	return payload
 }
