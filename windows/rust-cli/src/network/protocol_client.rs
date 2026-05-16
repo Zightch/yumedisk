@@ -526,6 +526,26 @@ pub fn parse_header(payload: &[u8]) -> Result<ProtocolHeader, ProtocolClientErro
     })
 }
 
+pub fn parse_request_header(payload: &[u8]) -> Result<ProtocolHeader, ProtocolClientError> {
+    let header = parse_header(payload)?;
+    if header.flags != 0 {
+        return Err(ProtocolClientError::UnexpectedFlags {
+            expected: 0,
+            actual: header.flags,
+        });
+    }
+    if header.status_code != ProtocolStatusCode::Ok {
+        return Err(ProtocolClientError::InvalidBody("request_status_code"));
+    }
+    if header.reserved != 0 {
+        return Err(ProtocolClientError::ReservedNonZero(header.reserved));
+    }
+    if header.request_id == 0 {
+        return Err(ProtocolClientError::InvalidRequestId(0));
+    }
+    Ok(header)
+}
+
 pub fn decode_gateway_status(payload: &[u8]) -> Result<ProtocolStatusCode, ProtocolClientError> {
     Ok(parse_header(payload)?.status_code)
 }

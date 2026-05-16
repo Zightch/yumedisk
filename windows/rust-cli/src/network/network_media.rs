@@ -101,7 +101,12 @@ fn map_network_error_to_backend_error(error: NetworkClientError) -> BackendError
     match error {
         NetworkClientError::InvalidArgument(_) => BackendError::InvalidParameter,
         NetworkClientError::ReadOnlySession => BackendError::InvalidParameter,
-        NetworkClientError::UnauthorizedDisk { .. }
+        NetworkClientError::AlreadyConnected
+        | NetworkClientError::PendingRequestConflict { .. }
+        | NetworkClientError::UnknownPendingRequest { .. }
+        | NetworkClientError::Protocol(_)
+        | NetworkClientError::Transport(_)
+        | NetworkClientError::UnauthorizedDisk { .. }
         | NetworkClientError::ConnectionClosed
         | NetworkClientError::Unimplemented(_) => BackendError::SessionNotOpen,
     }
