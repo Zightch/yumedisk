@@ -48,7 +48,7 @@
 其中：
 
 ```text
-auth_verifier = SHA256(claim_code_bytes)
+auth_verifier = SHA512(claim_code_bytes)
 ```
 
 `gateway` 不保存完整 `claim_code`。
@@ -82,7 +82,7 @@ AuthStartRequest {
 ```text
 AuthStartResponse {
   challenge_token
-  salt_hex
+  salt_bytes
   ttl_seconds
   algo_version
 }
@@ -91,7 +91,7 @@ AuthStartResponse {
 约束：
 
 - `salt` 使用固定长度随机字节，当前建议 `16B`
-- `salt_hex` 为 `32` 个十六进制字符
+- `salt_bytes` 为原始 `16` 字节随机盐
 - 真盘和假盘的返回字段完全一致
 - 真盘和假盘的返回路径都不触发 `storer` 数据面
 
@@ -136,8 +136,8 @@ challenge_token = Seal({
 客户端本地计算：
 
 ```text
-auth_verifier = SHA256(claim_code_bytes)
-proof = SHA256(auth_verifier || salt_bytes)
+auth_verifier = SHA512(claim_code_bytes)
+proof = HMAC-SHA512(key = auth_verifier, msg = salt_bytes)
 ```
 
 然后发送：

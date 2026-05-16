@@ -161,7 +161,7 @@ server/
 其中：
 
 ```text
-auth_verifier = SHA256(claim_code_bytes)
+auth_verifier = SHA512(claim_code_bytes)
 ```
 
 `gateway` 不保存原始 `claim_code`。
