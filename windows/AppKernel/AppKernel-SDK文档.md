@@ -4,7 +4,7 @@
 
 如果你在看的是：
 
-- `TestApp` 如何接入 `AppKernel`
+- 业务宿主如何接入 `AppKernel`
 - 业务宿主需要实现哪些回调
 - 写暂存、最终提交、最终拒绝如何闭环
 - `AkOpen / AkCreateDisk / AkWaitEvent / AkClose` 应该怎么用
@@ -91,7 +91,11 @@
 - `MSVC`
 - `MinGW`
 
-仓内最小接入方式可直接参考 [windows/TestApp/CMakeLists.txt](../TestApp/CMakeLists.txt)。
+仓内当前可参考的宿主入口有：
+
+- `windows/BackendRust/src/runtime.rs`
+- `windows/rust-cli/src/main.rs`
+- `windows/cpp-cli/src/runtime.cpp`
 
 ## 3. 当前版本规则
 

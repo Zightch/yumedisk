@@ -1,12 +1,23 @@
-# YumeDisk App-owned 内存虚拟磁盘文档
+# YumeDisk 文档
 
-本文档集采用最终收口口径，描述下一阶段要落到的唯一多盘数据面：
+本文档集采用当前正式口径，区分“当前已落地主线”和“驱动侧长期架构边界”。
 
-- `YumeDiskKMDF`：KMDF 控制驱动，负责 App 会话、watchdog、direct I/O slot transport 和 miniport 代理。
-- `YumeDiskSCSI`：Storport miniport，负责向 Windows 暴露 SCSI target、处理系统 READ/WRITE SRB、维护 per-target 数据面队列。
-- `TestApp`：用户态 App/测试程序，负责实际介质、建盘删盘、per-disk workers 和压测验证。
+当前仓内主线分为两部分：
 
-早期文档中的 `MyCtl`、`MyDisk`、`MyApp` 只作为历史逻辑名保留；正式文档不再用它们描述新的多盘数据面目标。
+- 驱动与用户态数据面内核：
+  - `YumeDiskKMDF`：KMDF 控制驱动，负责控制接口、单会话、watchdog、direct-I/O slot transport 和 miniport 代理。
+  - `YumeDiskSCSI`：Storport miniport，负责向 Windows 暴露 SCSI target、处理系统 READ/WRITE SRB、维护 per-target 数据面队列。
+  - `AppKernel`：纯 `C` 用户态数据面内核，负责 session、per-disk workers、slot 投递、ACK 推进和事件队列。
+- 当前正式宿主主线：
+  - `windows/tauri-client`：当前正式桌面客户端。
+  - `windows/BackendRust`：当前正式 Rust 宿主运行时，直接承接 `AppKernel`。
+
+仓内同时保留两条辅助宿主/工具线：
+
+- `windows/cpp-cli` + `windows/BackendCore`：并行 C++ 宿主线和调试入口。
+- `windows/rust-cli`：最小 Rust 控制台验证入口。
+
+早期文档中的 `MyCtl`、`MyDisk`、`MyApp` 只作为历史逻辑名保留；已经不存在的 `windows/TestApp/` 和 `windows/client/backendHost/` 不再作为当前事实引用。
 
 ## 目录结构
 
@@ -40,15 +51,16 @@
 - [AppKernel SDK文档](../windows/AppKernel/AppKernel-SDK文档.md)
 - [BackendCore SDK文档](../windows/BackendCore/BackendCore-SDK文档.md)
 
-最终方案的核心原则：
+当前正式口径下的核心原则：
 
-- App 持有唯一真实介质；驱动不把介质所有权搬回内核。
-- App 只打开 `YumeDiskKMDF` 暴露的自定义设备接口，不直接访问 `GUID_DEVINTERFACE_STORAGEPORT`。
+- 用户态宿主持有唯一真实介质；驱动不把介质所有权搬回内核。
+- `AppKernel` 只打开 `YumeDiskKMDF` 暴露的自定义设备接口，不直接访问 `GUID_DEVINTERFACE_STORAGEPORT`。
 - `YumeDiskKMDF` 在内核中定位并持有同会话生命周期的 `YumeDiskSCSI` miniport handle。
 - `YumeDiskSCSI` 负责真实虚拟盘、系统 SCSI I/O、per-target 队列和 SRB completion。
 - 数据面只保留 `POST_READ_SLOT`、`POST_WRITE_SLOT`、`READ_ACK`、`WRITE_ACK_BATCH` 这一条 app-owned slot queue 链路。
 - 旧 `WAIT_EVENT` inline payload 路径不再作为目标实现保留。
 - `POST_WRITE_SLOT` 只提交 write slot；写确认统一通过独立 `WRITE_ACK_BATCH`。
 - `YumeDiskKMDF` 不维护自己的数据面状态机，只做 session/watchdog/direct-I/O transport。
-- `TestApp` 按磁盘独立维护 worker 组、queue depth、介质和 ACK flush，不回到跨盘共享 worker pool。
+- 当前正式桌面主线不枚举系统设备路径，不以 `PhysicalDrive` 或可见盘路径作为挂载成功判据。
+- 宿主按磁盘独立维护 runtime、介质和配置状态，不回到跨盘共享 worker pool 或第二份真状态。
 - 该虚拟盘只用于普通数据盘，不支持系统盘、启动盘、分页盘。

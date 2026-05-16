@@ -1,6 +1,6 @@
 # BackendCore SDK文档
 
-本文档面向 `BackendCore` 的宿主接入方，描述当前唯一有效的 `DLL + C++ API` 使用方式。
+本文档面向 `BackendCore` 的宿主接入方，描述当前并行 C++ 宿主线使用的 `DLL + C++ API`。
 
 如果你在看的是：
 
@@ -14,7 +14,7 @@
 
 如果你需要的是：
 
-- 为什么客户端要拆成 `UI / backendHost / BackendCore / Media`
+- 为什么客户端要拆成 `host / BackendCore / Media`
 - `BackendCore` 在整体客户端中的结构位置
 - 后续完整客户端重构路线
 
@@ -38,7 +38,7 @@
 
 ## 1. 目标与边界
 
-`BackendCore` 是 `YumeDisk` 客户端的运行时核心，以 `Windows DLL` 形式交付。
+`BackendCore` 是当前并行 C++ 宿主线的运行时核心，以 `Windows DLL` 形式交付。
 
 它只负责：
 
@@ -154,7 +154,7 @@
 
 ```mermaid
 flowchart LR
-    Host[宿主<br/>UI / backendHost / media factory]
+    Host[宿主<br/>UI / media factory]
     Ctx[BackendContext]
 
     subgraph RuntimeN[N 盘运行时]
@@ -1041,9 +1041,9 @@ if (!context.createManagedDisk(
 
 真实仓内参考：
 
-- 宿主接入：`windows/client/backendHost/BackendHost/BackendHost.cpp`
-- 内存介质：`windows/client/media/MemoryMedia/MemoryMedia.h`
-- raw 文件介质：`windows/client/media/RawFileMedia/RawFileMedia.h`
+- 宿主接入：`windows/cpp-cli/src/runtime.cpp`
+- 内存介质：`windows/cpp-cli/src/media.h`
+- raw/稀疏文件介质：`windows/cpp-cli/src/media.cpp`
 
 ## 13. 接入检查清单
 
