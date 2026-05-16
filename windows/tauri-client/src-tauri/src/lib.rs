@@ -80,10 +80,12 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        .manage(single_instance_guard)
         .manage(state::client_state::ClientState::default())
         .plugin(tauri_plugin_opener::init())
-        .setup(move |app| {
+        .setup(|app| {
             build_tray(app.handle())?;
+            let single_instance_guard = app.state::<single_instance::SingleInstanceGuard>();
             single_instance::spawn_wake_listener(
                 app.handle(),
                 &single_instance_guard,

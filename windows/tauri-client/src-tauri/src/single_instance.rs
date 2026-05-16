@@ -162,4 +162,4 @@ mod imp {
     pub fn spawn_wake_listener(_: &AppHandle, _: &SingleInstanceGuard, _: fn(&AppHandle)) {}
 }
 
-pub use imp::{initialize, spawn_wake_listener, StartupAction};
+pub use imp::{initialize, spawn_wake_listener, SingleInstanceGuard, StartupAction};
