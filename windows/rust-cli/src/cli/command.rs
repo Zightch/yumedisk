@@ -35,8 +35,8 @@ where
     match command.as_str() {
         "shell" => Ok(CliCommand::Shell),
         "help" | "--help" | "-h" => Ok(CliCommand::Help),
-        "auth" | "open" | "read" | "write" | "smoke" => Ok(CliCommand::Network(
-            PlannedNetworkCommand {
+        "auth" | "open" | "read" | "write" | "smoke" => {
+            Ok(CliCommand::Network(PlannedNetworkCommand {
                 name: match command.as_str() {
                     "auth" => "auth",
                     "open" => "open",
@@ -46,8 +46,8 @@ where
                     _ => unreachable!(),
                 },
                 args: args.collect(),
-            },
-        )),
+            }))
+        }
         _ => Err(format!("unknown command: {}", command)),
     }
 }

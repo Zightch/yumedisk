@@ -8,9 +8,7 @@ type BcryptHashHandle = *mut c_void;
 type Ntstatus = i32;
 
 const STATUS_SUCCESS: Ntstatus = 0;
-const BCRYPT_OBJECT_LENGTH: &[u16] = &[
-    79, 98, 106, 101, 99, 116, 76, 101, 110, 103, 116, 104, 0,
-];
+const BCRYPT_OBJECT_LENGTH: &[u16] = &[79, 98, 106, 101, 99, 116, 76, 101, 110, 103, 116, 104, 0];
 const BCRYPT_HASH_LENGTH: &[u16] = &[
     72, 97, 115, 104, 68, 105, 103, 101, 115, 116, 76, 101, 110, 103, 116, 104, 0,
 ];
@@ -185,14 +183,7 @@ impl HashHandle {
     }
 
     fn hash_data(&mut self, input: &[u8]) -> Result<(), NetworkClientError> {
-        let status = unsafe {
-            BCryptHashData(
-                self.raw,
-                input.as_ptr(),
-                input.len() as u32,
-                0,
-            )
-        };
+        let status = unsafe { BCryptHashData(self.raw, input.as_ptr(), input.len() as u32, 0) };
         if status != STATUS_SUCCESS {
             return Err(NetworkClientError::Crypto(format!(
                 "BCryptHashData failed: 0x{:08x}",
@@ -204,9 +195,8 @@ impl HashHandle {
 
     fn finish(&mut self) -> Result<[u8; 64], NetworkClientError> {
         let mut output = [0u8; 64];
-        let status = unsafe {
-            BCryptFinishHash(self.raw, output.as_mut_ptr(), self.hash_length, 0)
-        };
+        let status =
+            unsafe { BCryptFinishHash(self.raw, output.as_mut_ptr(), self.hash_length, 0) };
         if status != STATUS_SUCCESS {
             return Err(NetworkClientError::Crypto(format!(
                 "BCryptFinishHash failed: 0x{:08x}",

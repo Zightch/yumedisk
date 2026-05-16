@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::mpsc;
-use std::sync::mpsc::Receiver;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
+use std::sync::mpsc::Receiver;
 use std::thread;
 
 use super::error::NetworkClientError;
@@ -96,7 +96,10 @@ impl GatewayConnection {
         }
     }
 
-    pub fn send_request(&self, payload: Vec<u8>) -> Result<GatewayResponseFuture, NetworkClientError> {
+    pub fn send_request(
+        &self,
+        payload: Vec<u8>,
+    ) -> Result<GatewayResponseFuture, NetworkClientError> {
         let header = parse_request_header(&payload).map_err(NetworkClientError::Protocol)?;
         let (response_tx, response_rx) = mpsc::sync_channel(1);
 
@@ -195,11 +198,11 @@ impl GatewayConnection {
             ));
         }
 
-        let pending = self
-            .take_pending_request(header.request_id)
-            .ok_or(NetworkClientError::UnknownPendingRequest {
+        let pending = self.take_pending_request(header.request_id).ok_or(
+            NetworkClientError::UnknownPendingRequest {
                 request_id: header.request_id,
-            })?;
+            },
+        )?;
 
         if header.op_code != pending.op_code {
             let error = NetworkClientError::Protocol(
@@ -280,8 +283,10 @@ mod tests {
                 .expect("read second request should succeed")
                 .to_vec();
 
-            let first_header = crate::network::parse_request_header(&first).expect("parse first header");
-            let second_header = crate::network::parse_request_header(&second).expect("parse second header");
+            let first_header =
+                crate::network::parse_request_header(&first).expect("parse first header");
+            let second_header =
+                crate::network::parse_request_header(&second).expect("parse second header");
 
             let second_response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
@@ -294,7 +299,8 @@ mod tests {
                 session_id: second_header.session_id,
             }
             .encode(b"second");
-            write_frame(&mut stream, &second_response).expect("write second response should succeed");
+            write_frame(&mut stream, &second_response)
+                .expect("write second response should succeed");
 
             let first_response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
@@ -354,7 +360,9 @@ mod tests {
         let request = ProtocolHeader::new_request(ClientOperationCode::Ping, 1, 7)
             .expect("request header")
             .encode(&1u64.to_be_bytes());
-        let future = connection.send_request(request).expect("send should succeed");
+        let future = connection
+            .send_request(request)
+            .expect("send should succeed");
 
         let error = future.recv().expect_err("pending request should fail");
         assert_eq!(error.to_string(), "connection-closed");
@@ -381,7 +389,9 @@ mod tests {
             thread::sleep(std::time::Duration::from_millis(200));
         });
 
-        let connection = Arc::new(GatewayConnection::new(TransportEndpoint::new(address.to_string())));
+        let connection = Arc::new(GatewayConnection::new(TransportEndpoint::new(
+            address.to_string(),
+        )));
         connection.connect().expect("connect should succeed");
 
         let request = ProtocolHeader::new_request(ClientOperationCode::Ping, 9, 7)

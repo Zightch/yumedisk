@@ -7,6 +7,9 @@ use super::protocol_client::ProtocolClientError;
 pub enum NetworkClientError {
     InvalidArgument(&'static str),
     UnauthorizedDisk { disk_id: String },
+    IoOutOfRange,
+    IoTooLarge,
+    IoFailed,
     ReadOnlySession,
     SessionClosed,
     SessionExpired,
@@ -24,7 +27,12 @@ impl fmt::Display for NetworkClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidArgument(name) => write!(formatter, "invalid-argument: {}", name),
-            Self::UnauthorizedDisk { disk_id } => write!(formatter, "unauthorized-disk: {}", disk_id),
+            Self::UnauthorizedDisk { disk_id } => {
+                write!(formatter, "unauthorized-disk: {}", disk_id)
+            }
+            Self::IoOutOfRange => formatter.write_str("io-out-of-range"),
+            Self::IoTooLarge => formatter.write_str("io-too-large"),
+            Self::IoFailed => formatter.write_str("io-failed"),
             Self::ReadOnlySession => formatter.write_str("read-only-session"),
             Self::SessionClosed => formatter.write_str("session-closed"),
             Self::SessionExpired => formatter.write_str("session-expired"),

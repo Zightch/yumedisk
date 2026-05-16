@@ -17,9 +17,10 @@ where
             print_usage();
             Ok(())
         }
-        CliCommand::Network(planned) => {
-            Err(format!("network command not implemented yet: {}", planned.name))
-        }
+        CliCommand::Network(planned) => Err(format!(
+            "network command not implemented yet: {}",
+            planned.name
+        )),
     }
 }
 

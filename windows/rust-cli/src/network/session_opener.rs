@@ -92,7 +92,8 @@ mod tests {
             let request = read_frame_into(&mut stream, &mut buffer)
                 .expect("read session open should succeed")
                 .to_vec();
-            let header = crate::network::parse_request_header(&request).expect("parse session open");
+            let header =
+                crate::network::parse_request_header(&request).expect("parse session open");
             assert_eq!(header.op_code, ClientOperationCode::SessionOpen);
             assert_eq!(&request[HEADER_SIZE..], disk_id.as_bytes());
 

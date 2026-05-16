@@ -130,7 +130,11 @@ pub struct ProtocolHeader {
 }
 
 impl ProtocolHeader {
-    pub fn new_request(op_code: ClientOperationCode, request_id: u64, session_id: u64) -> Result<Self, ProtocolClientError> {
+    pub fn new_request(
+        op_code: ClientOperationCode,
+        request_id: u64,
+        session_id: u64,
+    ) -> Result<Self, ProtocolClientError> {
         if request_id == 0 {
             return Err(ProtocolClientError::InvalidRequestId(0));
         }
@@ -236,14 +240,28 @@ pub struct CloseRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolClientError {
-    PayloadTooSmall { actual: usize },
+    PayloadTooSmall {
+        actual: usize,
+    },
     InvalidProtocolVersion(u8),
     InvalidHeaderLength(u8),
     ReservedNonZero(u16),
-    UnexpectedFlags { expected: u8, actual: u8 },
-    UnexpectedOpCode { expected: Option<ClientOperationCode>, actual: u8 },
-    UnexpectedRequestId { expected: u64, actual: u64 },
-    UnexpectedSessionId { expected: Option<u64>, actual: u64 },
+    UnexpectedFlags {
+        expected: u8,
+        actual: u8,
+    },
+    UnexpectedOpCode {
+        expected: Option<ClientOperationCode>,
+        actual: u8,
+    },
+    UnexpectedRequestId {
+        expected: u64,
+        actual: u64,
+    },
+    UnexpectedSessionId {
+        expected: Option<u64>,
+        actual: u64,
+    },
     InvalidRequestId(u64),
     InvalidDiskId,
     InvalidBody(&'static str),
@@ -254,18 +272,25 @@ impl fmt::Display for ProtocolClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::PayloadTooSmall { actual } => write!(formatter, "payload-too-small: {}", actual),
-            Self::InvalidProtocolVersion(actual) => write!(formatter, "invalid-protocol-version: {}", actual),
-            Self::InvalidHeaderLength(actual) => write!(formatter, "invalid-header-length: {}", actual),
+            Self::InvalidProtocolVersion(actual) => {
+                write!(formatter, "invalid-protocol-version: {}", actual)
+            }
+            Self::InvalidHeaderLength(actual) => {
+                write!(formatter, "invalid-header-length: {}", actual)
+            }
             Self::ReservedNonZero(actual) => write!(formatter, "reserved-non-zero: {}", actual),
             Self::UnexpectedFlags { expected, actual } => {
-                write!(formatter, "unexpected-flags: expected={}, actual={}", expected, actual)
+                write!(
+                    formatter,
+                    "unexpected-flags: expected={}, actual={}",
+                    expected, actual
+                )
             }
             Self::UnexpectedOpCode { expected, actual } => match expected {
                 Some(expected) => write!(
                     formatter,
                     "unexpected-op-code: expected=0x{:02x}, actual=0x{:02x}",
-                    *expected as u8,
-                    actual
+                    *expected as u8, actual
                 ),
                 None => write!(formatter, "unexpected-op-code: actual=0x{:02x}", actual),
             },
@@ -285,7 +310,9 @@ impl fmt::Display for ProtocolClientError {
             Self::InvalidRequestId(actual) => write!(formatter, "invalid-request-id: {}", actual),
             Self::InvalidDiskId => formatter.write_str("invalid-disk-id"),
             Self::InvalidBody(reason) => write!(formatter, "invalid-body: {}", reason),
-            Self::GatewayStatus(status) => write!(formatter, "gateway-status: 0x{:04x}", status.code()),
+            Self::GatewayStatus(status) => {
+                write!(formatter, "gateway-status: 0x{:04x}", status.code())
+            }
         }
     }
 }
@@ -295,20 +322,33 @@ impl Error for ProtocolClientError {}
 impl AuthStartRequest {
     pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
         let body = encode_disk_id(&self.disk_id)?;
-        Ok(ProtocolHeader::new_request(ClientOperationCode::AuthStart, request_id, 0)?.encode(&body))
+        Ok(
+            ProtocolHeader::new_request(ClientOperationCode::AuthStart, request_id, 0)?
+                .encode(&body),
+        )
     }
 }
 
 impl AuthStartResponse {
-    pub fn decode_response(payload: &[u8], expected_request_id: u64) -> Result<Self, ProtocolClientError> {
-        let (_, body) = decode_success_response(payload, ClientOperationCode::AuthStart, expected_request_id, Some(0))?;
+    pub fn decode_response(
+        payload: &[u8],
+        expected_request_id: u64,
+    ) -> Result<Self, ProtocolClientError> {
+        let (_, body) = decode_success_response(
+            payload,
+            ClientOperationCode::AuthStart,
+            expected_request_id,
+            Some(0),
+        )?;
         decode_auth_start_response_body(body)
     }
 }
 
 impl AuthFinishRequest {
     pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
-        if self.challenge_token.len() < AUTH_CHALLENGE_TOKEN_MIN_BYTES || self.challenge_token.len() > u16::MAX as usize {
+        if self.challenge_token.len() < AUTH_CHALLENGE_TOKEN_MIN_BYTES
+            || self.challenge_token.len() > u16::MAX as usize
+        {
             return Err(ProtocolClientError::InvalidBody("challenge_token_len"));
         }
 
@@ -316,11 +356,22 @@ impl AuthFinishRequest {
         body[0..2].copy_from_slice(&(self.challenge_token.len() as u16).to_be_bytes());
         body[2..2 + self.challenge_token.len()].copy_from_slice(&self.challenge_token);
         body[2 + self.challenge_token.len()..].copy_from_slice(&self.proof);
-        Ok(ProtocolHeader::new_request(ClientOperationCode::AuthFinish, request_id, 0)?.encode(&body))
+        Ok(
+            ProtocolHeader::new_request(ClientOperationCode::AuthFinish, request_id, 0)?
+                .encode(&body),
+        )
     }
 
-    pub fn decode_response(payload: &[u8], expected_request_id: u64) -> Result<(), ProtocolClientError> {
-        let _ = decode_success_response(payload, ClientOperationCode::AuthFinish, expected_request_id, Some(0))?;
+    pub fn decode_response(
+        payload: &[u8],
+        expected_request_id: u64,
+    ) -> Result<(), ProtocolClientError> {
+        let _ = decode_success_response(
+            payload,
+            ClientOperationCode::AuthFinish,
+            expected_request_id,
+            Some(0),
+        )?;
         Ok(())
     }
 }
@@ -328,13 +379,24 @@ impl AuthFinishRequest {
 impl SessionOpenRequest {
     pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
         let body = encode_disk_id(&self.disk_id)?;
-        Ok(ProtocolHeader::new_request(ClientOperationCode::SessionOpen, request_id, 0)?.encode(&body))
+        Ok(
+            ProtocolHeader::new_request(ClientOperationCode::SessionOpen, request_id, 0)?
+                .encode(&body),
+        )
     }
 }
 
 impl SessionOpenResponse {
-    pub fn decode_response(payload: &[u8], expected_request_id: u64) -> Result<Self, ProtocolClientError> {
-        let (header, body) = decode_success_response(payload, ClientOperationCode::SessionOpen, expected_request_id, None)?;
+    pub fn decode_response(
+        payload: &[u8],
+        expected_request_id: u64,
+    ) -> Result<Self, ProtocolClientError> {
+        let (header, body) = decode_success_response(
+            payload,
+            ClientOperationCode::SessionOpen,
+            expected_request_id,
+            None,
+        )?;
         if header.session_id == 0 {
             return Err(ProtocolClientError::UnexpectedSessionId {
                 expected: None,
@@ -342,13 +404,18 @@ impl SessionOpenResponse {
             });
         }
         if body.len() != SESSION_OPEN_RESPONSE_BYTES {
-            return Err(ProtocolClientError::InvalidBody("session_open_response_len"));
+            return Err(ProtocolClientError::InvalidBody(
+                "session_open_response_len",
+            ));
         }
 
-        let disk_size_bytes = u64::from_be_bytes(body[0..8].try_into().expect("slice length fixed"));
+        let disk_size_bytes =
+            u64::from_be_bytes(body[0..8].try_into().expect("slice length fixed"));
         let max_io_bytes = u32::from_be_bytes(body[8..12].try_into().expect("slice length fixed"));
-        let session_ttl_seconds = u32::from_be_bytes(body[12..16].try_into().expect("slice length fixed"));
-        let session_flags = u16::from_be_bytes(body[16..18].try_into().expect("slice length fixed"));
+        let session_ttl_seconds =
+            u32::from_be_bytes(body[12..16].try_into().expect("slice length fixed"));
+        let session_flags =
+            u16::from_be_bytes(body[16..18].try_into().expect("slice length fixed"));
         let reserved = u16::from_be_bytes(body[18..20].try_into().expect("slice length fixed"));
 
         if reserved != 0 {
@@ -379,7 +446,10 @@ impl ReadAtRequest {
         let mut body = [0u8; READ_WRITE_FIXED_BODY_BYTES];
         body[0..8].copy_from_slice(&self.offset.to_be_bytes());
         body[8..12].copy_from_slice(&self.length.to_be_bytes());
-        Ok(ProtocolHeader::new_request(ClientOperationCode::ReadAt, request_id, self.session_id)?.encode(&body))
+        Ok(
+            ProtocolHeader::new_request(ClientOperationCode::ReadAt, request_id, self.session_id)?
+                .encode(&body),
+        )
     }
 }
 
@@ -401,21 +471,27 @@ impl ReadAtResponse {
             return Err(ProtocolClientError::InvalidBody("read_response_length"));
         }
 
-        Ok(Self { data: body.to_vec() })
+        Ok(Self {
+            data: body.to_vec(),
+        })
     }
 }
 
 impl WriteAtRequest {
     pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
         validate_non_zero_session_id(self.session_id)?;
-        let length = u32::try_from(self.data.len()).map_err(|_| ProtocolClientError::InvalidBody("write_length"))?;
+        let length = u32::try_from(self.data.len())
+            .map_err(|_| ProtocolClientError::InvalidBody("write_length"))?;
         validate_io_length(length)?;
 
         let mut body = vec![0u8; READ_WRITE_FIXED_BODY_BYTES + self.data.len()];
         body[0..8].copy_from_slice(&self.offset.to_be_bytes());
         body[8..12].copy_from_slice(&length.to_be_bytes());
         body[12..].copy_from_slice(&self.data);
-        Ok(ProtocolHeader::new_request(ClientOperationCode::WriteAt, request_id, self.session_id)?.encode(&body))
+        Ok(
+            ProtocolHeader::new_request(ClientOperationCode::WriteAt, request_id, self.session_id)?
+                .encode(&body),
+        )
     }
 
     pub fn decode_response(
@@ -441,7 +517,10 @@ impl PingRequest {
         validate_non_zero_session_id(self.session_id)?;
 
         let body = self.nonce.to_be_bytes();
-        Ok(ProtocolHeader::new_request(ClientOperationCode::Ping, request_id, self.session_id)?.encode(&body))
+        Ok(
+            ProtocolHeader::new_request(ClientOperationCode::Ping, request_id, self.session_id)?
+                .encode(&body),
+        )
     }
 }
 
@@ -469,7 +548,10 @@ impl PingResponse {
 impl CloseRequest {
     pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
         validate_non_zero_session_id(self.session_id)?;
-        Ok(ProtocolHeader::new_request(ClientOperationCode::Close, request_id, self.session_id)?.encode(&[]))
+        Ok(
+            ProtocolHeader::new_request(ClientOperationCode::Close, request_id, self.session_id)?
+                .encode(&[]),
+        )
     }
 
     pub fn decode_response(
@@ -492,12 +574,16 @@ impl CloseRequest {
 
 pub fn parse_header(payload: &[u8]) -> Result<ProtocolHeader, ProtocolClientError> {
     if payload.len() < HEADER_SIZE {
-        return Err(ProtocolClientError::PayloadTooSmall { actual: payload.len() });
+        return Err(ProtocolClientError::PayloadTooSmall {
+            actual: payload.len(),
+        });
     }
 
     let protocol_version = payload[0];
     if protocol_version != PROTOCOL_VERSION {
-        return Err(ProtocolClientError::InvalidProtocolVersion(protocol_version));
+        return Err(ProtocolClientError::InvalidProtocolVersion(
+            protocol_version,
+        ));
     }
 
     let header_len = payload[1];
@@ -557,7 +643,12 @@ fn decode_success_response<'payload>(
     expected_session_id: Option<u64>,
 ) -> Result<(ProtocolHeader, &'payload [u8]), ProtocolClientError> {
     let header = parse_header(payload)?;
-    validate_response_header(header, expected_op_code, expected_request_id, expected_session_id)?;
+    validate_response_header(
+        header,
+        expected_op_code,
+        expected_request_id,
+        expected_session_id,
+    )?;
     if header.status_code != ProtocolStatusCode::Ok {
         return Err(ProtocolClientError::GatewayStatus(header.status_code));
     }
@@ -633,7 +724,8 @@ fn decode_auth_start_response_body(body: &[u8]) -> Result<AuthStartResponse, Pro
     let mut salt = [0u8; AUTH_SALT_BYTES];
     salt.copy_from_slice(&body[3..19]);
 
-    let challenge_token_len = u16::from_be_bytes(body[19..21].try_into().expect("slice length fixed")) as usize;
+    let challenge_token_len =
+        u16::from_be_bytes(body[19..21].try_into().expect("slice length fixed")) as usize;
     if challenge_token_len < AUTH_CHALLENGE_TOKEN_MIN_BYTES {
         return Err(ProtocolClientError::InvalidBody("challenge_token_len"));
     }
@@ -731,7 +823,8 @@ mod tests {
         }
         .encode(&body);
 
-        let decoded = AuthStartResponse::decode_response(&payload, 11).expect("decode should succeed");
+        let decoded =
+            AuthStartResponse::decode_response(&payload, 11).expect("decode should succeed");
         assert_eq!(decoded.ttl_seconds, 123);
         assert_eq!(decoded.salt, [7u8; AUTH_SALT_BYTES]);
         assert_eq!(decoded.challenge_token, b"tok");
@@ -777,7 +870,8 @@ mod tests {
         }
         .encode(&body);
 
-        let decoded = SessionOpenResponse::decode_response(&payload, 12).expect("decode should succeed");
+        let decoded =
+            SessionOpenResponse::decode_response(&payload, 12).expect("decode should succeed");
         assert_eq!(decoded.session_id, 99);
         assert_eq!(decoded.disk_size_bytes, 4096);
         assert_eq!(decoded.max_io_bytes, 60_000);
@@ -795,7 +889,10 @@ mod tests {
         .encode_request(31)
         .expect("read encode should succeed");
         assert_eq!(&read[HEADER_SIZE..HEADER_SIZE + 8], &8u64.to_be_bytes());
-        assert_eq!(&read[HEADER_SIZE + 8..HEADER_SIZE + 12], &4u32.to_be_bytes());
+        assert_eq!(
+            &read[HEADER_SIZE + 8..HEADER_SIZE + 12],
+            &4u32.to_be_bytes()
+        );
 
         let write = WriteAtRequest {
             session_id: 5,
@@ -805,7 +902,10 @@ mod tests {
         .encode_request(32)
         .expect("write encode should succeed");
         assert_eq!(&write[HEADER_SIZE..HEADER_SIZE + 8], &8u64.to_be_bytes());
-        assert_eq!(&write[HEADER_SIZE + 8..HEADER_SIZE + 12], &4u32.to_be_bytes());
+        assert_eq!(
+            &write[HEADER_SIZE + 8..HEADER_SIZE + 12],
+            &4u32.to_be_bytes()
+        );
         assert_eq!(&write[HEADER_SIZE + 12..], b"ABCD");
     }
 
@@ -831,7 +931,8 @@ mod tests {
             session_id: 7,
         }
         .encode(&12345u64.to_be_bytes());
-        let response = PingResponse::decode_response(&response_payload, 21, 7).expect("ping decode should succeed");
+        let response = PingResponse::decode_response(&response_payload, 21, 7)
+            .expect("ping decode should succeed");
         assert_eq!(response.nonce, 12345);
 
         let close_payload = CloseRequest { session_id: 7 }
@@ -854,7 +955,8 @@ mod tests {
         }
         .encode(&[]);
 
-        let error = ReadAtResponse::decode_response(&payload, 41, 9, 16).expect_err("decode should fail");
+        let error =
+            ReadAtResponse::decode_response(&payload, 41, 9, 16).expect_err("decode should fail");
         assert_eq!(
             error,
             ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrIoOutOfRange)

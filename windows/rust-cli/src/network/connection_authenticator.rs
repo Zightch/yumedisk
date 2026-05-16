@@ -33,8 +33,9 @@ impl ConnectionAuthenticator {
         .encode_request(start_request_id)
         .map_err(NetworkClientError::Protocol)?;
         let start_response_payload = self.connection.send_request_and_wait(start_payload)?;
-        let start_response = AuthStartResponse::decode_response(&start_response_payload, start_request_id)
-            .map_err(NetworkClientError::Protocol)?;
+        let start_response =
+            AuthStartResponse::decode_response(&start_response_payload, start_request_id)
+                .map_err(NetworkClientError::Protocol)?;
 
         let proof = compute_proof(material.auth_verifier, &start_response)?;
         let finish_request_id = self.connection.allocate_request_id();
@@ -132,7 +133,8 @@ mod tests {
             let auth_start = read_frame_into(&mut stream, &mut buffer)
                 .expect("read auth start should succeed")
                 .to_vec();
-            let start_header = crate::network::parse_request_header(&auth_start).expect("parse auth start");
+            let start_header =
+                crate::network::parse_request_header(&auth_start).expect("parse auth start");
             assert_eq!(start_header.op_code, ClientOperationCode::AuthStart);
             assert_eq!(&auth_start[HEADER_SIZE..], b"A1b2C3d4E5f6G7h8");
 
@@ -158,9 +160,13 @@ mod tests {
             let auth_finish = read_frame_into(&mut stream, &mut buffer)
                 .expect("read auth finish should succeed")
                 .to_vec();
-            let finish_header = crate::network::parse_request_header(&auth_finish).expect("parse auth finish");
+            let finish_header =
+                crate::network::parse_request_header(&auth_finish).expect("parse auth finish");
             assert_eq!(finish_header.op_code, ClientOperationCode::AuthFinish);
-            assert_eq!(&auth_finish[HEADER_SIZE..HEADER_SIZE + 2], &3u16.to_be_bytes());
+            assert_eq!(
+                &auth_finish[HEADER_SIZE..HEADER_SIZE + 2],
+                &3u16.to_be_bytes()
+            );
             assert_eq!(&auth_finish[HEADER_SIZE + 2..HEADER_SIZE + 5], b"tok");
 
             let finish_response = ProtocolHeader {
@@ -205,7 +211,8 @@ mod tests {
             let auth_start = read_frame_into(&mut stream, &mut buffer)
                 .expect("read auth start should succeed")
                 .to_vec();
-            let start_header = crate::network::parse_request_header(&auth_start).expect("parse auth start");
+            let start_header =
+                crate::network::parse_request_header(&auth_start).expect("parse auth start");
 
             let mut start_body = Vec::new();
             start_body.push(1);
@@ -229,7 +236,8 @@ mod tests {
             let auth_finish = read_frame_into(&mut stream, &mut buffer)
                 .expect("read auth finish should succeed")
                 .to_vec();
-            let finish_header = crate::network::parse_request_header(&auth_finish).expect("parse auth finish");
+            let finish_header =
+                crate::network::parse_request_header(&auth_finish).expect("parse auth finish");
 
             let finish_response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,

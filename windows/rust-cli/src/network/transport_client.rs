@@ -74,13 +74,8 @@ pub enum TransportError {
     AlreadyConnected,
     NotConnected,
     ConnectionClosed,
-    BufferTooSmall {
-        provided: usize,
-        required: usize,
-    },
-    PayloadOutOfRange {
-        size: usize,
-    },
+    BufferTooSmall { provided: usize, required: usize },
+    PayloadOutOfRange { size: usize },
     Io(io::Error),
 }
 
@@ -175,7 +170,9 @@ impl TransportClient {
             .lock()
             .expect("transport incoming receiver poisoned");
 
-        receiver.recv().unwrap_or(Err(TransportError::ConnectionClosed))
+        receiver
+            .recv()
+            .unwrap_or(Err(TransportError::ConnectionClosed))
     }
 
     pub fn close(&self) -> Result<(), TransportError> {
@@ -229,9 +226,7 @@ pub fn read_frame_into<'buffer, R: Read>(
     }
 
     let payload = &mut buffer[..payload_size];
-    reader
-        .read_exact(payload)
-        .map_err(map_io_error_for_read)?;
+    reader.read_exact(payload).map_err(map_io_error_for_read)?;
     Ok(payload)
 }
 
@@ -334,7 +329,8 @@ mod tests {
     fn read_frame_into_decodes_payload() {
         let mut bytes = Cursor::new(vec![0x00, 0x02, b'a', b'b', b'c']);
         let mut buffer = [0u8; 16];
-        let payload = read_frame_into(&mut bytes, &mut buffer).expect("read_frame_into should succeed");
+        let payload =
+            read_frame_into(&mut bytes, &mut buffer).expect("read_frame_into should succeed");
         assert_eq!(payload, b"abc");
     }
 
@@ -342,7 +338,8 @@ mod tests {
     fn read_frame_into_rejects_small_buffer() {
         let mut bytes = Cursor::new(vec![0x00, 0x02, b'a', b'b', b'c']);
         let mut buffer = [0u8; 2];
-        let error = read_frame_into(&mut bytes, &mut buffer).expect_err("read_frame_into should fail");
+        let error =
+            read_frame_into(&mut bytes, &mut buffer).expect_err("read_frame_into should fail");
         match error {
             TransportError::BufferTooSmall { provided, required } => {
                 assert_eq!(provided, 2);
@@ -378,19 +375,25 @@ mod tests {
         let transport = TransportClient::new(TransportEndpoint::new(address.to_string()));
         transport.connect().expect("connect should succeed");
 
-        let ready = transport.recv_payload().expect("client should receive ready");
+        let ready = transport
+            .recv_payload()
+            .expect("client should receive ready");
         assert_eq!(ready, b"server-ready");
 
         transport
             .send_payload(b"client-one".to_vec())
             .expect("client first send should succeed");
-        let ack_one = transport.recv_payload().expect("client should receive ack-one");
+        let ack_one = transport
+            .recv_payload()
+            .expect("client should receive ack-one");
         assert_eq!(ack_one, b"ack-one");
 
         transport
             .send_payload(b"client-two".to_vec())
             .expect("client second send should succeed");
-        let ack_two = transport.recv_payload().expect("client should receive ack-two");
+        let ack_two = transport
+            .recv_payload()
+            .expect("client should receive ack-two");
         assert_eq!(ack_two, b"ack-two");
 
         transport.close().expect("close should succeed");
