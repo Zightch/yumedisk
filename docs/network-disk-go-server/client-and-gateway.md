@@ -8,7 +8,7 @@
 
 - 定义 `client <-> gateway` 的正式业务层二进制协议
 - 固定字段布局、字节序、取值范围、错误码和时序要求
-- 作为后续 `GatewayConnection`、`DiskSession`、`NetworkMedia` 与 `gateway` 外部接口实现的唯一协议依据
+- 作为后续 `GatewayConnection`、`ConnectionAuthenticator`、`SessionOpener`、`DiskSession`、`NetworkMedia` 与 `gateway` 外部接口实现的唯一协议依据
 
 优先级：
 
@@ -38,6 +38,14 @@ client <-> gateway <-> storer
 - `storer` 持有真实存储介质并执行块读写
 - 认证成功后，`client` 不直接连接 `storer`
 - `gateway` 内部维护 `session_id -> storer session` 映射
+
+当前 client 侧必须明确以下对象边界：
+
+- `GatewayConnection`：connection 复用核心
+- `ConnectionAuthenticator`：认证阶段模块
+- `SessionOpener`：会话建立阶段模块
+- `DiskSession`：已打开会话对象
+- `NetworkMedia`：只绑定 `DiskSession` 的 `Media` 适配层
 
 协议边界拆分：
 
@@ -70,6 +78,20 @@ client <-> gateway <-> storer
 - `client` 与 `gateway` 的 `protocol_version` 必须一致
 - 收到未知版本时，直接返回 `ERR_PROTOCOL_VERSION`
 - 第一版不协商降级版本
+
+## 3.3 业务语义分层
+
+当前 `client-and-gateway` 协议虽然属于同一份业务协议，但语义上必须拆成三段：
+
+1. 认证层
+2. 会话建立层
+3. 数据面层
+
+硬约束：
+
+- 认证成功不等于会话已建立
+- 认证成功只授予“申请打开该盘会话”的资格
+- 只有会话建立层成功后，才能创建 `DiskSession`
 
 ## 4. 基础约定
 
@@ -229,17 +251,17 @@ proof = HMAC-SHA512(key = auth_verifier, msg = salt_bytes)
 ```text
  0        1        2        3        4        5        6        7
 +--------+--------+--------+--------+--------+--------+--------+--------+
-|   pv   |  hlen  |   op   | flags  |     status_code     |    reserved    |
+|   pv   |  hlen  |   op   | flags  |   status_code   |    reserved     |
 +--------+--------+--------+--------+--------+--------+--------+--------+
 
  8        9       10       11       12       13       14       15
 +--------+--------+--------+--------+--------+--------+--------+--------+
-|                              request_id (u64)                              |
+|                          request_id (u64)                             |
 +--------+--------+--------+--------+--------+--------+--------+--------+
 
 16       17       18       19       20       21       22       23
 +--------+--------+--------+--------+--------+--------+--------+--------+
-|                              session_id (u64)                              |
+|                          session_id (u64)                             |
 +--------+--------+--------+--------+--------+--------+--------+--------+
 
 legend:
@@ -266,6 +288,35 @@ op     = op_code
 ### 7.3 未知命令
 
 - 未知 `op_code` 返回 `ERR_UNSUPPORTED_OP`
+
+## 7.4 `GatewayConnection` 复用核心职责
+
+本协议默认运行在一个 connection 复用模型上：
+
+```text
+NetworkMedia1 -> DiskSession1 \
+NetworkMedia2 -> DiskSession2  -> GatewayConnection -> Transport -> TCP
+NetworkMedia3 -> DiskSession3 /
+```
+
+这里的关键约束是：
+
+- 多个 `NetworkMedia` 不直接抢 `TCP`
+- 多个 `NetworkMedia` 通过各自的 `DiskSession` 复用同一个 `GatewayConnection`
+- `GatewayConnection` 是 connection-scoped 并发复用核心
+
+因此必须由 `GatewayConnection` 管理：
+
+- `request_id` 分配
+- pending request map
+- 响应配对
+- 连接断开广播失败
+
+这些职责不属于：
+
+- `NetworkMedia`
+- `DiskSession`
+- 认证层
 
 ## 8. 操作码表
 
@@ -341,12 +392,19 @@ op     = op_code
 
 ## 10. 命令详细定义
 
+当前命令必须按语义阶段阅读，而不是堆成一层理解：
+
+- 认证层：`AuthStart / AuthFinish`
+- 会话建立层：`SessionOpen`
+- 数据面层：`ReadAt / WriteAt / Ping / Close`
+
 ## 10.1 AuthStart
 
 作用：
 
 - client 发起 challenge 请求
 - gateway 无论真盘还是假盘，都返回统一形态 challenge
+- 属于认证层
 
 ### 10.1.1 请求头
 
@@ -411,6 +469,7 @@ op     = op_code
 
 - client 提交基于 `claim_code` 和 `salt_bytes` 计算出的 `proof`
 - gateway 完成认证判定
+- 属于认证层
 
 ### 10.2.1 请求头
 
@@ -468,11 +527,19 @@ op     = op_code
 - 失败后清理当前未认证上下文
 - 不允许通过错误码区分真盘与假盘
 
+### 10.2.7 认证层硬约束
+
+- `AuthFinish` 成功后不得直接创建 `DiskSession`
+- `AuthFinish` 成功后只表示当前 connection 已对目标 `disk_id` 完成认证
+- 后续是否能真正拿到会话，必须进入 `SessionOpen`
+
 ## 10.3 SessionOpen
 
 作用：
 
 - 在当前 `gateway` 连接上为某个已认证盘打开一个数据面会话
+- 属于会话建立层
+- 是认证资格进入真实会话的唯一入口
 
 ### 10.3.1 请求头
 
@@ -589,8 +656,11 @@ v1 absolute_max_io_bytes = 65500
 
 ### 10.3.6 语义约束
 
+- `SessionOpen` 的前提是当前 connection 已对目标 `disk_id` 完成认证
+- `SessionOpen` 的成功与否由 `storer` 打开策略决定
 - 同一连接上，`SessionOpen` 可针对多个不同盘执行
 - 同一盘重复 `SessionOpen` 默认创建新的独立会话
+- `SessionOpen` 成功后才允许构造 `DiskSession`
 - `NetworkMedia` 构造必须使用本响应返回的 `session_id`
 
 ## 10.4 ReadAt
@@ -598,6 +668,7 @@ v1 absolute_max_io_bytes = 65500
 作用：
 
 - 从远端盘读取指定区间数据
+- 属于数据面层
 
 ### 10.4.1 请求头
 
@@ -656,6 +727,7 @@ data[length]
 作用：
 
 - 向远端盘写入指定区间数据
+- 属于数据面层
 
 ### 10.5.1 请求头
 
@@ -709,6 +781,7 @@ data[length]
 
 - 保活 `session_id`
 - 检测连接与会话仍有效
+- 属于数据面层
 
 ### 10.6.1 请求头
 
@@ -749,6 +822,7 @@ data[length]
 作用：
 
 - 关闭指定 `session_id`
+- 属于数据面层
 
 ### 10.7.1 请求头
 
@@ -831,10 +905,11 @@ sequenceDiagram
 
 - 一个 `GatewayConnection`
 - 并发承载多个 `DiskSession`
-- 多个 `NetworkMedia` 抢同一条 TCP 连接
+- 多个 `NetworkMedia` 通过各自的 `DiskSession` 并发复用同一条 `GatewayConnection`
 
 实现要求：
 
+- `GatewayConnection` 必须作为 connection 复用核心存在
 - 使用 `request_id` 做响应配对
 - 响应允许乱序返回
 - 不允许假设“同一会话请求一定串行返回”
@@ -858,10 +933,8 @@ sequenceDiagram
 
 第一版 `NetworkMedia` 需要遵守：
 
-- 挂载前先执行 `AuthStart -> AuthFinish -> SessionOpen`
 - 保存：
-  - `GatewayConnection`
-  - `session_id`
+  - 已打开的 `DiskSession`
   - `disk_size_bytes`
   - `read_only`
   - `max_io_bytes`
@@ -870,6 +943,15 @@ sequenceDiagram
 - 不做本地写缓存
 - 不做自动重试
 - 不做断线自动补连
+
+职责边界：
+
+- `NetworkMedia` 不关心认证过程
+- `NetworkMedia` 不负责创建连接对象
+- `NetworkMedia` 不负责 transport
+- `NetworkMedia` 不负责 `request_id` 分配
+- `NetworkMedia` 不负责 `SessionOpen`
+- `NetworkMedia` 只把盘操作构造成业务协议包并发给一个已经完成的 `DiskSession`
 
 与当前 `BackendRust::Media` 对齐：
 
@@ -883,8 +965,15 @@ sequenceDiagram
 - 无论真假盘，`AuthStart` 都返回统一结构
 - `AuthFinish` 失败统一随机延迟 `2..5s`
 - `AuthStart` 与假盘不触发 `storer` 数据面
+- 认证成功只记录资格，不创建 `DiskSession`
 
-### 14.2 转发阶段
+### 14.2 会话建立阶段
+
+- `SessionOpen` 是认证资格进入真实会话的唯一入口
+- `gateway` 必须把会话打开请求交给 `storer`
+- 是否允许打开、是否只读、是否共享、是否排它，由 `storer` 决定
+
+### 14.3 转发阶段
 
 - `gateway` 不缓存盘数据
 - `gateway` 不篡改 `request_id`

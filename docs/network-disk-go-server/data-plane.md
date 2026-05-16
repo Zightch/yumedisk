@@ -15,8 +15,14 @@
 其中：
 
 - `AuthStart` / `AuthFinish` 属于认证阶段
-- `SessionOpen` 是认证后打开盘会话的唯一入口
+- `SessionOpen` 属于会话建立阶段，是认证后打开盘会话的唯一入口
 - `ReadAt / WriteAt / Close / Ping` 属于数据面最小命令
+
+硬约束：
+
+- 认证成功不等于会话已建立
+- 认证成功只授予“申请打开该盘会话”的资格
+- 只有 `SessionOpen` 成功后，才能创建 `DiskSession`
 
 第一版不额外定义 `AuthGrant` 给 client 中转。
 
@@ -72,6 +78,7 @@ header {
 用途：
 
 - 在当前 `gateway` 连接上打开一个远端盘会话
+- 由 `storer` 决定是否允许打开，以及最终会话属性
 
 成功返回最少这些字段：
 
@@ -189,10 +196,8 @@ header {
 
 `NetworkMedia` 第一版采用最小、直接的阻塞实现：
 
-- 挂载前完成 `AuthStart -> AuthFinish -> SessionOpen`
 - 构造时保存：
-  - `GatewayConnection`
-  - `session_id`
+  - 已打开的 `DiskSession`
   - `disk_size_bytes`
   - `read_only`
   - `max_io_bytes`
@@ -201,6 +206,15 @@ header {
 - 不做本地写缓存
 - 不做断线重连
 - 不做自动重试
+
+职责边界：
+
+- `NetworkMedia` 不负责认证
+- `NetworkMedia` 不负责连接管理
+- `NetworkMedia` 不负责 transport
+- `NetworkMedia` 不负责 `request_id`
+- `NetworkMedia` 不负责 `SessionOpen`
+- `NetworkMedia` 只绑定一个已经完成的 `DiskSession`
 
 与当前 `BackendRust::Media` 口径对齐：
 

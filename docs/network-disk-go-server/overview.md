@@ -31,8 +31,16 @@ UI
       -> DiskRuntimeStore
         -> DiskRuntime
           -> NetworkMedia(Media adapter)
-    -> GatewayConnection(server endpoint)
+    -> GatewayConnection(server endpoint, connection reuse core)
+      -> ConnectionAuthenticator
+      -> SessionOpener
       -> DiskSession(storer session)
+
+ConnectionAuthenticator
+  -> authenticate disk_id on GatewayConnection
+
+SessionOpener
+  -> open authorized disk session on GatewayConnection
 
 NetworkMedia
   -> bind -> DiskSession
@@ -46,13 +54,18 @@ NetworkMedia
 - 网络盘接入后，`DiskRuntime` 继续持有 `NetworkMedia`
 - 一个 `GatewayConnection` 对应一个 server endpoint
 - 一个 `GatewayConnection` 下并发承载多个 `DiskSession`
-- `GatewayConnection` 只管理连接、收发循环、pending request 和 `DiskSession` 注册表
+- `GatewayConnection` 是 connection 复用核心
+- `GatewayConnection` 只管理连接、收发循环、pending request、request_id 分配和响应配对
+- `ConnectionAuthenticator` 运行在 `DiskSession` 创建之前
+- `SessionOpener` 运行在认证成功之后、数据面之前
 - `NetworkMedia` 绑定一个 `DiskSession`
 
 当前命名口径：
 
 - `GatewayConnection`：client 到某个 server gateway 的单 TCP 连接管理对象
-- `DiskSession`：某个远端盘在 client 侧的已认证会话
+- `ConnectionAuthenticator`：在 `GatewayConnection` 上完成 `disk_id` 认证资格的模块
+- `SessionOpener`：在认证资格已成立后请求打开真实盘会话的模块
+- `DiskSession`：某个远端盘在 client 侧的已打开会话，不等于仅已认证
 - `NetworkMedia`：基于 `DiskSession` 实现的 `Media` 适配层
 - `DiskRuntime`：tauri-client 当前真实持有 `Media` 的盘运行时对象
 
@@ -60,7 +73,9 @@ NetworkMedia
 
 - 一个 `GatewayConnection` 对应一个 server endpoint
 - 一个 `GatewayConnection` 下可以并发承载多个 `DiskSession`
-- 多个 `NetworkMedia` 并发抢同一条 `GatewayConnection` 是预期行为
+- 多个 `NetworkMedia` 通过各自的 `DiskSession` 并发复用同一条 `GatewayConnection` 是预期行为
+- 认证成功只表示当前 connection 获得某个 `disk_id` 的认证资格
+- 只有 `SessionOpen` 经 `storer` 打开策略判定成功后，才能创建 `DiskSession`
 - `DiskRuntime` 持有 `NetworkMedia`
 - `NetworkMedia` 绑定一个 `DiskSession`
 - client 永远只连接 `gateway`，不直接连接 `storer`
@@ -107,7 +122,8 @@ server/
 - 接收 `disk_id`
 - 返回统一形态的 challenge
 - 在本地使用缓存的认证信息校验 `proof`
-- 为认证成功的 client 创建 `DiskSession`
+- 为认证成功的 connection 记录认证资格
+- 在 `SessionOpen` 时向 `storer` 申请真实会话
 - 维护 `client session -> storer session` 映射
 - 转发 `ReadAt / WriteAt / Ping / Close`
 
@@ -191,11 +207,24 @@ client 本地配置只保存网络盘重建所需最小信息：
 当前口径：
 
 - 两个连接如果都持有正确领盘码，都可以通过认证
-- 认证成功后谁有操作权、是否共享、是否排它，由 `storer` 决定
+- 认证成功后只是获得“申请打开该盘会话”的资格
+- 能不能真的打开、是否只读、是否共享、是否排它，由 `storer` 在 `SessionOpen` 阶段决定
 
 ## 6. 第一版最小会话模型
 
 认证成功后不向 client 暴露 `storer_addr`，而是在 `gateway` 内部建立转发链。
+
+当前业务语义必须拆成三段：
+
+1. 认证阶段：`AuthStart / AuthFinish`
+2. 会话建立阶段：`SessionOpen`
+3. 数据面阶段：`ReadAt / WriteAt / Ping / Close`
+
+硬约束：
+
+- 认证成功不等于会话已建立
+- 认证成功只授予“申请打开该盘会话”的资格
+- 只有 `SessionOpen` 成功后，才能创建 `DiskSession`
 
 会话模型：
 
@@ -216,6 +245,7 @@ DiskSession {
 - `gateway` 持有 `session_id -> storer session` 映射
 - `client` 后续所有数据面请求只带 `session_id`
 - `NetworkMedia` 构造时必须拿到 `disk_size_bytes`、`read_only`、`max_io_bytes`
+- `DiskSession` 只表示已打开会话，不表示仅已认证状态
 
 ## 7. 第一版实现顺序
 

@@ -55,7 +55,13 @@ auth_verifier = SHA512(claim_code_bytes)
 
 ## 3. 认证协议
 
-认证协议拆为两步：
+当前 `client-and-gateway` 业务协议必须拆成三段语义：
+
+1. 认证阶段
+2. 会话建立阶段
+3. 数据面阶段
+
+其中认证阶段只包含：
 
 1. `AuthStart`
 2. `AuthFinish`
@@ -157,7 +163,14 @@ AuthFinishRequest {
 4. 根据 token 中的 `disk_id` 查询本地路由缓存
 5. 若命中真实盘，使用缓存的 `auth_verifier` 本地校验 `proof`
 6. 若未命中真实盘，直接进入统一失败路径
-7. `proof` 通过后，只在 `gateway` 内部标记该连接已认证，不向 client 暴露 `storer` 地址
+7. `proof` 通过后，只在 `gateway` 内部标记“当前 connection 已对该 `disk_id` 完成认证”
+8. 不向 client 暴露 `storer` 地址
+
+硬约束：
+
+- 认证成功不等于会话已建立
+- 认证成功不创建 `DiskSession`
+- 认证成功只表示当前 connection 获得“申请打开该盘会话”的资格
 
 ### 失败路径
 
@@ -198,7 +211,7 @@ AuthFinishRequest {
 1. 不让外部轻易判断某个 `disk_id` 是否真实存在
 2. 不让假盘请求消耗 `storer` 资源
 
-## 5. 认证成功后的会话打开
+## 5. 会话建立协议
 
 认证通过后，client 不改连到 `storer`，而是继续留在当前 `gateway` 连接上。
 
@@ -212,11 +225,13 @@ SessionOpenRequest {
 
 `gateway` 行为：
 
-1. 校验当前连接是否已通过该 `disk_id` 认证
+1. 校验当前 connection 是否已通过该 `disk_id` 认证
 2. 根据路由缓存找到目标 `storer`
-3. 在内部建立 `gateway session -> storer session` 映射
-4. 分配新的 `session_id`
-5. 把会话元数据返回给 client
+3. 把“打开这个盘会话”的请求交给 `storer`
+4. 由 `storer` 根据打开策略决定是否允许打开
+5. 若允许，则在内部建立 `gateway session -> storer session` 映射
+6. 分配新的 `session_id`
+7. 把会话元数据返回给 client
 
 返回：
 
@@ -236,6 +251,7 @@ SessionOpenResponse {
 - `disk_size_bytes`、`read_only`、`max_io_bytes` 是 `NetworkMedia` 构造所需最小元数据
 - `gateway` 内部持有 `session_id -> storer session` 映射
 - client 不持有 `storer_addr`
+- 只有这一步成功后，client 才能构造 `DiskSession`
 
 ## 6. 路由与转发边界
 
@@ -263,4 +279,5 @@ SessionOpenResponse {
 
 - 两个连接如果都持有正确领盘码，都可以通过认证
 - 两个连接都可以继续发 `SessionOpen`
-- 认证成功后谁有操作权、是否共享、是否排它，由 `storer` 决定
+- 但能不能真的拿到会话，不由认证层决定
+- 认证成功后谁有操作权、是否共享、是否排它、是否只读，由 `storer` 在 `SessionOpen` 阶段决定

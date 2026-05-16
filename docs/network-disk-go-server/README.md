@@ -65,6 +65,18 @@ client <-> storer
 15. 数据面第一版允许多 `DiskSession` 并发复用同一条 `client -> gateway` TCP 连接
 16. 第一版 `NetworkMedia` 不做断线重连、不做本地写缓存、不做自动重试
 
+当前 `client-and-gateway` 业务协议必须拆成三段：
+
+1. 认证层：`AuthStart / AuthFinish`
+2. 会话建立层：`SessionOpen`
+3. 数据面层：`ReadAt / WriteAt / Ping / Close`
+
+硬约束：
+
+- 认证成功 != 会话已建立
+- 认证成功只授予“申请打开该盘会话”的资格
+- 只有 `SessionOpen` 成功后，才能创建 `DiskSession`
+
 ## 当前明确不做
 
 - 多副本
