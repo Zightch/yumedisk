@@ -35,16 +35,9 @@ where
     match command.as_str() {
         "shell" => Ok(CliCommand::Shell),
         "help" | "--help" | "-h" => Ok(CliCommand::Help),
-        "auth" | "open" | "read" | "write" | "smoke" => {
+        "auth" => {
             Ok(CliCommand::Network(PlannedNetworkCommand {
-                name: match command.as_str() {
-                    "auth" => "auth",
-                    "open" => "open",
-                    "read" => "read",
-                    "write" => "write",
-                    "smoke" => "smoke",
-                    _ => unreachable!(),
-                },
+                name: "auth",
                 args: args.collect(),
             }))
         }
@@ -68,18 +61,16 @@ mod tests {
     fn parses_network_command_without_leaking_cli_layer() {
         let command = parse_args(vec![
             OsString::from("rust-cli"),
-            OsString::from("read"),
+            OsString::from("auth"),
             OsString::from("127.0.0.1:9000"),
             OsString::from("claim"),
-            OsString::from("1"),
-            OsString::from("4"),
         ])
         .expect("parse should succeed");
 
         match command {
             CliCommand::Network(planned) => {
-                assert_eq!(planned.name, "read");
-                assert_eq!(planned.args, vec!["127.0.0.1:9000", "claim", "1", "4"]);
+                assert_eq!(planned.name, "auth");
+                assert_eq!(planned.args, vec!["127.0.0.1:9000", "claim"]);
             }
             other => panic!("unexpected command: {:?}", other),
         }
