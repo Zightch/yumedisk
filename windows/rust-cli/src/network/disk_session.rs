@@ -1,12 +1,16 @@
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::Weak;
 use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
 
 use super::error::NetworkClientError;
-use super::protocol_client::CloseRequest;
 use super::gateway_connection::GatewayConnection;
+use super::protocol_client::CloseRequest;
 use super::protocol_client::PingRequest;
 use super::protocol_client::PingResponse;
 use super::protocol_client::ProtocolClientError;
@@ -17,6 +21,7 @@ use super::protocol_client::WriteAtRequest;
 
 const STATE_OPEN: u8 = 0;
 const STATE_CLOSED: u8 = 1;
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct DiskSession {
@@ -32,9 +37,23 @@ pub struct DiskSession {
 #[derive(Debug)]
 struct DiskSessionLifecycle {
     opened_at: SystemTime,
-    expires_at: SystemTime,
+    runtime: Mutex<DiskSessionRuntime>,
+    keepalive: Mutex<Option<DiskSessionKeepalive>>,
     session_ttl_seconds: u32,
     state: AtomicU8,
+}
+
+#[derive(Debug, Clone)]
+struct DiskSessionRuntime {
+    expires_at: SystemTime,
+    last_activity_at: SystemTime,
+    terminal_error: Option<NetworkClientError>,
+}
+
+#[derive(Debug)]
+struct DiskSessionKeepalive {
+    stop_tx: mpsc::Sender<()>,
+    thread: thread::JoinHandle<()>,
 }
 
 impl DiskSession {
@@ -65,7 +84,7 @@ impl DiskSession {
             .checked_add(Duration::from_secs(u64::from(session_ttl_seconds)))
             .ok_or(NetworkClientError::InvalidArgument("session_ttl_seconds"))?;
 
-        Ok(Self {
+        let session = Self {
             connection,
             disk_id: disk_id.into(),
             session_id,
@@ -74,11 +93,19 @@ impl DiskSession {
             max_io_bytes,
             lifecycle: Arc::new(DiskSessionLifecycle {
                 opened_at,
-                expires_at,
+                runtime: Mutex::new(DiskSessionRuntime {
+                    expires_at,
+                    last_activity_at: opened_at,
+                    terminal_error: None,
+                }),
+                keepalive: Mutex::new(None),
                 session_ttl_seconds,
                 state: AtomicU8::new(STATE_OPEN),
             }),
-        })
+        };
+
+        session.start_keepalive();
+        Ok(session)
     }
 
     pub fn connection(&self) -> &Arc<GatewayConnection> {
@@ -110,7 +137,11 @@ impl DiskSession {
     }
 
     pub fn expires_at(&self) -> SystemTime {
-        self.lifecycle.expires_at
+        self.lifecycle
+            .runtime
+            .lock()
+            .expect("disk session runtime poisoned")
+            .expires_at
     }
 
     pub fn session_ttl_seconds(&self) -> u32 {
@@ -122,11 +153,20 @@ impl DiskSession {
     }
 
     pub fn is_expired(&self) -> bool {
-        SystemTime::now() >= self.lifecycle.expires_at
+        SystemTime::now() >= self.expires_at()
     }
 
     pub fn is_connection_alive(&self) -> bool {
         self.connection.is_connected()
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        self.lifecycle
+            .runtime
+            .lock()
+            .expect("disk session runtime poisoned")
+            .terminal_error
+            .is_some()
     }
 
     pub fn mark_closed(&self) {
@@ -137,10 +177,24 @@ impl DiskSession {
         if self.is_closed() {
             return Err(NetworkClientError::SessionClosed);
         }
+
+        if let Some(error) = self
+            .lifecycle
+            .runtime
+            .lock()
+            .expect("disk session runtime poisoned")
+            .terminal_error
+            .clone()
+        {
+            return Err(error);
+        }
+
         if self.is_expired() {
+            self.mark_terminal(NetworkClientError::SessionExpired);
             return Err(NetworkClientError::SessionExpired);
         }
         if !self.is_connection_alive() {
+            self.mark_terminal(NetworkClientError::ConnectionClosed);
             return Err(NetworkClientError::ConnectionClosed);
         }
         Ok(())
@@ -148,20 +202,9 @@ impl DiskSession {
 
     pub fn ping(&self, nonce: u64) -> Result<u64, NetworkClientError> {
         self.ensure_usable()?;
-
-        let request_id = self.connection.allocate_request_id();
-        let payload = PingRequest {
-            session_id: self.session_id,
-            nonce,
-        }
-        .encode_request(request_id)
-        .map_err(NetworkClientError::Protocol)?;
-
-        let response_payload = self.connection.send_request_and_wait(payload)?;
-        let response =
-            PingResponse::decode_response(&response_payload, request_id, self.session_id)
-                .map_err(map_data_plane_error)?;
-        Ok(response.nonce)
+        let response = send_ping_once(&self.connection, self.session_id, nonce)?;
+        self.refresh_expiration()?;
+        Ok(response)
     }
 
     pub fn close(&self) -> Result<(), NetworkClientError> {
@@ -169,7 +212,17 @@ impl DiskSession {
             return Ok(());
         }
 
-        self.ensure_usable()?;
+        if let Err(error) = self.ensure_usable() {
+            if matches!(
+                error,
+                NetworkClientError::SessionClosed | NetworkClientError::SessionExpired
+            ) {
+                self.mark_closed();
+                self.stop_keepalive();
+                return Ok(());
+            }
+            return Err(error);
+        }
 
         let request_id = self.connection.allocate_request_id();
         let payload = CloseRequest {
@@ -182,6 +235,7 @@ impl DiskSession {
         let close_result = CloseRequest::decode_response(&response_payload, request_id, self.session_id)
             .map_err(map_data_plane_error);
         self.mark_closed();
+        self.stop_keepalive();
         close_result
     }
 
@@ -214,8 +268,9 @@ impl DiskSession {
             self.session_id,
             buffer.len() as u32,
         )
-        .map_err(map_data_plane_error)?;
+        .map_err(map_request_error(self))?;
         buffer.copy_from_slice(&response.data);
+        self.refresh_expiration()?;
         Ok(())
     }
 
@@ -240,8 +295,187 @@ impl DiskSession {
 
         let response_payload = self.connection.send_request_and_wait(payload)?;
         WriteAtRequest::decode_response(&response_payload, request_id, self.session_id)
-            .map_err(map_data_plane_error)
+            .map_err(map_request_error(self))?;
+        self.refresh_expiration()?;
+        Ok(())
     }
+
+    fn refresh_expiration(&self) -> Result<(), NetworkClientError> {
+        let now = SystemTime::now();
+        let next_expires_at = now
+            .checked_add(Duration::from_secs(u64::from(self.lifecycle.session_ttl_seconds)))
+            .ok_or(NetworkClientError::InvalidArgument("session_ttl_seconds"))?;
+        let mut runtime = self
+            .lifecycle
+            .runtime
+            .lock()
+            .expect("disk session runtime poisoned");
+        runtime.expires_at = next_expires_at;
+        runtime.last_activity_at = now;
+        Ok(())
+    }
+
+    fn start_keepalive(&self) {
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let lifecycle = Arc::downgrade(&self.lifecycle);
+        let connection = Arc::clone(&self.connection);
+        let session_id = self.session_id;
+
+        let thread = thread::spawn(move || {
+            run_keepalive_loop(lifecycle, connection, session_id, stop_rx);
+        });
+
+        *self
+            .lifecycle
+            .keepalive
+            .lock()
+            .expect("disk session keepalive poisoned") = Some(DiskSessionKeepalive { stop_tx, thread });
+    }
+
+    fn stop_keepalive(&self) {
+        let keepalive = self
+            .lifecycle
+            .keepalive
+            .lock()
+            .expect("disk session keepalive poisoned")
+            .take();
+        let Some(keepalive) = keepalive else {
+            return;
+        };
+
+        let _ = keepalive.stop_tx.send(());
+        if keepalive.thread.thread().id() != thread::current().id() {
+            let _ = keepalive.thread.join();
+        }
+    }
+
+    fn mark_terminal(&self, error: NetworkClientError) {
+        self.lifecycle.state.store(STATE_CLOSED, Ordering::Release);
+        let mut runtime = self
+            .lifecycle
+            .runtime
+            .lock()
+            .expect("disk session runtime poisoned");
+        if runtime.terminal_error.is_none() {
+            runtime.terminal_error = Some(error);
+        }
+        drop(runtime);
+        self.stop_keepalive();
+    }
+}
+
+impl Drop for DiskSession {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.lifecycle) == 1 {
+            self.stop_keepalive();
+        }
+    }
+}
+
+fn run_keepalive_loop(
+    lifecycle: Weak<DiskSessionLifecycle>,
+    connection: Arc<GatewayConnection>,
+    session_id: u64,
+    stop_rx: mpsc::Receiver<()>,
+) {
+    let mut nonce = session_id;
+    loop {
+        match stop_rx.recv_timeout(KEEPALIVE_INTERVAL) {
+            Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+
+        let Some(lifecycle) = lifecycle.upgrade() else {
+            return;
+        };
+        if lifecycle.state.load(Ordering::Acquire) == STATE_CLOSED {
+            return;
+        }
+
+        let should_ping = {
+            let runtime = lifecycle
+                .runtime
+                .lock()
+                .expect("disk session runtime poisoned");
+            if runtime.terminal_error.is_some() {
+                return;
+            }
+            match SystemTime::now().duration_since(runtime.last_activity_at) {
+                Ok(elapsed) => elapsed >= KEEPALIVE_INTERVAL,
+                Err(_) => false,
+            }
+        };
+        if !should_ping {
+            continue;
+        }
+
+        nonce = nonce.wrapping_add(1);
+        match send_ping_once(&connection, session_id, nonce) {
+            Ok(_) => {
+                let now = SystemTime::now();
+                let Some(next_expires_at) = now
+                    .checked_add(Duration::from_secs(u64::from(lifecycle.session_ttl_seconds)))
+                else {
+                    return;
+                };
+                let mut runtime = lifecycle
+                    .runtime
+                    .lock()
+                    .expect("disk session runtime poisoned");
+                runtime.expires_at = next_expires_at;
+                runtime.last_activity_at = now;
+            }
+            Err(error) if is_terminal_session_error(&error) => {
+                lifecycle.state.store(STATE_CLOSED, Ordering::Release);
+                let mut runtime = lifecycle
+                    .runtime
+                    .lock()
+                    .expect("disk session runtime poisoned");
+                if runtime.terminal_error.is_none() {
+                    runtime.terminal_error = Some(error);
+                }
+                return;
+            }
+            Err(_) => {}
+        }
+    }
+}
+
+fn send_ping_once(
+    connection: &Arc<GatewayConnection>,
+    session_id: u64,
+    nonce: u64,
+) -> Result<u64, NetworkClientError> {
+    let request_id = connection.allocate_request_id();
+    let payload = PingRequest { session_id, nonce }
+        .encode_request(request_id)
+        .map_err(NetworkClientError::Protocol)?;
+
+    let response_payload = connection.send_request_and_wait(payload)?;
+    let response = PingResponse::decode_response(&response_payload, request_id, session_id)
+        .map_err(map_data_plane_error)?;
+    Ok(response.nonce)
+}
+
+fn map_request_error<'a>(
+    session: &'a DiskSession,
+) -> impl FnOnce(ProtocolClientError) -> NetworkClientError + 'a {
+    move |error| {
+        let mapped = map_data_plane_error(error);
+        if is_terminal_session_error(&mapped) {
+            session.mark_terminal(mapped.clone());
+        }
+        mapped
+    }
+}
+
+fn is_terminal_session_error(error: &NetworkClientError) -> bool {
+    matches!(
+        error,
+        NetworkClientError::SessionClosed
+            | NetworkClientError::SessionExpired
+            | NetworkClientError::ConnectionClosed
+    )
 }
 
 fn validate_single_io(
@@ -312,6 +546,7 @@ mod tests {
     use crate::network::transport_client::write_frame;
     use std::net::TcpListener;
     use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn disk_session_saves_session_metadata_and_lifecycle() {
@@ -496,6 +731,106 @@ mod tests {
 
         session.close().expect("close should succeed");
         assert!(session.is_closed());
+
+        connection.close().expect("close should succeed");
+        server.join().expect("server should join");
+    }
+
+    #[test]
+    fn disk_session_refreshes_local_expiration_after_successful_ping_read_and_write() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
+        let address = listener.local_addr().expect("local addr should succeed");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            let mut buffer = vec![0u8; MAX_FRAME_PAYLOAD_BYTES];
+
+            let ping_request = read_frame_into(&mut stream, &mut buffer)
+                .expect("ping request should succeed")
+                .to_vec();
+            let ping_header =
+                crate::network::parse_request_header(&ping_request).expect("parse ping request");
+            let ping_response = ProtocolHeader {
+                protocol_version: PROTOCOL_VERSION,
+                header_len: HEADER_SIZE as u8,
+                op_code: ClientOperationCode::Ping,
+                flags: FLAG_RESPONSE,
+                status_code: ProtocolStatusCode::Ok,
+                reserved: 0,
+                request_id: ping_header.request_id,
+                session_id: ping_header.session_id,
+            }
+            .encode(&ping_request[HEADER_SIZE..]);
+            write_frame(&mut stream, &ping_response).expect("write ping response");
+
+            let read_request = read_frame_into(&mut stream, &mut buffer)
+                .expect("read request should succeed")
+                .to_vec();
+            let read_header =
+                crate::network::parse_request_header(&read_request).expect("parse read request");
+            let read_response = ProtocolHeader {
+                protocol_version: PROTOCOL_VERSION,
+                header_len: HEADER_SIZE as u8,
+                op_code: ClientOperationCode::ReadAt,
+                flags: FLAG_RESPONSE,
+                status_code: ProtocolStatusCode::Ok,
+                reserved: 0,
+                request_id: read_header.request_id,
+                session_id: read_header.session_id,
+            }
+            .encode(b"ABCD");
+            write_frame(&mut stream, &read_response).expect("write read response");
+
+            let write_request = read_frame_into(&mut stream, &mut buffer)
+                .expect("write request should succeed")
+                .to_vec();
+            let write_header =
+                crate::network::parse_request_header(&write_request).expect("parse write request");
+            let write_response = ProtocolHeader {
+                protocol_version: PROTOCOL_VERSION,
+                header_len: HEADER_SIZE as u8,
+                op_code: ClientOperationCode::WriteAt,
+                flags: FLAG_RESPONSE,
+                status_code: ProtocolStatusCode::Ok,
+                reserved: 0,
+                request_id: write_header.request_id,
+                session_id: write_header.session_id,
+            }
+            .encode(&[]);
+            write_frame(&mut stream, &write_response).expect("write write response");
+        });
+
+        let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
+        connection.connect().expect("connect should succeed");
+        let session = DiskSession::new(
+            connection.clone(),
+            "A1b2C3d4E5f6G7h8",
+            77,
+            4096,
+            false,
+            60_000,
+            300,
+        )
+        .expect("session should build");
+
+        let original_expires_at = session.expires_at();
+        std::thread::sleep(Duration::from_millis(5));
+        session.ping(11).expect("ping should succeed");
+        let after_ping = session.expires_at();
+        assert!(after_ping > original_expires_at);
+
+        std::thread::sleep(Duration::from_millis(5));
+        let mut read_buffer = [0u8; 4];
+        session
+            .read_at(0, &mut read_buffer)
+            .expect("read should succeed");
+        let after_read = session.expires_at();
+        assert!(after_read > after_ping);
+
+        std::thread::sleep(Duration::from_millis(5));
+        session.write_at(4, b"WXYZ").expect("write should succeed");
+        let after_write = session.expires_at();
+        assert!(after_write > after_read);
 
         connection.close().expect("close should succeed");
         server.join().expect("server should join");

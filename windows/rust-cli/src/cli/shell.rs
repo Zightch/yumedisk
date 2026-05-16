@@ -52,6 +52,7 @@ fn run_command_loop(host: &mut CliHost) -> AppResult<()> {
     let stdin = io::stdin();
 
     loop {
+        reap_dead_network_disks(host);
         print!("> ");
         io::stdout()
             .flush()
@@ -72,7 +73,9 @@ fn run_command_loop(host: &mut CliHost) -> AppResult<()> {
         }
 
         match execute_command(host, tokens[0], &tokens[1..]) {
-            Ok(LoopControl::Continue) => {}
+            Ok(LoopControl::Continue) => {
+                reap_dead_network_disks(host);
+            }
             Ok(LoopControl::Exit) => return Ok(()),
             Err(error) => eprintln!("error: {}", error),
         }
@@ -312,6 +315,17 @@ fn parse_u64_value(text: &str, name: &str) -> AppResult<u64> {
 
 fn bool_to_text(value: bool) -> &'static str {
     if value { "true" } else { "false" }
+}
+
+fn reap_dead_network_disks(host: &mut CliHost) {
+    match host.reap_dead_network_disks() {
+        Ok(removed) => {
+            for target_id in removed {
+                eprintln!("notice: removed dead network target={}", target_id);
+            }
+        }
+        Err(error) => eprintln!("error: auto-remove-dead-network-disks: {}", error),
+    }
 }
 
 #[cfg(test)]

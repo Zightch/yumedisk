@@ -46,17 +46,10 @@ func (s *Service) Open(connectionID uint64, diskID string) Descriptor {
 }
 
 func (s *Service) Ping(sessionID uint64) (Descriptor, bool) {
-	desc, ok := s.manager.Get(sessionID)
-	if !ok {
+	desc, err := s.touch(sessionID)
+	if err != nil {
 		return Descriptor{}, false
 	}
-	if time.Now().After(desc.ExpiresAt) {
-		s.manager.Close(sessionID)
-		return Descriptor{}, false
-	}
-
-	desc.ExpiresAt = time.Now().Add(s.defaultTTL)
-	s.manager.Update(desc)
 	return desc, true
 }
 
@@ -77,7 +70,7 @@ func (s *Service) Manager() *Manager {
 }
 
 func (s *Service) Read(sessionID uint64, offset uint64, length uint32) ([]byte, error) {
-	desc, err := s.validate(sessionID)
+	desc, err := s.touch(sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +89,7 @@ func (s *Service) Read(sessionID uint64, offset uint64, length uint32) ([]byte, 
 }
 
 func (s *Service) Write(sessionID uint64, offset uint64, data []byte) error {
-	desc, err := s.validate(sessionID)
+	desc, err := s.touch(sessionID)
 	if err != nil {
 		return err
 	}
@@ -125,6 +118,17 @@ func (s *Service) validate(sessionID uint64) (Descriptor, error) {
 		s.manager.Close(sessionID)
 		return Descriptor{}, ErrSessionExpired
 	}
+	return desc, nil
+}
+
+func (s *Service) touch(sessionID uint64) (Descriptor, error) {
+	desc, err := s.validate(sessionID)
+	if err != nil {
+		return Descriptor{}, err
+	}
+
+	desc.ExpiresAt = time.Now().Add(s.defaultTTL)
+	s.manager.Update(desc)
 	return desc, nil
 }
 

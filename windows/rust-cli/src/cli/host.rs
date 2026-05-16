@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use backend_rust::BackendContext;
 use backend_rust::BackendStatsSnapshot;
@@ -16,6 +17,7 @@ use crate::network::ConnectionAuthenticator;
 use crate::network::DiskSession;
 use crate::network::GatewayConnection;
 use crate::network::NetworkMedia;
+use crate::network::NetworkClientError;
 use crate::network::SessionOpener;
 use crate::network::TransportEndpoint;
 
@@ -70,7 +72,7 @@ impl ConnectionRegistry {
 pub struct CliHost {
     context: BackendContext,
     connections: ConnectionRegistry,
-    mounted_network_disks: BTreeMap<u32, MountedNetworkDisk>,
+    mounted_network_disks: Arc<Mutex<BTreeMap<u32, MountedNetworkDisk>>>,
 }
 
 impl CliHost {
@@ -85,16 +87,22 @@ impl CliHost {
             return Err(error);
         }
 
+        let mounted_network_disks = Arc::new(Mutex::new(BTreeMap::new()));
+
         Ok(Self {
             context,
             connections: ConnectionRegistry::default(),
-            mounted_network_disks: BTreeMap::new(),
+            mounted_network_disks,
         })
     }
 
     pub fn shutdown(&mut self) {
+        let _ = self.remove_all_disks();
         self.context.close();
-        self.mounted_network_disks.clear();
+        self.mounted_network_disks
+            .lock()
+            .expect("mounted_network_disks poisoned")
+            .clear();
     }
 
     pub fn query_session_state_text(&self) -> String {
@@ -217,14 +225,17 @@ impl CliHost {
             return Err(error_text);
         }
 
-        self.mounted_network_disks.insert(
-            target_id,
-            MountedNetworkDisk {
-                addr: addr.to_string(),
-                disk_id: disk_id.clone(),
-                session: session.clone(),
-            },
-        );
+        self.mounted_network_disks
+            .lock()
+            .expect("mounted_network_disks poisoned")
+            .insert(
+                target_id,
+                MountedNetworkDisk {
+                    addr: addr.to_string(),
+                    disk_id: disk_id.clone(),
+                    session: session.clone(),
+                },
+            );
 
         Ok(NetworkMountResult {
             target_id,
@@ -238,11 +249,18 @@ impl CliHost {
     }
 
     pub fn remove_disk(&mut self, target_id: u32) -> AppResult<()> {
-        if let Some(mounted) = self.mounted_network_disks.get(&target_id) {
-            mounted
-                .session
-                .close()
-                .map_err(|error| error.to_string())?;
+        if let Some(mounted) = self
+            .mounted_network_disks
+            .lock()
+            .expect("mounted_network_disks poisoned")
+            .get(&target_id)
+            .cloned()
+        {
+            match mounted.session.close() {
+                Ok(()) => {}
+                Err(NetworkClientError::SessionClosed | NetworkClientError::SessionExpired) => {}
+                Err(error) => return Err(error.to_string()),
+            }
         }
 
         let mut error_text = String::new();
@@ -256,7 +274,10 @@ impl CliHost {
             return Err(error_text);
         };
 
-        self.mounted_network_disks.remove(&target_id);
+        self.mounted_network_disks
+            .lock()
+            .expect("mounted_network_disks poisoned")
+            .remove(&target_id);
 
         Ok(())
     }
@@ -275,8 +296,33 @@ impl CliHost {
         Ok(())
     }
 
+    pub fn reap_dead_network_disks(&mut self) -> AppResult<Vec<u32>> {
+        let target_ids = self
+            .mounted_network_disks
+            .lock()
+            .expect("mounted_network_disks poisoned")
+            .iter()
+            .filter_map(|(target_id, mounted)| {
+                if mounted.session.is_terminal() {
+                    Some(*target_id)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let mut removed = Vec::new();
+        for target_id in target_ids {
+            self.remove_disk(target_id)?;
+            removed.push(target_id);
+        }
+        Ok(removed)
+    }
+
     pub fn network_mounts(&self) -> Vec<NetworkMountResult> {
         self.mounted_network_disks
+            .lock()
+            .expect("mounted_network_disks poisoned")
             .iter()
             .map(|(target_id, mounted)| NetworkMountResult {
                 target_id: *target_id,
