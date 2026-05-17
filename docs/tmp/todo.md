@@ -251,18 +251,23 @@
 
 ## 推荐实现顺序
 
-1. E1 + E2 启动入口与联调
-2. F1 + F2 文档收口
+1. F1 + F2 文档收口
 
 ## 当前下一步
 
-下一步直接开始 `E1 + E2. 启动入口与联调`：
+下一步直接开始 `F1 + F2. 文档收口`：
 
-- 明确两个可执行文件的最终启动方式：
-  - `cmd/storer`
+- 同步正式文档到当前真实结构：
+  - `README.md`
+  - `overview.md`
+  - `gateway-and-storer.md`
+  - `auth-routing.md`
+  - `data-plane.md`
+- 收进当前真实启动方式：
   - `cmd/gateway`
-- 保持 `windows/rust-cli/src/bin/network-auth-open.rs` 继续可直连真实 gateway
-- 优先覆盖联调场景：
+  - `cmd/storer`
+- 收进当前真实联调口径：
+  - `network-auth-open`
   - auth
   - open
   - busy
