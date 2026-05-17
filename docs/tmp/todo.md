@@ -251,22 +251,18 @@
 
 ## 推荐实现顺序
 
-1. B3 新增 gateway session 映射层
-2. B4 新增 storer-facing gateway 边界
-3. C1 + C2 收紧 storer / whole 结构
-4. D1 + D2 + D3 接通协议主路径
-5. E1 + E2 启动入口与联调
-6. F1 + F2 文档收口
+1. B4 新增 storer-facing gateway 边界
+2. C1 + C2 收紧 storer / whole 结构
+3. D1 + D2 + D3 接通协议主路径
+4. E1 + E2 启动入口与联调
+5. F1 + F2 文档收口
 
 ## 当前下一步
 
-下一步直接开始 `B3. 新增 gateway session 映射层`：
+下一步直接开始 `B4. 新增 storer-facing gateway 边界`：
 
-- 建立：
-  - `gateway_session_id -> storer_connection + storer_session_id`
-- `gateway` 负责：
-  - 本地 `session_id` 分配
-  - 映射生命周期管理
-  - 对 client 隐藏 `storer` 原始 `session_id`
+- 新增独立监听端口
+- 建立独立注册流程
+- 注册完成后，为后续会话透传复用现有数据面语义
 - 必须避免：
-  - 把 `storer` 原始 `session_id` 直接暴露给 client
+  - 重新发明第二套 `SessionOpen / ReadAt / WriteAt / Ping / Close` 业务定义
