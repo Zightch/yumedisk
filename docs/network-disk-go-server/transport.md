@@ -2,39 +2,52 @@
 
 ## 1. 文档定位
 
-本文档只定义 transport 层，不定义 bootstrap、TLS、认证、会话和数据面业务语义。
+本文档只定义 transport 层，不定义认证、授权、会话和数据面业务语义。
 
-职责边界固定如下：
+当前正式结构有两条边：
 
-- `bootstrap`
-  - `TCP`
-  - `Hello`
-  - 可选 `TLS`
-- `transport`
-  - framed payload
-- `business protocol`
-  - 认证
-  - 会话
-  - metadata
-  - 数据面
+- `client <-> gateway`
+- `gateway <-> storer`
+
+它们共用同一套 framed transport，但 bootstrap 规则不同。
 
 ## 2. 分层顺序
 
-当前正式顺序固定为：
+### 2.1 client-facing
+
+`client -> gateway` 的正式顺序固定为：
 
 ```text
 TCP
   -> Hello
   -> optional TLS
   -> transport
-  -> business protocol
+  -> client-gateway business protocol
 ```
 
 因此：
 
 - `Hello` 不属于 transport
 - TLS 握手不属于 transport
-- transport 只在 bootstrap 完成后才启动
+- transport 只在 client bootstrap 完成后才启动
+
+### 2.2 storer-facing
+
+`gateway -> storer` 的正式顺序固定为：
+
+```text
+TCP
+  -> transport
+  -> gateway-storer business protocol
+```
+
+当前第一版口径直接定死为：
+
+- storer-facing 不定义 `Hello`
+- storer-facing 不定义 TLS 握手步骤
+- storer-facing 的第一条业务消息就是 `StorerRegister`
+
+如果后续需要改动这条边，应整体改写正式文档，而不是在正式文档中保留过渡叙述。
 
 ## 3. transport 的本质
 
@@ -46,12 +59,22 @@ framed duplex byte stream
 
 也就是：
 
-- 下层是一条已经完成 bootstrap 的双工字节流
+- 下层是一条已经完成各自 bootstrap 的双工字节流
 - 上层得到完整 payload 的收发能力
 
 transport 不理解任何业务语义。
 
-## 4. client 侧位置
+## 4. transport 上层
+
+当前 transport 只承接三类上层协议：
+
+1. `client-gateway control plane`
+2. `gateway-storer route control plane`
+3. `session metadata + shared data plane`
+
+它不区分控制面和数据面，只承接完整 payload。
+
+## 5. client 侧位置
 
 当前 client 侧结构应理解为：
 
@@ -66,46 +89,42 @@ NetworkMedia
 含义：
 
 - `NetworkMedia` 不直接持有 transport
+- `NetworkMedia` 自身只绑定 `disk_id + session + metadata`
 - `DiskSession` 不直接持有裸 TCP
 - `GatewayConnection` 内部持有 transport runtime
 - 多个 session 并发复用同一条 `GatewayConnection`
 
-## 5. server 侧位置
-
-### 5.1 gateway
+## 6. gateway 侧位置
 
 ```text
 client listener
   -> accepted stream
-  -> bootstrap
+  -> client bootstrap
   -> transport runtime
-  -> client-and-gateway business handler
+  -> client-gateway handler
 
 storer listener
   -> accepted stream
   -> transport runtime
-  -> gateway-and-storer handler
+  -> storer register / route runtime
+  -> gateway-storer handler
 ```
 
-说明：
-
-- client-facing 入口需要 bootstrap
-- storer-facing 当前也可以直接走 transport；后续若要补 bootstrap，应整体一致定义
-
-### 5.2 whole
+## 7. whole 侧位置
 
 ```text
 whole
   -> client listener
-  -> bootstrap
+  -> client bootstrap
   -> transport runtime
-  -> client-and-gateway business handler
+  -> client-gateway handler
+  -> local gateway core
   -> local storer core
 ```
 
-`whole` 只是部署形态不同，不改变 transport 语义。
+`whole` 只是装配方式不同，不改变 transport 语义。
 
-## 6. 帧格式
+## 8. 帧格式
 
 transport 帧定义保持：
 
@@ -119,11 +138,11 @@ frame = u16be payload_size_m1 + payload[payload_size_m1 + 1]
 - payload 实际长度范围 `1..65536`
 - 不存在空包
 
-## 7. 字节序
+## 9. 字节序
 
 transport 长度头固定使用 `big-endian`。
 
-## 8. transport 的唯一职责
+## 10. transport 的唯一职责
 
 transport 只做三件事：
 
@@ -136,13 +155,15 @@ transport 明确不做：
 - 认证
 - route
 - 会话
+- metadata 查询
+- 请求响应配对
+- notice 解释
 - 心跳决策
-- 错误码解释
 - 多帧业务重组
 - 压缩
 - 加密
 
-## 9. 并发承载
+## 11. 并发承载
 
 transport 必须支撑一条连接上的全双工并发收发。
 
@@ -155,7 +176,7 @@ transport 必须支撑一条连接上的全双工并发收发。
 
 transport 只承载并发，不做并发业务决策。
 
-## 10. 包大小上限
+## 12. 包大小上限
 
 当前单帧 payload 最大 `65536` 字节。
 
@@ -171,22 +192,38 @@ transport 只承载并发，不做并发业务决策。
 - 大读写拆片
 - 多请求合并结果
 
-## 11. bootstrap 与 transport 的错误边界
+## 13. bootstrap 与 transport 的错误边界
 
-以下情况属于 bootstrap 错误，不进入 transport：
+### 13.1 client-facing bootstrap 错误
+
+以下情况属于 client bootstrap 错误，不进入 transport：
 
 - 未完成 `Hello` 就发送业务帧
 - server 要求 TLS，但 client 未切 TLS 就开始发 transport 帧
 - TLS 握手阶段混入业务字节
+
+### 13.2 storer-facing bootstrap 错误
+
+当前第一版 storer-facing 没有单独 bootstrap 协商阶段。
+
+因此 storer-facing 在 transport 之前只有 TCP 建连本身；一旦开始收发，就直接进入 transport。
+
+### 13.3 transport 错误
 
 以下情况属于 transport 错误：
 
 - 长度头损坏
 - payload 未收完整即连接断开
 
-这两类错误都应直接导致 connection 终止。
+这些错误都应直接导致 connection 终止。
 
-## 12. 对上层协议的要求
+这里的边界同时固定为：
+
+- transport 只上报 connection 终止
+- transport 不直接定义 `NetworkMedia` 的清理策略
+- 是否立即删除对象，还是保留为严格假死挂起态，由上层宿主决定
+
+## 14. 对上层协议的要求
 
 transport 只提供“完整 payload 收发”。
 
@@ -198,5 +235,6 @@ transport 只提供“完整 payload 收发”。
 - notice 分发
 - `auth_id`
 - `session_id`
-- metadata
-- 数据面错误语义
+- `SessionDescribe(session_id)` metadata 查询
+- route/session 映射
+- 失效事件和宿主策略对接

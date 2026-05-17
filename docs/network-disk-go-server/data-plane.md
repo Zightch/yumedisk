@@ -9,104 +9,140 @@
 - `WriteAt`
 - `Close`
 
-另外保留一个 connection 级命令：
+另外保留两类边界命令：
 
-- `ConnHeartbeat`
-
-当前正式口径中：
-
-- `ConnHeartbeat` 不属于 session 数据面
-- `SessionDescribe` 属于 session 建立后的 metadata 查询
-- `ReadAt / WriteAt / Close` 属于真正的数据面
+- `ConnHeartbeat`：只存在于 `client-gateway`
+- `SessionCloseNotice`：只存在于 `client-gateway`
+- `LinkHeartbeat`：只存在于 `gateway-storer`
 
 ## 2. 进入数据面的前置条件
 
-进入数据面前，必须已经完成以下链路：
+进入 client 数据面前，必须已经完成以下链路：
 
-1. bootstrap 完成
+1. client bootstrap 完成
 2. connection 建立
 3. `AuthStart / AuthFinish` 成功
 4. 获得有效 `auth_id`
 5. `SessionOpen(auth_id)` 成功
 6. 获得有效 `session_id`
-7. `SessionDescribe(session_id)` 获得 metadata
+7. `SessionDescribe(session_id)` 成功
+8. 构造 `NetworkMedia`
 
 硬约束：
 
 - 认证成功不等于可直接读写
 - `auth_id` 不等于 `session_id`
-- `SessionOpen` 不直接返回 metadata
-- auth 过程与 `SessionOpen` 过程在同一 connection 上必须互斥
-- 同一 connection 上 auth 过程最多一个、`SessionOpen` 过程最多一个
+- `SessionOpen` 是进入数据面的唯一入口
+- metadata 通过 `SessionDescribe` 获取
+- auth 过程与 `SessionOpen` 在同一 connection 上必须互斥
+- 上述互斥只约束建会话前阶段
 
-## 3. SessionDescribe
+## 3. metadata 口径
 
 ### 3.1 作用
 
-在已打开 session 上查询构造 `NetworkMedia` 所需的最小元数据。
-
-### 3.2 返回最小字段
+client 构造 `NetworkMedia` 所需的最小 metadata 只有：
 
 - `disk_size_bytes`
 - `read_only`
 - `max_io_bytes`
 
-这几个字段构成当前 `NetworkMedia` 的最小依赖。
+### 3.2 来源
 
-## 4. ReadAt
+当前正式来源固定为：
 
-### 4.1 输入
+1. storer 在注册阶段把 metadata 交给 gateway
+2. `SessionOpen` 成功时，gateway 把当前 route metadata 复制进 `session_registry` 作为 session 快照
+3. `SessionOpen` 成功响应只返回 `session_id`
+4. `SessionDescribe(session_id)` 从 gateway 的 session 快照中返回 metadata
 
-- `session_id`
-- `offset`
-- `length`
+## 4. NetworkMedia 构造口径
 
-### 4.2 输出
+`NetworkMedia` 第一版构造时显式保存：
 
-- 成功时返回完整数据段
-- 失败时返回统一错误
+- `disk_id`
+- 已打开的 `DiskSession`
+- `disk_size_bytes`
+- `read_only`
+- `max_io_bytes`
 
-## 5. WriteAt
+它不负责：
+
+- 认证
+- 建连
+- 心跳
+- 自动重连
+- 自动重新开会话
+
+## 5. ReadAt
 
 ### 5.1 输入
 
 - `session_id`
 - `offset`
 - `length`
-- `payload`
 
 ### 5.2 输出
+
+- 成功时返回完整数据段
+- 失败时返回统一错误
+
+## 6. WriteAt
+
+### 6.1 输入
+
+- `session_id`
+- `offset`
+- `length`
+- `payload`
+
+### 6.2 输出
 
 - 成功时表示远端已接受本次写入
 - 失败时返回统一错误
 
-## 6. Close
+## 7. Close
 
-### 6.1 作用
+### 7.1 作用
 
 主动关闭一个 session。
 
-### 6.2 约束
+### 7.2 约束
 
 - `Close` 只关闭目标 session
 - 不直接关闭整条 connection
 - 关闭后再次对该 `session_id` 读写应返回 `ERR_SESSION_UNAVAILABLE`
 
-## 7. ConnHeartbeat
+## 8. ConnHeartbeat
 
-### 7.1 作用
+### 8.1 作用
 
 - 维持 client-gateway connection 存活
 - 检查连接是否仍有效
 
-### 7.2 边界
+### 8.2 边界
 
-它不代表某个盘会话保活。  
+它不代表某个盘会话保活。
+
 当前正式模型中，client 不再对每个 session 单独做 heartbeat。
 
-## 8. 大块 I/O 约束
+## 9. LinkHeartbeat
 
-传输层单帧 payload 最大 `65536` 字节。  
+### 9.1 作用
+
+- 维持 gateway-storer route connection 存活
+- 检测 route 是否可达
+
+### 9.2 边界
+
+它不属于某个 session。
+
+route heartbeat 超时等价于 route connection 死亡。
+
+## 10. 大块 I/O 约束
+
+传输层单帧 payload 最大 `65536` 字节。
+
 因此：
 
 - `max_io_bytes` 必须小于 transport 上限扣除业务头开销后的安全值
@@ -118,26 +154,19 @@
 2. 每个子请求带完整 `session_id + offset + length`
 3. 对端只处理单帧业务请求，不承担跨帧业务重组
 
-## 9. gateway 转发语义
+## 11. gateway 转发语义
 
 当前第一版 `gateway` 同时承担数据面转发。
 
-### 9.1 SessionDescribe
+### 11.1 SessionOpen 之后的数据面
 
-1. client 对 `session_id` 发 `SessionDescribe`
-2. gateway 查 session 映射
-3. 转发到对应 storer session
-4. storer 返回 metadata
-5. gateway 回给 client
-
-### 9.2 ReadAt / WriteAt / Close
-
-1. client 对 `gateway_session_id` 发请求
-2. gateway 查表得到 `(route_connection, storer_session_id)`
-3. gateway 改写为 storer 侧 `request_id + session_id`
-4. storer 返回结果
-5. gateway 恢复 client 侧 `request_id`
-6. gateway 回给 client
+1. client 对 `gateway_session_id` 发数据面请求
+2. gateway 查 `session_registry`
+3. 得到 `(route_connection_id, storer_session_id)`
+4. 改写为 storer 侧 `request_id + session_id`
+5. storer 返回结果
+6. gateway 恢复 client 侧 `request_id`
+7. gateway 回给 client
 
 要求：
 
@@ -147,10 +176,11 @@
 
 并发补充：
 
-- 上述“单 connection 单 auth 过程、单 `SessionOpen` 过程、二者互斥”的约束只针对建会话前阶段
+- 建会话前阶段的“单 auth 过程、单 `SessionOpen` 过程、二者互斥”只约束 auth/open lane
 - 已打开 session 上的 `SessionDescribe / ReadAt / WriteAt / Close` 允许并发复用同一条 connection
+- 一个 `GatewayConnection` 可以在持有多个活跃 session 的同时继续串行打开新的 session
 
-## 10. 错误语义
+## 12. 错误语义
 
 第一版必须统一至少以下错误：
 
@@ -169,54 +199,62 @@
 - 数据面只处理已经成立的业务对象错误
 - `NetworkMedia` 不重复做网络协议级判断
 
-## 11. NetworkMedia 接入方式
+## 13. session / connection / route 失效策略
 
-`NetworkMedia` 第一版采用最小直接实现：
+### 13.1 协议层定义
 
-- 构造时保存：
-  - 已打开的 `DiskSession`
-  - `disk_size_bytes`
-  - `read_only`
-  - `max_io_bytes`
-- `read_locked()` 串行发起一个或多个 `ReadAt`
-- `write_locked()` 串行发起一个或多个 `WriteAt`
+协议层只定义以下事实：
 
-它不负责：
+- connection 死亡时，该 connection 下 session 全部失效
+- route 死亡时，该 route 下 session 全部失效，gateway 发送 `SessionCloseNotice`
+- 收到 `SessionCloseNotice` 时，目标 session 已确定失效
 
-- 认证
-- 建连
-- 心跳
-- 自动重连
-- 自动重新开会话
+### 13.2 网络层边界
 
-## 12. 连接与 session 失效口径
+网络层固定只做两件事：
 
-### 12.1 connection 失效
+1. 识别 session / connection / route 的失效事件
+2. 调用 `NetworkMedia` 的失效处理接口
+
+网络层不直接决定：
+
+- 是否立即清理 `NetworkMedia`
+- 是否保留 `NetworkMedia` 为严格假死挂起态
+
+这些都由 client / 宿主策略决定。
+
+### 13.3 假死挂起态要求
+
+如果宿主选择保留对象，则必须满足：
+
+- 不主动返回成功
+- 不伪装读写已完成
+- 不静默自动重连
+
+它只表示：
+
+- 当前无法继续推进 I/O
+- 等待宿主层进一步决策
+
+### 13.4 connection 与 route 失效结果
 
 一条 `GatewayConnection` 失效时：
 
 - 该连接下全部 session 一起失效
 - 相关数据面请求全部失败
-
-### 12.2 route 失效
+- 该连接下未消费 `auth_id` 一起失效
 
 一条 storer route 失效时：
 
 - 该 route 下全部 session 一起失效
-- gateway 应主动发 `SessionCloseNotice`
+- gateway 必须主动发 `SessionCloseNotice`
+- 该 route 下未消费 `auth_id` 一起撤销
 
-### 12.3 session close notice
+## 14. 当前最小验收
 
-收到 `SessionCloseNotice` 后，client 必须把对应 session 视为已关闭。  
-后续对该 `session_id` 的任何读写都不应再继续推进。
-
-## 13. 当前最小验收
-
-第一版只验收以下闭环：
-
-1. client 可通过 `SessionDescribe` 获得构造 `NetworkMedia` 的最小 metadata
-2. `NetworkMedia` 可完成真实 `ReadAt / WriteAt`
-3. 一个 `GatewayConnection` 上可并发持有多个 `DiskSession`
-4. connection 断开后，其下全部 session 失效
-5. route 断开后，gateway 可定向通知相关 client session 关闭
-6. 建会话前阶段满足“单 auth 过程、单 `SessionOpen` 过程、二者互斥”，数据面阶段保持可并发
+1. client 可通过 `SessionOpen` 获得 `session_id`。
+2. client 可通过 `SessionDescribe` 获得构造 `NetworkMedia` 的最小 metadata。
+3. `NetworkMedia` 显式持有 `disk_id + DiskSession + metadata`。
+4. `NetworkMedia` 可完成真实 `ReadAt / WriteAt`。
+5. 一个 `GatewayConnection` 上可并发持有多个 `DiskSession`。
+6. connection 或 route 失效后，网络层仅把失效事件上报给 `NetworkMedia` 接口，清理还是保留假死挂起态由宿主决定。

@@ -1,88 +1,93 @@
 # 网络盘 Go Server
 
-当前正式文档统一描述 `client <-> gateway <-> storer` 的最小闭环协议与结构，不再保留旧的隐式认证资格、`SessionOpen` 直接回元数据、session 自己做 client 心跳等旧口径。
+本文档描述按开发原则重建后的唯一正式架构，不保留历史兼容、旧一体机中间态及过渡口径。
 
 ## 文档索引
 
 - [总览](overview.md)
 - [传输层协议](transport.md)
-- [Client-and-Gateway 业务层协议](client-and-gateway.md)
-- [Gateway-and-Storer 业务层协议](gateway-and-storer.md)
+- [Client ↔ Gateway 业务层协议](client-and-gateway.md)
+- [Gateway ↔ Storer 业务层协议](gateway-and-storer.md)
 - [认证与路由](auth-routing.md)
 - [数据面最小闭环](data-plane.md)
 
-## 当前主路径
-
-唯一主路径固定为：
+## 当前唯一主路径
 
 ```text
 client <-> gateway <-> storer
 ```
 
-当前部署形态固定为：
+第一版固定边界：
 
+- `client`
+  - 仅连接 `gateway`
+  - 不直连 `storer`
 - `gateway`
-  - 独立进程
-  - 对 client 提供入口
-  - 对 storer 提供注册与长连入口
+  - 唯一控制中枢
+  - 独占 `route / auth grant / session` 三张真源表
 - `storer`
-  - `role = storer` 时主动长连 `gateway`
-  - `role = whole` 时内嵌 `gateway`
+  - 单进程只承载一个 `disk_id`
+  - 职责限定为本地介质、本地 session 及 I/O 执行
+- `whole`
+  - 仅仅是 `gateway + storer` 的同进程装配形态
+  - 不派生第二套结构或协议
 
 第一版不做：
 
 - `client -> storer` 直连
+- 单 `storer` 承载多盘
+- locator
 - 分片
 - 多副本
-- locator
 - 自动重连
 - 自动恢复
+- 历史协议兼容桥
 
-## 当前正式模型
+## 当前正式主链
 
-当前正式模型固定拆成五层：
-
-1. `bootstrap`
-2. `connection`
-3. `auth-grant`
-4. `session`
-5. `metadata + data plane`
-
-对应主链如下：
+client 侧主链固定为：
 
 ```text
 TCP connected
   -> Hello
   -> optional TLS
   -> transport ready
-  -> connection established
-  -> AuthStart/AuthFinish -> auth_id
+  -> AuthStart / AuthFinish -> auth_id
   -> SessionOpen(auth_id) -> session_id
   -> SessionDescribe(session_id) -> metadata
   -> ReadAt / WriteAt / Close
 ```
 
+storer 侧主链固定为：
+
+```text
+TCP connected
+  -> transport ready
+  -> StorerRegister
+  -> route active
+  -> SessionOpen
+  -> ReadAt / WriteAt / Close
+```
+
 ## 当前明确口径
 
-1. `Hello` 位于 transport 之前。
-2. 如果启用 TLS，则 TLS 握手发生在 `Hello` 之后、transport 之前。
-3. transport 只负责 framed payload，不负责业务语义。
-4. `GatewayConnection` 只代表一条可复用业务连接，不代表某个盘或某个 session。
-5. 认证成功后必须返回显式 `auth_id`。
-6. `auth_id` 只表示“可以申请打开某个盘会话”的资格。
-7. `SessionOpen` 只负责打开会话，不返回盘元数据。
-8. `SessionDescribe` 单独返回 `session` 绑定的盘元数据。
-9. client 心跳上移到 `connection` 级，不再属于 `DiskSession`。
-10. `gateway <-> storer` 维持逐 route connection 的链路心跳。
-11. route 断开时，gateway 必须定向关闭对应 client session。
-12. `NetworkMedia` 只绑定一个已打开 session，不负责认证、建连、心跳与重连。
-13. 一个 connection 同时最多只允许一个 auth 过程。
-14. 一个 connection 同时最多只允许一个 `SessionOpen` 过程。
-15. auth 过程与 `SessionOpen` 过程互斥，不能同时存在。
-16. 已打开 session 上的数据面请求允许并发复用同一条 connection。
+1. `client-gateway` 与 `gateway-storer` 是两套独立的控制面，而非同一套协议的镜像转发。
+2. `gateway-storer` 在第一版中是私有 route 控制面，不承接 client 认证语义。
+3. `auth_id` 仅存在于 `client-gateway` 边界。
+4. `gateway` 独占三张真源表：
+   - `route_registry`
+   - `auth_grant_registry`
+   - `session_registry`
+5. 同一时刻一个 `disk_id` 只允许一条活跃 route。
+6. 同一时刻一条 connection 上至多一个 auth 过程在飞、至多一个 `SessionOpen` 过程在飞，且二者互斥。
+7. 上述互斥仅约束建会话前阶段；已打开的 session 在数据面允许并发复用同一条 connection。
+8. `SessionOpen` 仅负责打开会话，不返回 metadata。
+9. `SessionDescribe` 单独返回 session 绑定的 metadata。
+10. `NetworkMedia` 显式持有 `disk_id + DiskSession + metadata`，不承担认证、建连、心跳和重连。
+11. session / connection / route 失效后，网络层仅将失效事件上报给 `NetworkMedia` 对外接口；立即清理还是保留假死挂起态，由 client / 宿主策略决定。
 
-## 当前文档使用原则
+## 文档使用原则
 
-这组文档当前只描述正式目标结构，不继续为旧实现保留双轨兼容叙述。
+这组文档仅描述正式目标结构。
 
-如果代码仍未完全跟上文档，应按文档收敛实现，而不是回头在文档中继续保留历史中间态。
+若后续结构发生变化，应直接改写正式文档，不在其中保留“当前也可以”“后续再补”“暂时兼容旧行为”等过渡性表述。

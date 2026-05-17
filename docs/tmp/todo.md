@@ -1,260 +1,408 @@
-# 当前总目标
+# server 重构方案
+
+## 1. 目标
+
+按 `docs/network-disk-go-server` 的正式口径，重建 `server`，把当前“单盘 embedded gateway 一体机”收束为清晰的 `gateway + storer` 分体模型，并保留 `whole` 作为同一套能力的装配形态。
+
+这轮只认新的正式结构，不保留历史兼容、不保留旧协议旁路、不保留补丁式过渡层。
 
-按 `docs/network-disk-go-server` 当前正式设计，重建 `server` 结构，使其从“单盘 embedded gateway 一体机”收束为两个可执行文件的清晰模型：
+## 2. 当前代码判断
 
-- `storer` 可执行文件：仅支持 `whole | storer`
-- `gateway` 可执行文件：独立程序，不属于 `storer` 的 `role`
+### 2.1 已经可复用的地基
 
-本轮目标是先把结构任务树落定，不直接进入实现细节。
+- `server/cmd/gateway` 和 `server/cmd/storer` 已经是两个独立可执行入口。
+- `server/internal/transport` 已经提供稳定的 framed transport。
+- `server/internal/config` 已经把 gateway / storer 的配置拆开。
+- `server/internal/auth` 已经具备 `claim_code -> auth_verifier` 和 challenge/proof 计算能力。
+- `server/internal/session` 已经具备本地 session 管理、读写、越界、只读和 busy 基础能力。
+- `server/internal/storage/file` 已经是可复用的本地介质后端。
+- `server/internal/route` 已经有 route 真源的最小容器。
+- `server/internal/gateway` 已经有独立 listener、route registry、session registry、storer 连接管理的雏形。
+- `server/internal/storer` 已经有 core / whole / remote role 的装配雏形。
 
-## 当前结构判断
+### 2.2 现在仍然错的地方
 
-当前 `server` 已具备可复用地基：
+- `SessionOpen` 还在把 `disk_id` 直接当作入参，成功响应还在回 metadata。
+- gateway 连接状态还在维护 `pendingAuthDisk`、`authorizedDisk`、`openSessionID` 这种“单盘 + 单会话”旧模型。
+- `SessionDescribe` 还不存在。
+- `Ping` 还在扮演 session heartbeat。
+- `SessionCloseNotice` 还没有按正式口径拆成独立 notice 语义，`request_id` 也还没收成 notice 规则。
+- route 注册仍然携带 `SessionTTLSeconds` 这种不该出现在正式路由模型里的字段。
+- `session.Descriptor` 还把 runtime 状态、metadata、过期信息、connection 归属揉在一起。
+- `gateway/internal/storer_routes.go` 同时承担 route 表、storer 连接、注册、round-trip、心跳和协议转发，职责过重。
+- `storer/internal/data_plane_handler.go` 还按旧协议做 `SessionOpen(disk_id) -> session_id + metadata`。
+- `storer/internal/whole_runtime.go` 仍然有特殊的 embedded gateway 装配路径，不是统一结构的纯装配层。
+- 现有测试大多还在验证旧语义，不能直接拿来作为新协议的验收标准。
 
-- `internal/transport`
-- `internal/auth`
-- `internal/session`
-- `internal/storage/file`
+### 2.3 当前高风险文件
 
-当前 `server` 仍存在的核心问题：
+这些文件已经是重构热点，不能继续在旧结构上叠补丁：
 
-1. `internal/storer/service.go` 同时承担：
-   - 本地存储宿主
-   - 本地会话宿主
-   - embedded gateway
-   - client TCP 监听入口
-2. `internal/gateway` 仍按“单盘 + 本地 session”建模，不能承接路由型 gateway。
-3. 缺少 `disk_id -> storer` 注册/路由层。
-4. 缺少 gateway 自己的 session 映射层。
+- `server/internal/gateway/storer_routes.go`
+- `server/internal/gateway/session_opener.go`
+- `server/internal/gateway/handler.go`
+- `server/internal/gateway/runtime.go`
+- `server/internal/storer/data_plane_handler.go`
+- `server/internal/storer/role_runtime.go`
+- `server/internal/storer/whole_runtime.go`
+- `server/internal/proto/header.go`
+- `server/internal/proto/auth.go`
+- `server/internal/proto/session.go`
+- `server/internal/proto/storer_register.go`
 
-结论：
+## 3. 必须遵守的重构原则
 
-- 现状足以支撑单盘 `whole` 最小闭环。
-- 现状不足以直接承接 `gateway + storer` 分体模型。
-- 必须按开发原则做结构重建，而不是继续在现有 `storer/service.go` 上叠补丁。
+- 先删旧语义，再加新语义，不做双轨兼容。
+- 一个状态只允许一个真源，一个决策只允许一个决策点。
+- 重构不是加壳，不是中转层，不是 helper/service 化。
+- 目录和包要表达职责，不要让一个文件同时承担协议、状态、转发和装配。
+- `whole` 只能是装配形态，不能再派生第二套协议语义。
+- 文档、代码、测试必须同时收束，不能让测试继续验证历史行为。
 
-## 重建原则
+## 4. 目标结构
 
-本轮 server 重建遵守以下固定口径：
+### 4.1 gateway 目标分层
 
-1. 先保留唯一主路径，不预做分布式扩展。
-2. 先拆职责，再补协议接线。
-3. 优先删除旧耦合入口，不保留长期双轨。
-4. `Go` 侧维持单向依赖，不引入包循环。
-5. 文档、任务树、实现同步收束到当前唯一结构。
+- `route_registry`
+  - 只保存 `disk_id -> route connection` 的真源关系。
+  - 保存 route 的静态 metadata：`disk_size_bytes`、`read_only`、`max_io_bytes`、`auth_verifier`。
+  - 不保存 session 语义，不保存 client 语义。
 
-## 任务树
+- `auth_grant_registry`
+  - 只保存 `auth_id` 的生命周期。
+  - 绑定 `client_connection_id`、`disk_id`、`issued_at`、`expire_at`、`grant_state`。
+  - 不保存 session，不保存 route 数据面信息。
 
-### A. 重建 server 角色地基
+- `session_registry`
+  - 只保存 `gateway_session_id -> (client_connection_id, route_connection_id, storer_session_id, disk_id, metadata snapshot)`。
+  - `SessionDescribe` 只读这里，不回 storer。
 
-#### A2. 拆分本地存储宿主
+- `client connection runtime`
+  - 只负责请求配对、auth/open 互斥、notice 下发。
+  - 不再保存“已认证磁盘”或“当前唯一 session”的隐式状态。
 
-目标：
+- `storer connection runtime`
+  - 只负责路由注册、心跳、round-trip、断线回收。
+  - 不承担 client 认证语义。
 
-- 从当前 `internal/storer/service.go` 中拆出“真实盘宿主”最小核心。
+### 4.2 storer 目标分层
 
-收口要求：
+- `core`
+  - 持有本地介质。
+  - 持有本地 session 服务。
+  - 持有本地 auth material。
 
-- 本地 raw 存储打开与关闭独立
-- 本地 `session.Service` 独立
-- 不在这一层承担 client 监听职责
-- 不在这一层承担 gateway 路由职责
+- `register path`
+  - 只负责向 gateway 注册 `disk_id`、`auth_verifier` 和 route metadata。
 
-输出形态：
+- `data plane`
+  - 只处理 gateway 发来的 `SessionOpen / ReadAt / WriteAt / Close`。
+  - `SessionOpen` 只返回 `storer_session_id`，不返回 metadata。
 
-- 一个只负责“本地盘 + 本地 session 数据面”的 storer core
+- `whole`
+  - 只做装配，不做特殊协议。
+  - 不能再内建一套“本地 gateway 直绑 handler”的独立语义。
 
-### B. 重建 gateway 结构
+## 5. 实施顺序
 
-#### B1. 拆 client-facing gateway
+### Phase 0. 先冻结 wire 口径
 
-目标：
+优先改 `server/internal/proto`，把 wire 先收成正式口径，否则后面所有 handler 都会继续朝旧协议回流。
 
-- 把当前 `internal/gateway` 从“单盘本地 handler”重建为 client-facing gateway 边界层。
+必须完成：
 
-收口要求：
+- `header.go`
+  - 增加 `SessionDescribe` 的 opcode。
+  - 把 `SessionCloseNotice` 改成正式 notice 语义。
+  - 增加 `FLAG_NOTICE`。
+  - 明确 request / response / notice 的头部校验。
 
-- 认证入口只处理 `AuthStart / AuthFinish`
-- 会话入口只处理 `SessionOpen`
-- 数据面入口只处理 `ReadAt / WriteAt / Ping / Close`
-- client 连接上的认证资格仍为 connection-scoped
+- `auth.go`
+  - `AuthFinish` 成功响应必须携带 `auth_id`。
+  - `AuthStart` / `AuthFinish` 的 body 结构保持单一职责。
 
-必须删除：
+- `session.go`
+  - `SessionOpen` 请求改为 `auth_id`。
+  - `SessionOpen` 成功响应 body 清空，只返回 `session_id`。
+  - 增加 `SessionDescribe(session_id)` 的请求 / 响应编解码。
+  - 删除旧的 `Ping` 作为 session heartbeat 的语义。
 
-- `NewHandler(realDiskID, authVerifier, sessions)` 这种单盘本地直绑入口
+- `storer_register.go`
+  - 删除 `SessionTTLSeconds` 的 wire 字段。
+  - 注册只保留 route 真源需要的字段。
 
-#### B2. 新增路由/注册层
+这一步的验收标准：
 
-目标：
+- `SessionOpen` 和 `SessionDescribe` 的 wire 已经和正式文档对齐。
+- `SessionCloseNotice` 的 notice 头部规则已经和正式文档对齐。
+- 旧的 metadata 直返不再出现在 protocol codec 中。
 
-- 提供 `disk_id -> storer route` 的唯一真实来源。
+### Phase 1. 重写 gateway 的连接状态机
 
-收口要求：
+目标是把当前 `ConnectionState` 从“单盘单 session 的隐式状态”改成“只管 auth/open 过程互斥的显式状态机”。
 
-- 保存 storer 注册信息
-- 保存 `auth_verifier`
-- 保存 storer 当前连接状态
-- 为 client-facing gateway 提供只读路由查询入口
+要做的事：
 
-必须避免：
+- 拆掉 `authorizedDisk` 和 `openSessionID` 这种单会话状态。
+- 保留的只应该是：
+  - 当前 connection ID
+  - 当前是否有 auth in-flight
+  - 当前是否有 SessionOpen in-flight
+  - 必要的 request / notice 相关临时状态
+- `ConnectionState` 不能再充当 session 真源。
+- `session_registry` 才是 active session 的真源。
 
-- 在多个 handler 内各自缓存 disk 路由状态
+相关文件：
 
-#### B3. 新增 gateway session 映射层
+- `server/internal/gateway/handler.go`
+- `server/internal/gateway/session_opener.go`
+- `server/internal/gateway/runtime.go`
 
-目标：
+验收标准：
 
-- 明确 gateway 和 storer 的 session 边界。
+- 一条 connection 可以在已有多个 session 的情况下继续发起新的 auth/open。
+- `handler.go` 不再靠一个 `openSessionID` 限死整条连接。
+- `SessionDescribe / ReadAt / WriteAt / Close` 不再被旧单会话状态误伤。
 
-收口要求：
+### Phase 2. 重写 gateway 的 auth grant 与 session 建立链路
 
-- `gateway_session_id -> storer_connection + storer_session_id`
-- gateway 负责本地 `session_id` 分配与释放
-- storer 返回的真实 `session_id` 只留在 gateway 内部
+这是这轮最核心的改动。
 
-必须避免：
+必须建立新的链路：
 
-- 把 storer 原始 `session_id` 直接暴露给 client
+1. `AuthStart(disk_id)`
+2. `AuthFinish(challenge, proof)`
+3. gateway 生成 `auth_id`
+4. `SessionOpen(auth_id)`
+5. gateway 查 `auth_grant_registry` 和 `route_registry`
+6. gateway 向 storer 发起内部 `SessionOpen`
+7. storer 返回 `storer_session_id`
+8. gateway 分配 `gateway_session_id`
+9. gateway 写入 `session_registry` 的 session snapshot
+10. `SessionOpen` 只返回 `session_id`
+11. client 后续再调用 `SessionDescribe(session_id)`
 
-#### B4. 新增 storer-facing gateway 边界
+要删掉的旧假设：
 
-目标：
+- `SessionOpen` 不再接受 `disk_id`。
+- `SessionOpen` 不再返回 metadata。
+- `SessionOpen` 不再顺带返回 `TTLSeconds`。
+- `auth_id` 不是 connection 上的隐式 long-lived authorized 状态。
 
-- 为 storer 注册和后续会话透传建立独立入口。
+相关文件：
 
-收口要求：
+- `server/internal/gateway/authenticator.go`
+- `server/internal/gateway/session_opener.go`
+- `server/internal/gateway/session_registry.go`
+- `server/internal/gateway/contracts.go`
+- `server/internal/gateway/test_backend_test.go`
 
-- 独立监听端口
-- 独立注册流程
-- 注册后复用现有数据面语义，不重复发明第二套数据面业务定义
+验收标准：
 
-### C. 重建 storer 结构
+- `AuthFinish` 成功后能得到可消费一次的 `auth_id`。
+- `SessionOpen` 只消费 `auth_id`，不再消费 `disk_id` 作为 wire 输入。
+- `SessionDescribe` 从 `session_registry` 读出 metadata snapshot。
+- `busy` 失败时 `auth_id` 仍可在未过期前重试。
 
-#### C1. 明确 storer 只做真实数据面
+### Phase 3. 拆 route 真源和 storer 连接管理
 
-目标：
+`server/internal/gateway/storer_routes.go` 现在太重，必须拆。
 
-- 在 `storer` 角色下，收紧职责到“存储 + 会话 + gateway 对接”。
+建议拆成至少三块：
 
-收口要求：
+- route 真源
+- storer connection runtime
+- round-trip / register client
 
-- 不直接承接 client 协议入口
-- 不直接面向 client 做认证
-- 只接受 gateway 注册链路与后续会话/IO 请求
+必须完成的收口：
 
-#### C2. 保留 whole 的 embedded gateway 形态
+- `route.Registry` 只保存 route 真源。
+- route entry 只保存 route 需要的静态信息，不再带 session TTL。
+- storer 连接断开时，只由 gateway 统一接管：
+  - 撤 route
+  - 撤 auth grant
+  - 关 session
+  - 发 `SessionCloseNotice`
 
-目标：
+相关文件：
 
-- 不破坏当前单盘最小闭环。
+- `server/internal/route/registry.go`
+- `server/internal/gateway/storer_routes.go`
+- `server/internal/gateway/storer_handler.go`
+- `server/internal/gateway/runtime.go`
 
-收口要求：
+验收标准：
 
-- `whole` 仍可单独启动并对 client 提供完整服务
-- 但实现上通过装配层完成，而不是把所有逻辑继续塞回 `storer/service.go`
+- route 注册和 route 数据面转发不是同一个文件里的“大杂烩”。
+- 断线回收逻辑不再散落在多个 handler 里。
+- route 失效后，gateway 能一次性收束所有相关 session 和 auth grant。
 
-### D. 协议接线与最小闭环
+### Phase 4. 重写 storer 的数据面语义
 
-#### D1. 接通 gateway-and-storer 注册阶段
+`server/internal/storer/data_plane_handler.go` 现在还是旧模型，必须改成正式模型。
 
-目标：
+必须完成：
 
-- 让独立 storer 能把自己挂到 gateway。
+- `SessionOpen` 请求不再解析 `disk_id`。
+- `SessionOpen` 成功响应只返回 `storer_session_id`，不返回 metadata。
+- `ReadAt / WriteAt / Close` 继续基于 `storer_session_id`。
+- 不再保留 session-scoped `Ping` 语义。
+- 如果需要保活，只保留正式定义的 `LinkHeartbeat`，不要把它混成 session heartbeat。
 
-收口要求：
+同时要重写本地 session service 的输入输出：
 
-- storer 提交：
-  - `gateway_token`
-  - `disk_id`
-  - `auth_verifier`
-- gateway 建立注册表
+- `session.Service.Open` 不应该再依赖 wire 上来的 `disk_id`。
+- session metadata 不应该再带 TTL 作为对外字段。
+- `session.Descriptor` 需要拆成“内部运行记录”和“对外 metadata 快照”。
 
-#### D2. 接通 SessionOpen 透传链
+相关文件：
 
-目标：
+- `server/internal/storer/data_plane_handler.go`
+- `server/internal/storer/gateway_local_adapter.go`
+- `server/internal/storer/core.go`
+- `server/internal/session/service.go`
+- `server/internal/session/manager.go`
 
-- 先打通单盘最小闭环最关键的会话打开链路。
+验收标准：
 
-收口要求：
+- storer 只负责本地会话和 I/O，不再承担 client 认证语义。
+- `SessionOpen` 不再把 metadata 直接带回 client。
+- storer 端只接受 gateway 的 route-facing 请求。
 
-- client 只连 gateway
-- gateway 认证成功后，向目标 storer 发起 `SessionOpen`
-- storer 返回 busy / success / readonly 等结果
-- gateway 完成本地 session 映射
+### Phase 5. 收束 `whole` 只做装配
 
-#### D3. 接通 ReadAt / WriteAt / Ping / Close
+`whole` 现在仍然有特殊路径，后面必须把它收成“同一套 gateway/storer 核心的装配形态”。
 
-目标：
+要求：
 
-- 完成 `gateway <-> storer` 数据面主路径。
+- `whole` 不再注册一套单独的本地 route 假数据结构。
+- `whole` 不再靠特殊 adapter 伪造另一套协议语义。
+- `whole` 只是把同一套 gateway 核心和 storer 核心装到同一个进程里。
 
-收口要求：
+相关文件：
 
-- 沿用既有业务语义
-- gateway 负责 `request_id` / `session_id` 映射
-- storer 只理解 gateway 发来的业务包
+- `server/internal/storer/whole_runtime.go`
+- `server/internal/storer/role_runtime.go`
+- `server/internal/storer/gateway_local_adapter.go`
 
-### E. 启动入口与联调
+验收标准：
 
-#### E1. 新增独立启动入口
+- `whole` 和独立 `gateway + storer` 在协议层没有两套语义。
+- 只有装配方式不同，没有协议语义不同。
 
-目标：
+### Phase 6. 补齐正式的失效处理
 
-- 明确两个可执行文件的实际启动方式。
+正式文档要求的是：
 
-收口要求：
+- 协议层只定义 session / connection / route 已失效。
+- 网络层只调用 `NetworkMedia` 的失效接口。
+- 立即清理还是保留严格假死挂起态，由宿主决定。
 
-- `cmd/storer`：内部 `role = whole | storer`
-- `cmd/gateway`：独立 gateway 程序
+所以代码里要补的不是“强制删除对象”，而是“把失效事件显式传到上层”。
 
-#### E2. 保持现有联调工具继续可用
+必须完成：
 
-目标：
+- `SessionCloseNotice` 用正确的 notice 头部发送。
+- route / connection 失效时，gateway 能对 client 下发通知。
+- client 侧后续会话对象必须有统一失效入口。
+- 不要在网络层里把“清理”和“挂死”硬编码成唯一行为。
 
-- 不让协议联调重新绑回 KMDF/AppKernel 宿主。
+相关文件：
 
-收口要求：
+- `server/internal/gateway/runtime.go`
+- `server/internal/gateway/session_registry.go`
+- `server/internal/gateway/session_opener.go`
+- 未来对接的 client 侧代码
 
-- `windows/rust-cli/src/bin/network-auth-open.rs` 继续可直连 gateway
-- 先覆盖：
-  - auth
-  - open
-  - busy
-  - close
-  - reopen
+验收标准：
 
-### F. 文档同步
+- 失效事件能穿透到上层。
+- 协议层不替宿主做对象生命周期决策。
 
-#### F1. 同步正式文档
+### Phase 7. 更新测试，而不是沿用旧测试
 
-目标：
+现有测试要分两类处理：
 
-- 文档只描述当前真实结构。
+#### 必须重写的测试
 
-收口要求：
+- `server/internal/gateway/session_opener_test.go`
+- `server/internal/gateway/session_mapping_test.go`
+- `server/internal/gateway/storer_handler_test.go`
+- `server/internal/storer/integration_test.go`
+- `server/internal/storer/role_runtime_test.go`
+- `server/internal/storer/data_plane_handler_test.go`
 
-- `README.md`
-- `overview.md`
-- `gateway-and-storer.md`
-- `auth-routing.md`
-- `data-plane.md`
+这些测试大概率还在验证：
 
-必须删除：
+- `SessionOpen` 直接回 metadata
+- `Ping` 作为 session heartbeat
+- 单连接单 session 的隐式状态
+- 旧 notice / 旧 opcode 语义
 
-- 与新结构不一致的旧一体机叙述
+这些都必须删除旧断言后重写。
 
-#### F2. 同步 progress
+#### 可以保留或轻改的测试
 
-目标：
+- `server/internal/config/*`
+- `server/internal/route/registry_test.go`
+- `server/internal/session/service_test.go`
+- `server/internal/storage/file/*`
+- `server/internal/transport/*`
 
-- 每个阶段完成后收进 `docs/progress`
+这些测试如果只覆盖底层纯逻辑，可以保留，但要确认它们没有偷偷依赖旧 wire 语义。
 
-## 推荐实现顺序
+新的必测场景：
 
-1. A-F 已完成
+- `AuthFinish -> auth_id`
+- `SessionOpen(auth_id) -> session_id`
+- `SessionDescribe(session_id) -> metadata`
+- 同一 connection 上可串行打开多个 session
+- route 断开后 auth grant 和 session 一起失效
+- notice 的头部和 reason 编码正确
+- `SessionOpen` busy 时 `auth_id` 仍可重试
+- `SessionOpen` 成功后不能再把 metadata 当成 open 响应返回
 
-## 当前下一步
+### Phase 8. client 侧协议消费者对齐
 
-本轮 `A-F` 已收完。
+虽然这份计划是写在 `server` 侧，但当前仓库里真正的消费者是 `windows/rust-cli`。
 
-如果继续推进，下一步应新开任务树，而不是继续修改本轮 server 结构文档。
+所以 server 切完 wire 后，必须同步改客户端协议消费逻辑，不能保留旧兼容桥：
+
+- `SessionOpenRequest` 改成 `auth_id`。
+- `SessionOpenResponse` 只读 `session_id`。
+- 增加 `SessionDescribe`。
+- `Ping` 改为正式的 `ConnHeartbeat` / `LinkHeartbeat` 语义。
+- `NetworkMedia` 构造依赖 `disk_id + session + metadata`，不是只靠 open response。
+
+相关文件：
+
+- `windows/rust-cli/src/network/protocol_client.rs`
+- `windows/rust-cli/src/network/session_opener.rs`
+- `windows/rust-cli/src/network/disk_session.rs`
+- `windows/rust-cli/src/network/gateway_connection.rs`
+
+验收标准：
+
+- 客户端协议和 server 的正式 wire 完全一致。
+- 不保留旧协议的兼容分支。
+
+## 6. 推荐执行顺序
+
+1. 先改 `server/internal/proto`，把 wire 固定下来。
+2. 再改 `gateway` 的 `ConnectionState`、`auth_grant_registry`、`session_registry`。
+3. 再改 `storer` 的 `SessionOpen` 与本地 session 服务。
+4. 再拆 `storer_routes.go`，把 route / connection / round-trip 分开。
+5. 再把 `whole` 收成纯装配层。
+6. 最后重写测试和客户端消费者。
+
+## 7. 完成标准
+
+这轮重构完成时，至少要满足：
+
+- `SessionOpen` 只返回 `session_id`。
+- `SessionDescribe` 单独返回 metadata snapshot。
+- `NetworkMedia` 的最小构造信息是 `disk_id + session + metadata`。
+- route / connection / session / auth grant 的真源都只有一份。
+- `whole` 和独立 `gateway + storer` 只在装配方式上不同。
+- 旧测试和旧 wire 语义全部清掉。
+- `go test ./...` 通过。
