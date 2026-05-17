@@ -69,7 +69,7 @@ func TestSessionOpenPingAndClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse ping-after-close response header: %v", err)
 	}
-	if pingAfterCloseHeader.StatusCode != proto.StatusSessionUnavailable {
+	if pingAfterCloseHeader.StatusCode != proto.StatusInvalidRequest {
 		t.Fatalf("unexpected ping-after-close status: %d", pingAfterCloseHeader.StatusCode)
 	}
 }
@@ -218,6 +218,131 @@ func TestSessionOpenReturnsUnavailableWhenRouteIsGone(t *testing.T) {
 	}
 	if openHeader.StatusCode != proto.StatusSessionUnavailable {
 		t.Fatalf("unexpected open-without-route status: %d", openHeader.StatusCode)
+	}
+}
+
+func TestSessionPhaseViolationsReturnInvalidRequest(t *testing.T) {
+	t.Parallel()
+
+	handler, state, material := newSessionTestHandler(t)
+
+	openReq := buildRequest(proto.OpSessionOpen, 200, 0, []byte(material.DiskID))
+	openResp, err := handler.HandlePayload(state, openReq)
+	if err != nil {
+		t.Fatalf("open without auth: %v", err)
+	}
+	openHeader, err := proto.ParseHeader(openResp)
+	if err != nil {
+		t.Fatalf("parse open without auth response: %v", err)
+	}
+	if openHeader.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected open without auth status: %d", openHeader.StatusCode)
+	}
+
+	startReq := buildRequest(proto.OpAuthStart, 201, 0, []byte(material.DiskID))
+	startResp, err := handler.HandlePayload(state, startReq)
+	if err != nil {
+		t.Fatalf("auth start: %v", err)
+	}
+	startHeader, err := proto.ParseHeader(startResp)
+	if err != nil {
+		t.Fatalf("parse auth start response: %v", err)
+	}
+	if startHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected auth start status: %d", startHeader.StatusCode)
+	}
+
+	pendingOpenResp, err := handler.HandlePayload(state, openReq)
+	if err != nil {
+		t.Fatalf("open while auth pending: %v", err)
+	}
+	pendingOpenHeader, err := proto.ParseHeader(pendingOpenResp)
+	if err != nil {
+		t.Fatalf("parse open while auth pending response: %v", err)
+	}
+	if pendingOpenHeader.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected open while auth pending status: %d", pendingOpenHeader.StatusCode)
+	}
+
+	startBody, err := proto.ParseAuthStartResponseBody(startResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse auth start body: %v", err)
+	}
+	proof := auth.ComputeProof(material.AuthVerifier, startBody.Salt[:])
+	finishReq := buildRequest(proto.OpAuthFinish, 202, 0, proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof))
+	finishResp, err := handler.HandlePayload(state, finishReq)
+	if err != nil {
+		t.Fatalf("auth finish: %v", err)
+	}
+	finishHeader, err := proto.ParseHeader(finishResp)
+	if err != nil {
+		t.Fatalf("parse auth finish response: %v", err)
+	}
+	if finishHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected auth finish status: %d", finishHeader.StatusCode)
+	}
+
+	sessionID := openSessionForTest(t, handler, state, material.DiskID)
+
+	secondOpenResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 203, 0, []byte(material.DiskID)))
+	if err != nil {
+		t.Fatalf("second open on same connection: %v", err)
+	}
+	secondOpenHeader, err := proto.ParseHeader(secondOpenResp)
+	if err != nil {
+		t.Fatalf("parse second open response: %v", err)
+	}
+	if secondOpenHeader.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected second open status: %d", secondOpenHeader.StatusCode)
+	}
+
+	wrongSessionID := sessionID + 1
+	pingResp, err := handler.HandlePayload(state, buildRequest(proto.OpPing, 204, wrongSessionID, proto.BuildPingResponseBody(1)))
+	if err != nil {
+		t.Fatalf("ping with wrong session: %v", err)
+	}
+	pingHeader, err := proto.ParseHeader(pingResp)
+	if err != nil {
+		t.Fatalf("parse ping with wrong session response: %v", err)
+	}
+	if pingHeader.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected ping wrong-session status: %d", pingHeader.StatusCode)
+	}
+
+	readResp, err := handler.HandlePayload(state, buildRequest(proto.OpReadAt, 205, wrongSessionID, proto.BuildReadBody(0, 1)))
+	if err != nil {
+		t.Fatalf("read with wrong session: %v", err)
+	}
+	readHeader, err := proto.ParseHeader(readResp)
+	if err != nil {
+		t.Fatalf("parse read with wrong session response: %v", err)
+	}
+	if readHeader.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected read wrong-session status: %d", readHeader.StatusCode)
+	}
+
+	writeResp, err := handler.HandlePayload(state, buildRequest(proto.OpWriteAt, 206, wrongSessionID, append(proto.BuildReadWriteBody(0, 1), 'X')))
+	if err != nil {
+		t.Fatalf("write with wrong session: %v", err)
+	}
+	writeHeader, err := proto.ParseHeader(writeResp)
+	if err != nil {
+		t.Fatalf("parse write with wrong session response: %v", err)
+	}
+	if writeHeader.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected write wrong-session status: %d", writeHeader.StatusCode)
+	}
+
+	closeResp, err := handler.HandlePayload(state, buildRequest(proto.OpClose, 207, wrongSessionID, nil))
+	if err != nil {
+		t.Fatalf("close with wrong session: %v", err)
+	}
+	closeHeader, err := proto.ParseHeader(closeResp)
+	if err != nil {
+		t.Fatalf("parse close with wrong session response: %v", err)
+	}
+	if closeHeader.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected close wrong-session status: %d", closeHeader.StatusCode)
 	}
 }
 

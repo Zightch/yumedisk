@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -48,30 +47,8 @@ struct MountedNetworkDisk {
     session: DiskSession,
 }
 
-#[derive(Debug, Default)]
-struct ConnectionRegistry {
-    by_addr: HashMap<String, Arc<GatewayConnection>>,
-}
-
-impl ConnectionRegistry {
-    fn get_or_connect(&mut self, addr: &str) -> Result<Arc<GatewayConnection>, String> {
-        if let Some(connection) = self.by_addr.get(addr) {
-            if connection.is_connected() {
-                return Ok(Arc::clone(connection));
-            }
-        }
-
-        let connection = GatewayConnection::new(TransportEndpoint::new(addr.to_string()));
-        connection.connect().map_err(|error| error.to_string())?;
-        self.by_addr
-            .insert(addr.to_string(), Arc::clone(&connection));
-        Ok(connection)
-    }
-}
-
 pub struct CliHost {
     context: BackendContext,
-    connections: ConnectionRegistry,
     mounted_network_disks: Arc<Mutex<BTreeMap<u32, MountedNetworkDisk>>>,
 }
 
@@ -91,7 +68,6 @@ impl CliHost {
 
         Ok(Self {
             context,
-            connections: ConnectionRegistry::default(),
             mounted_network_disks,
         })
     }
@@ -184,7 +160,8 @@ impl CliHost {
         claim_code: &str,
         target_id: Option<u32>,
     ) -> AppResult<NetworkMountResult> {
-        let connection = self.connections.get_or_connect(addr)?;
+        let connection = GatewayConnection::new(TransportEndpoint::new(addr.to_string()));
+        connection.connect().map_err(|error| error.to_string())?;
         let authenticator = ConnectionAuthenticator::new(Arc::clone(&connection));
         let disk_id = authenticator
             .authenticate(claim_code)
@@ -193,7 +170,10 @@ impl CliHost {
         let opener = SessionOpener::new(Arc::clone(&connection));
         let session = opener
             .open(disk_id.clone())
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                let _ = connection.close();
+                error.to_string()
+            })?;
 
         let media = NetworkMedia::bind(
             session.clone(),
@@ -201,7 +181,11 @@ impl CliHost {
             session.read_only(),
             session.max_io_bytes(),
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| {
+            let _ = session.close();
+            let _ = connection.close();
+            error.to_string()
+        })?;
 
         let target_id = target_id.unwrap_or_else(|| self.context.find_first_free_target());
         if target_id > YUMEDISK_MAX_USABLE_TARGET_ID {
@@ -221,6 +205,8 @@ impl CliHost {
             .context
             .create_managed_disk(disk_config, boxed_media, Some(&mut error_text))
         {
+            let _ = session.close();
+            let _ = connection.close();
             if error_text.is_empty() {
                 error_text = "create-failed".to_string();
             }
@@ -263,6 +249,7 @@ impl CliHost {
                 Err(NetworkClientError::SessionUnavailable) => {}
                 Err(error) => return Err(error.to_string()),
             }
+            let _ = mounted.session.connection().close();
         }
 
         let mut error_text = String::new();
@@ -311,10 +298,14 @@ impl CliHost {
             let _ = self
                 .context
                 .remove_managed_disk_with_media(target_id, Some(&mut error_text));
-            self.mounted_network_disks
+            if let Some(mounted) = self
+                .mounted_network_disks
                 .lock()
                 .expect("mounted_network_disks poisoned")
-                .remove(&target_id);
+                .remove(&target_id)
+            {
+                let _ = mounted.session.connection().close();
+            }
         }
     }
 

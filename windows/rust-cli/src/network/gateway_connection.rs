@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
@@ -23,7 +22,7 @@ pub struct GatewayConnection {
     transport: TransportClient,
     next_request_id: AtomicU64,
     pending_requests: Mutex<HashMap<u64, PendingRequest>>,
-    authorized_disk_ids: Mutex<HashSet<String>>,
+    phase: Mutex<ConnectionPhase>,
     receive_loop_started: AtomicBool,
 }
 
@@ -37,6 +36,14 @@ struct PendingRequest {
 pub struct GatewayResponseFuture {
     request_id: u64,
     response_rx: Receiver<Result<Vec<u8>, NetworkClientError>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConnectionPhase {
+    Idle,
+    AuthPending { disk_id: String },
+    Authorized { disk_id: String },
+    SessionOpen { disk_id: String, session_id: u64 },
 }
 
 impl GatewayResponseFuture {
@@ -58,7 +65,7 @@ impl GatewayConnection {
             endpoint,
             next_request_id: AtomicU64::new(1),
             pending_requests: Mutex::new(HashMap::new()),
-            authorized_disk_ids: Mutex::new(HashSet::new()),
+            phase: Mutex::new(ConnectionPhase::Idle),
             receive_loop_started: AtomicBool::new(false),
         })
     }
@@ -84,6 +91,7 @@ impl GatewayConnection {
     pub fn close(&self) -> Result<(), NetworkClientError> {
         self.transport.close().map_err(map_transport_error)?;
         self.fail_all_pending(NetworkClientError::SessionUnavailable);
+        self.reset_phase();
         Ok(())
     }
 
@@ -145,18 +153,144 @@ impl GatewayConnection {
             .len()
     }
 
-    pub fn mark_authorized(&self, disk_id: impl Into<String>) {
-        self.authorized_disk_ids
-            .lock()
-            .expect("authorized_disk_ids poisoned")
-            .insert(disk_id.into());
+    pub fn begin_auth(&self, disk_id: &str) -> Result<(), NetworkClientError> {
+        let mut phase = self.phase.lock().expect("phase poisoned");
+        match &*phase {
+            ConnectionPhase::Idle => {
+                *phase = ConnectionPhase::AuthPending {
+                    disk_id: disk_id.to_string(),
+                };
+                Ok(())
+            }
+            _ => Err(NetworkClientError::InvalidState("auth_start")),
+        }
+    }
+
+    pub fn fail_auth(&self) {
+        let mut phase = self.phase.lock().expect("phase poisoned");
+        if matches!(*phase, ConnectionPhase::AuthPending { .. }) {
+            *phase = ConnectionPhase::Idle;
+        }
+    }
+
+    pub fn finish_auth(&self, disk_id: &str) -> Result<(), NetworkClientError> {
+        let mut phase = self.phase.lock().expect("phase poisoned");
+        match &*phase {
+            ConnectionPhase::AuthPending {
+                disk_id: pending_disk_id,
+            } if pending_disk_id == disk_id => {
+                *phase = ConnectionPhase::Authorized {
+                    disk_id: disk_id.to_string(),
+                };
+                Ok(())
+            }
+            _ => Err(NetworkClientError::InvalidState("auth_finish")),
+        }
+    }
+
+    pub fn begin_session_open(&self, disk_id: &str) -> Result<(), NetworkClientError> {
+        let phase = self.phase.lock().expect("phase poisoned");
+        match &*phase {
+            ConnectionPhase::Authorized {
+                disk_id: authorized_disk_id,
+            } if authorized_disk_id == disk_id => Ok(()),
+            ConnectionPhase::Authorized { .. } => Err(NetworkClientError::InvalidState("session_open")),
+            ConnectionPhase::Idle | ConnectionPhase::AuthPending { .. } => {
+                Err(NetworkClientError::InvalidState("session_open"))
+            }
+            ConnectionPhase::SessionOpen { .. } => Err(NetworkClientError::InvalidState("session_open")),
+        }
+    }
+
+    pub fn finish_session_open(
+        &self,
+        disk_id: &str,
+        session_id: u64,
+    ) -> Result<(), NetworkClientError> {
+        let mut phase = self.phase.lock().expect("phase poisoned");
+        match &*phase {
+            ConnectionPhase::Authorized {
+                disk_id: authorized_disk_id,
+            } if authorized_disk_id == disk_id && session_id != 0 => {
+                *phase = ConnectionPhase::SessionOpen {
+                    disk_id: disk_id.to_string(),
+                    session_id,
+                };
+                Ok(())
+            }
+            _ => Err(NetworkClientError::InvalidState("session_open")),
+        }
+    }
+
+    pub fn cancel_session_open(&self, disk_id: &str) {
+        let mut phase = self.phase.lock().expect("phase poisoned");
+        *phase = ConnectionPhase::Authorized {
+            disk_id: disk_id.to_string(),
+        };
+    }
+
+    pub fn require_open_session(
+        &self,
+        disk_id: Option<&str>,
+        session_id: u64,
+    ) -> Result<(), NetworkClientError> {
+        let phase = self.phase.lock().expect("phase poisoned");
+        match &*phase {
+            ConnectionPhase::SessionOpen {
+                disk_id: phase_disk_id,
+                session_id: phase_session_id,
+            } if *phase_session_id == session_id && disk_id.is_none_or(|value| value == phase_disk_id) => Ok(()),
+            _ => Err(NetworkClientError::InvalidState("session_data_plane")),
+        }
+    }
+
+    pub fn clear_session(&self, session_id: u64) {
+        let mut phase = self.phase.lock().expect("phase poisoned");
+        if let ConnectionPhase::SessionOpen { disk_id, session_id: current } = &*phase {
+            if *current == session_id {
+                *phase = ConnectionPhase::Authorized {
+                    disk_id: disk_id.clone(),
+                };
+            }
+        }
     }
 
     pub fn is_authorized(&self, disk_id: &str) -> bool {
-        self.authorized_disk_ids
-            .lock()
-            .expect("authorized_disk_ids poisoned")
-            .contains(disk_id)
+        let phase = self.phase.lock().expect("phase poisoned");
+        matches!(
+            &*phase,
+            ConnectionPhase::Authorized { disk_id: current }
+                | ConnectionPhase::SessionOpen {
+                    disk_id: current,
+                    session_id: _,
+                } if current == disk_id
+        )
+    }
+
+    pub fn authorized_disk_id(&self) -> Option<String> {
+        let phase = self.phase.lock().expect("phase poisoned");
+        match &*phase {
+            ConnectionPhase::Authorized { disk_id }
+            | ConnectionPhase::SessionOpen {
+                disk_id,
+                session_id: _,
+            } => Some(disk_id.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn phase_name(&self) -> &'static str {
+        let phase = self.phase.lock().expect("phase poisoned");
+        match &*phase {
+            ConnectionPhase::Idle => "idle",
+            ConnectionPhase::AuthPending { .. } => "auth-pending",
+            ConnectionPhase::Authorized { .. } => "authorized",
+            ConnectionPhase::SessionOpen { .. } => "session-open",
+        }
+    }
+
+    fn reset_phase(&self) {
+        *self.phase.lock().expect("phase poisoned") = ConnectionPhase::Idle;
     }
 
     fn start_receive_loop(self: &Arc<Self>) {

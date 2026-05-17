@@ -25,6 +25,7 @@ impl ConnectionAuthenticator {
 
     pub fn authenticate(&self, claim_code: &str) -> Result<String, NetworkClientError> {
         let material = parse_claim_code(claim_code)?;
+        self.connection.begin_auth(&material.disk_id)?;
 
         let start_request_id = self.connection.allocate_request_id();
         let start_payload = AuthStartRequest {
@@ -32,24 +33,57 @@ impl ConnectionAuthenticator {
         }
         .encode_request(start_request_id)
         .map_err(NetworkClientError::Protocol)?;
-        let start_response_payload = self.connection.send_request_and_wait(start_payload)?;
+        let start_response_payload = match self.connection.send_request_and_wait(start_payload) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.connection.fail_auth();
+                return Err(error);
+            }
+        };
         let start_response =
-            AuthStartResponse::decode_response(&start_response_payload, start_request_id)
-                .map_err(NetworkClientError::Protocol)?;
+            match AuthStartResponse::decode_response(&start_response_payload, start_request_id) {
+                Ok(response) => response,
+                Err(error) => {
+                    self.connection.fail_auth();
+                    return Err(NetworkClientError::Protocol(error));
+                }
+            };
 
-        let proof = compute_proof(material.auth_verifier, &start_response)?;
+        let proof = match compute_proof(material.auth_verifier, &start_response) {
+            Ok(proof) => proof,
+            Err(error) => {
+                self.connection.fail_auth();
+                return Err(error);
+            }
+        };
         let finish_request_id = self.connection.allocate_request_id();
         let finish_payload = AuthFinishRequest {
             challenge_token: start_response.challenge_token,
             proof,
         }
         .encode_request(finish_request_id)
-        .map_err(NetworkClientError::Protocol)?;
-        let finish_response_payload = self.connection.send_request_and_wait(finish_payload)?;
-        AuthFinishRequest::decode_response(&finish_response_payload, finish_request_id)
-            .map_err(map_auth_finish_error(&material.disk_id))?;
+        .map_err(|error| {
+            self.connection.fail_auth();
+            NetworkClientError::Protocol(error)
+        })?;
+        let finish_response_payload = match self.connection.send_request_and_wait(finish_payload) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.connection.fail_auth();
+                return Err(error);
+            }
+        };
+        if let Err(error) = AuthFinishRequest::decode_response(&finish_response_payload, finish_request_id)
+            .map_err(map_auth_finish_error(&material.disk_id))
+        {
+            self.connection.fail_auth();
+            return Err(error);
+        }
 
-        self.connection.mark_authorized(material.disk_id.clone());
+        if let Err(error) = self.connection.finish_auth(&material.disk_id) {
+            self.connection.fail_auth();
+            return Err(error);
+        }
         Ok(material.disk_id)
     }
 }
@@ -97,6 +131,9 @@ fn map_auth_finish_error<'a>(
             NetworkClientError::UnauthorizedDisk {
                 disk_id: disk_id.to_string(),
             }
+        }
+        ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrInvalidRequest) => {
+            NetworkClientError::InvalidState("auth_finish")
         }
         other => NetworkClientError::Protocol(other),
     }
@@ -265,5 +302,25 @@ mod tests {
 
         let _ = connection.close();
         server.join().expect("server should join");
+    }
+
+    #[test]
+    fn authenticate_rejects_second_attempt_in_non_idle_phase() {
+        let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:1"));
+        connection
+            .finish_auth("A1b2C3d4E5f6G7h8")
+            .expect_err("finish auth without pending should fail");
+        connection
+            .begin_auth("A1b2C3d4E5f6G7h8")
+            .expect("begin auth should succeed");
+
+        let authenticator = ConnectionAuthenticator::new(connection);
+        let claim_code =
+            "A1b2C3d4E5f6G7h8abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab";
+
+        let error = authenticator
+            .authenticate(claim_code)
+            .expect_err("second auth should fail");
+        assert_eq!(error.to_string(), "invalid-state: auth_start");
     }
 }

@@ -146,24 +146,19 @@ impl DebugShell {
     }
 
     fn print_state(&self) {
-        let disk_id = self.disk_id.as_deref().unwrap_or("-");
-        let authorized = if self
-            .disk_id
-            .as_deref()
-            .map(|value| self.connection.is_authorized(value))
-            .unwrap_or(false)
-        {
-            "yes"
-        } else {
-            "no"
-        };
+        let disk_id = self
+            .connection
+            .authorized_disk_id()
+            .or_else(|| self.disk_id.clone())
+            .unwrap_or_else(|| "-".to_string());
+        let phase = self.connection.phase_name();
 
         match &self.session {
             Some(session) => {
                 println!(
-                    "state connected={} authorized={} disk_id={} session=open({}) terminal={} closed={}",
+                    "state connected={} phase={} disk_id={} session=open({}) terminal={} closed={}",
                     bool_to_text(self.connection.is_connected()),
-                    authorized,
+                    phase,
                     disk_id,
                     session.session_id(),
                     bool_to_text(session.is_terminal()),
@@ -172,9 +167,9 @@ impl DebugShell {
             }
             None => {
                 println!(
-                    "state connected={} authorized={} disk_id={} session=none",
+                    "state connected={} phase={} disk_id={} session=none",
                     bool_to_text(self.connection.is_connected()),
-                    authorized,
+                    phase,
                     disk_id
                 );
             }

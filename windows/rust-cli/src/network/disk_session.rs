@@ -202,6 +202,8 @@ impl DiskSession {
 
     pub fn ping(&self, nonce: u64) -> Result<u64, NetworkClientError> {
         self.ensure_usable()?;
+        self.connection
+            .require_open_session(Some(self.disk_id()), self.session_id)?;
         let response = send_ping_once(&self.connection, self.session_id, nonce)?;
         self.refresh_expiration()?;
         Ok(response)
@@ -215,6 +217,7 @@ impl DiskSession {
         if let Err(error) = self.ensure_usable() {
             if matches!(error, NetworkClientError::SessionUnavailable) {
                 self.mark_closed();
+                self.connection.clear_session(self.session_id);
                 self.stop_keepalive();
                 return Ok(());
             }
@@ -233,12 +236,15 @@ impl DiskSession {
             CloseRequest::decode_response(&response_payload, request_id, self.session_id)
                 .map_err(map_data_plane_error);
         self.mark_closed();
+        self.connection.clear_session(self.session_id);
         self.stop_keepalive();
         close_result
     }
 
     pub fn read_at(&self, offset: u64, buffer: &mut [u8]) -> Result<(), NetworkClientError> {
         self.ensure_usable()?;
+        self.connection
+            .require_open_session(Some(self.disk_id()), self.session_id)?;
         validate_single_io(
             self.disk_size_bytes,
             self.max_io_bytes,
@@ -274,6 +280,8 @@ impl DiskSession {
 
     pub fn write_at(&self, offset: u64, data: &[u8]) -> Result<(), NetworkClientError> {
         self.ensure_usable()?;
+        self.connection
+            .require_open_session(Some(self.disk_id()), self.session_id)?;
         if self.read_only {
             return Err(NetworkClientError::InvalidIo("read_only"));
         }
@@ -361,6 +369,7 @@ impl DiskSession {
             runtime.terminal_error = Some(error);
         }
         drop(runtime);
+        self.connection.clear_session(self.session_id);
         self.stop_keepalive();
     }
 }
@@ -537,12 +546,35 @@ mod tests {
     use crate::network::transport_client::read_frame_into;
     use crate::network::transport_client::write_frame;
     use std::net::TcpListener;
+    use std::sync::Arc;
     use std::thread;
     use std::time::Duration;
 
+    fn staged_connection(
+        endpoint: TransportEndpoint,
+        disk_id: &str,
+        session_id: u64,
+    ) -> Arc<GatewayConnection> {
+        let connection = GatewayConnection::new(endpoint);
+        connection
+            .begin_auth(disk_id)
+            .expect("begin auth should succeed");
+        connection
+            .finish_auth(disk_id)
+            .expect("finish auth should succeed");
+        connection
+            .finish_session_open(disk_id, session_id)
+            .expect("finish session open should succeed");
+        connection
+    }
+
     #[test]
     fn disk_session_saves_session_metadata_and_lifecycle() {
-        let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:1"));
+        let connection = staged_connection(
+            TransportEndpoint::new("127.0.0.1:1"),
+            "A1b2C3d4E5f6G7h8",
+            77,
+        );
         let session = DiskSession::new(connection, "A1b2C3d4E5f6G7h8", 77, 4096, true, 60_000, 300)
             .expect("session should build");
 
@@ -558,7 +590,11 @@ mod tests {
 
     #[test]
     fn disk_session_shares_closed_state_across_clones() {
-        let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:1"));
+        let connection = staged_connection(
+            TransportEndpoint::new("127.0.0.1:1"),
+            "A1b2C3d4E5f6G7h8",
+            77,
+        );
         let session =
             DiskSession::new(connection, "A1b2C3d4E5f6G7h8", 77, 4096, false, 60_000, 300)
                 .expect("session should build");
@@ -652,7 +688,11 @@ mod tests {
             write_frame(&mut stream, &write_response).expect("write write response");
         });
 
-        let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
+        let connection = staged_connection(
+            TransportEndpoint::new(address.to_string()),
+            "A1b2C3d4E5f6G7h8",
+            77,
+        );
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(
             connection.clone(),
@@ -708,7 +748,11 @@ mod tests {
             write_frame(&mut stream, &close_response).expect("write close response");
         });
 
-        let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
+        let connection = staged_connection(
+            TransportEndpoint::new(address.to_string()),
+            "A1b2C3d4E5f6G7h8",
+            77,
+        );
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(
             connection.clone(),
@@ -792,7 +836,11 @@ mod tests {
             write_frame(&mut stream, &write_response).expect("write write response");
         });
 
-        let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
+        let connection = staged_connection(
+            TransportEndpoint::new(address.to_string()),
+            "A1b2C3d4E5f6G7h8",
+            77,
+        );
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(
             connection.clone(),

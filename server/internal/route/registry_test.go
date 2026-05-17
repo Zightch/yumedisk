@@ -68,3 +68,30 @@ func TestRegistryDisconnectConnectionHidesRoute(t *testing.T) {
 		t.Fatal("expected disconnected route to become unavailable")
 	}
 }
+
+func TestRegistryRejectsDuplicateDiskOnAnotherConnection(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	entry := Entry{
+		DiskID:       "DISK000000000001",
+		AuthVerifier: [64]byte{1},
+		RouteTarget:  "storer://127.0.0.1:9836",
+		ConnectionID: 12,
+		Connected:    true,
+	}
+	if err := registry.Register(entry); err != nil {
+		t.Fatalf("register first route: %v", err)
+	}
+
+	err := registry.Register(Entry{
+		DiskID:       entry.DiskID,
+		AuthVerifier: [64]byte{2},
+		RouteTarget:  "storer://127.0.0.1:9837",
+		ConnectionID: 13,
+		Connected:    true,
+	})
+	if err != ErrDiskAlreadyRegistered {
+		t.Fatalf("expected duplicate disk error, got: %v", err)
+	}
+}

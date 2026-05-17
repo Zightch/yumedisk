@@ -23,9 +23,7 @@ impl SessionOpener {
         if disk_id.is_empty() {
             return Err(NetworkClientError::InvalidArgument("disk_id"));
         }
-        if !self.connection.is_authorized(&disk_id) {
-            return Err(NetworkClientError::UnauthorizedDisk { disk_id });
-        }
+        self.connection.begin_session_open(&disk_id)?;
 
         let request_id = self.connection.allocate_request_id();
         let payload = SessionOpenRequest {
@@ -33,9 +31,26 @@ impl SessionOpener {
         }
         .encode_request(request_id)
         .map_err(NetworkClientError::Protocol)?;
-        let response_payload = self.connection.send_request_and_wait(payload)?;
-        let response = SessionOpenResponse::decode_response(&response_payload, request_id)
-            .map_err(map_session_open_error(&disk_id))?;
+        let response_payload = match self.connection.send_request_and_wait(payload) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.connection.cancel_session_open(&disk_id);
+                return Err(error);
+            }
+        };
+        let response = match SessionOpenResponse::decode_response(&response_payload, request_id)
+            .map_err(map_session_open_error(&disk_id))
+        {
+            Ok(response) => response,
+            Err(error) => {
+                self.connection.cancel_session_open(&disk_id);
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.connection.finish_session_open(&disk_id, response.session_id) {
+            self.connection.cancel_session_open(&disk_id);
+            return Err(error);
+        }
 
         DiskSession::new(
             self.connection.clone(),
@@ -57,6 +72,9 @@ fn map_session_open_error<'a>(
             NetworkClientError::UnauthorizedDisk {
                 disk_id: disk_id.to_string(),
             }
+        }
+        ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrInvalidRequest) => {
+            NetworkClientError::InvalidState("session_open")
         }
         ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrSessionBusy) => {
             NetworkClientError::DiskBusy {
@@ -124,7 +142,12 @@ mod tests {
 
         let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
         connection.connect().expect("connect should succeed");
-        connection.mark_authorized(disk_id);
+        connection
+            .begin_auth(disk_id)
+            .expect("begin auth should succeed");
+        connection
+            .finish_auth(disk_id)
+            .expect("finish auth should succeed");
         let opener = SessionOpener::new(connection.clone());
 
         let session = opener.open(disk_id).expect("open should succeed");
@@ -147,7 +170,7 @@ mod tests {
         let error = opener
             .open("A1b2C3d4E5f6G7h8")
             .expect_err("open should fail");
-        assert_eq!(error.to_string(), "unauthorized-disk: A1b2C3d4E5f6G7h8");
+        assert_eq!(error.to_string(), "invalid-state: session_open");
     }
 
     #[test]
@@ -183,7 +206,12 @@ mod tests {
 
         let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
         connection.connect().expect("connect should succeed");
-        connection.mark_authorized(disk_id);
+        connection
+            .begin_auth(disk_id)
+            .expect("begin auth should succeed");
+        connection
+            .finish_auth(disk_id)
+            .expect("finish auth should succeed");
         let opener = SessionOpener::new(connection.clone());
 
         let error = opener.open(disk_id).expect_err("open should fail");

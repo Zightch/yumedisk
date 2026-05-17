@@ -16,8 +16,10 @@ type Handler struct {
 type ConnectionState struct {
 	ID uint64
 
-	mu                sync.RWMutex
-	authenticatedDisk map[string]struct{}
+	mu              sync.RWMutex
+	pendingAuthDisk string
+	authorizedDisk  string
+	openSessionID   uint64
 }
 
 type ConnectionHandler struct {
@@ -45,8 +47,7 @@ func NewHandler(routes RouteSource, sessions SessionDataPlane) (*Handler, error)
 
 func (h *Handler) NewConnectionState(id uint64) *ConnectionState {
 	return &ConnectionState{
-		ID:                id,
-		authenticatedDisk: make(map[string]struct{}),
+		ID: id,
 	}
 }
 
@@ -75,13 +76,13 @@ func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte,
 	case proto.OpSessionOpen:
 		return h.sessionOpener.handleSessionOpen(state, header, body)
 	case proto.OpPing:
-		return h.sessionOpener.handlePing(header, body)
+		return h.sessionOpener.handlePing(state, header, body)
 	case proto.OpClose:
-		return h.sessionOpener.handleClose(header, body)
+		return h.sessionOpener.handleClose(state, header, body)
 	case proto.OpReadAt:
-		return h.sessionOpener.handleRead(header, body)
+		return h.sessionOpener.handleRead(state, header, body)
 	case proto.OpWriteAt:
-		return h.sessionOpener.handleWrite(header, body)
+		return h.sessionOpener.handleWrite(state, header, body)
 	default:
 		return proto.BuildErrorResponse(header, proto.StatusUnsupportedOp), nil
 	}
@@ -103,13 +104,98 @@ var _ routeDisconnectHandler = (*Handler)(nil)
 
 func (s *ConnectionState) markAuthenticated(diskID string) {
 	s.mu.Lock()
-	s.authenticatedDisk[diskID] = struct{}{}
+	s.pendingAuthDisk = ""
+	s.authorizedDisk = diskID
+	s.openSessionID = 0
 	s.mu.Unlock()
 }
 
 func (s *ConnectionState) isAuthenticated(diskID string) bool {
 	s.mu.RLock()
-	_, ok := s.authenticatedDisk[diskID]
+	ok := s.authorizedDisk == diskID && s.pendingAuthDisk == ""
 	s.mu.RUnlock()
 	return ok
 }
+
+func (s *ConnectionState) beginAuth(diskID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingAuthDisk != "" || s.authorizedDisk != "" || s.openSessionID != 0 {
+		return errPhaseViolation
+	}
+	s.pendingAuthDisk = diskID
+	return nil
+}
+
+func (s *ConnectionState) finishAuth(diskID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingAuthDisk == "" || s.pendingAuthDisk != diskID || s.authorizedDisk != "" || s.openSessionID != 0 {
+		return errPhaseViolation
+	}
+	s.pendingAuthDisk = ""
+	s.authorizedDisk = diskID
+	return nil
+}
+
+func (s *ConnectionState) failAuth() {
+	s.mu.Lock()
+	s.pendingAuthDisk = ""
+	s.mu.Unlock()
+}
+
+func (s *ConnectionState) beginSessionOpen(diskID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pendingAuthDisk != "" || s.authorizedDisk == "" || s.authorizedDisk != diskID || s.openSessionID != 0 {
+		return errPhaseViolation
+	}
+	return nil
+}
+
+func (s *ConnectionState) finishSessionOpen(sessionID uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.authorizedDisk == "" || s.pendingAuthDisk != "" || s.openSessionID != 0 || sessionID == 0 {
+		return errPhaseViolation
+	}
+	s.openSessionID = sessionID
+	return nil
+}
+
+func (s *ConnectionState) hasOpenSession(sessionID uint64) bool {
+	s.mu.RLock()
+	ok := s.openSessionID != 0 && s.openSessionID == sessionID
+	s.mu.RUnlock()
+	return ok
+}
+
+func (s *ConnectionState) pendingAuth() (string, bool) {
+	s.mu.RLock()
+	diskID := s.pendingAuthDisk
+	s.mu.RUnlock()
+	return diskID, diskID != ""
+}
+
+func (s *ConnectionState) requireOpenSession(sessionID uint64) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.pendingAuthDisk != "" || s.authorizedDisk == "" || s.openSessionID == 0 || s.openSessionID != sessionID {
+		return errPhaseViolation
+	}
+	return nil
+}
+
+func (s *ConnectionState) clearSession(sessionID uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.openSessionID == 0 || s.openSessionID != sessionID {
+		return false
+	}
+	s.openSessionID = 0
+	return true
+}
+
+var (
+	errPhaseViolation = errors.New("connection phase violation")
+)

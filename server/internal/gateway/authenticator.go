@@ -49,9 +49,13 @@ func (a *authenticator) handleAuthStart(state *ConnectionState, header proto.Hea
 	if err != nil {
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
+	if err := state.beginAuth(diskID); err != nil {
+		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
+	}
 
 	challenge, token, err := a.tokenCodec.Issue(state.ID, diskID, a.challengeTTL)
 	if err != nil {
+		state.failAuth()
 		return nil, err
 	}
 
@@ -67,13 +71,19 @@ func (a *authenticator) handleAuthFinish(state *ConnectionState, header proto.He
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
 
+	if _, ok := state.pendingAuth(); !ok {
+		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
+	}
+
 	token, proof, err := proto.ParseAuthFinishRequestBody(body)
 	if err != nil {
+		state.failAuth()
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
 
 	challenge, err := a.tokenCodec.Parse(state.ID, token)
 	if err != nil {
+		state.failAuth()
 		if errors.Is(err, auth.ErrChallengeExpired) {
 			a.sleep(a.randomDelay())
 			return proto.BuildErrorResponse(header, proto.StatusAuthExpired), nil
@@ -84,17 +94,22 @@ func (a *authenticator) handleAuthFinish(state *ConnectionState, header proto.He
 
 	entry, ok := a.routes.LookupRoute(challenge.DiskID)
 	if !ok {
+		state.failAuth()
 		a.sleep(a.randomDelay())
 		return proto.BuildErrorResponse(header, proto.StatusAuthFailed), nil
 	}
 
 	expected := auth.ComputeProof(entry.AuthVerifier, challenge.Salt[:])
 	if proof != expected {
+		state.failAuth()
 		a.sleep(a.randomDelay())
 		return proto.BuildErrorResponse(header, proto.StatusAuthFailed), nil
 	}
 
-	state.markAuthenticated(challenge.DiskID)
+	if err := state.finishAuth(challenge.DiskID); err != nil {
+		state.failAuth()
+		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
+	}
 	return proto.BuildSuccessResponse(header, proto.BuildAuthFinishResponseBody()), nil
 }
 

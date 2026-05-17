@@ -5,6 +5,8 @@ import (
 	"sync"
 )
 
+var ErrDiskAlreadyRegistered = errors.New("disk id already registered on another connection")
+
 type Entry struct {
 	DiskID            string
 	AuthVerifier      [64]byte
@@ -40,6 +42,10 @@ func (r *Registry) Register(entry Entry) error {
 	}
 
 	r.mu.Lock()
+	if existing, ok := r.items[entry.DiskID]; ok && existing.Connected && existing.ConnectionID != entry.ConnectionID {
+		r.mu.Unlock()
+		return ErrDiskAlreadyRegistered
+	}
 	r.items[entry.DiskID] = entry
 	r.mu.Unlock()
 	return nil

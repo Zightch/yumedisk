@@ -122,6 +122,7 @@ fn validate_range(disk_size_bytes: u64, offset: u64, length: usize) -> Result<()
 fn map_network_error_to_backend_error(error: NetworkClientError) -> BackendError {
     match error {
         NetworkClientError::InvalidArgument(_)
+        | NetworkClientError::InvalidState(_)
         | NetworkClientError::InvalidIo(_)
         | NetworkClientError::IoFailed => BackendError::InvalidParameter,
         NetworkClientError::SessionUnavailable
@@ -157,11 +158,30 @@ mod tests {
     use backend_rust::BackendError;
     use backend_rust::Media;
     use std::net::TcpListener;
+    use std::sync::Arc;
     use std::thread;
+
+    fn staged_connection(
+        endpoint: TransportEndpoint,
+        disk_id: &str,
+        session_id: u64,
+    ) -> Arc<GatewayConnection> {
+        let connection = GatewayConnection::new(endpoint);
+        connection
+            .begin_auth(disk_id)
+            .expect("begin auth should succeed");
+        connection
+            .finish_auth(disk_id)
+            .expect("finish auth should succeed");
+        connection
+            .finish_session_open(disk_id, session_id)
+            .expect("finish session open should succeed");
+        connection
+    }
 
     #[test]
     fn bind_requires_session_metadata_to_match_media_metadata() {
-        let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:9000"));
+        let connection = staged_connection(TransportEndpoint::new("127.0.0.1:9000"), "disk-1", 7);
         let session = DiskSession::new(connection, "disk-1", 7, 4096, false, 1024, 300)
             .expect("session should build");
 
@@ -226,7 +246,11 @@ mod tests {
             write_frame(&mut stream, &second_response).expect("write second response");
         });
 
-        let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
+        let connection = staged_connection(
+            TransportEndpoint::new(address.to_string()),
+            "A1b2C3d4E5f6G7h8",
+            77,
+        );
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(
             connection.clone(),
@@ -309,7 +333,11 @@ mod tests {
             write_frame(&mut stream, &second_response).expect("write second response");
         });
 
-        let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
+        let connection = staged_connection(
+            TransportEndpoint::new(address.to_string()),
+            "A1b2C3d4E5f6G7h8",
+            77,
+        );
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(
             connection.clone(),

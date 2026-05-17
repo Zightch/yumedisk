@@ -252,6 +252,7 @@ func (c *storerConnection) roundTrip(payload []byte) ([]byte, error) {
 
 func (c *storerConnection) serve(ctx context.Context, registry *StorerRouteRegistry, gatewayToken string) error {
 	buffer := make([]byte, transport.MaxPayloadSize)
+	registered := false
 
 	for {
 		payload, err := transport.ReadFrameInto(c.conn, buffer)
@@ -268,7 +269,14 @@ func (c *storerConnection) serve(ctx context.Context, registry *StorerRouteRegis
 		}
 		if header.Flags&proto.FlagResponse == 0 {
 			if header.OpCode != proto.OpStorerRegister {
-				return fmt.Errorf("unexpected storer request opcode: %d", header.OpCode)
+				resp := proto.BuildErrorResponse(header, proto.StatusInvalidRequest)
+				_ = transport.WriteFrame(c.conn, resp)
+				continue
+			}
+			if registered {
+				resp := proto.BuildErrorResponse(header, proto.StatusInvalidRequest)
+				_ = transport.WriteFrame(c.conn, resp)
+				continue
 			}
 			req, err := proto.ParseStorerRegisterRequestBody(payload[proto.HeaderSize:])
 			if err != nil {
@@ -297,9 +305,13 @@ func (c *storerConnection) serve(ctx context.Context, registry *StorerRouteRegis
 				_ = transport.WriteFrame(c.conn, resp)
 				continue
 			}
+			registered = true
 			resp := proto.BuildSuccessResponse(header, nil)
 			_ = transport.WriteFrame(c.conn, resp)
 			continue
+		}
+		if !registered {
+			return fmt.Errorf("unexpected storer response before register")
 		}
 
 		resp := make([]byte, len(payload))

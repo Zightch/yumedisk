@@ -6,6 +6,7 @@ use super::protocol_client::ProtocolClientError;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetworkClientError {
     InvalidArgument(&'static str),
+    InvalidState(&'static str),
     UnauthorizedDisk { disk_id: String },
     DiskBusy { disk_id: String },
     InvalidIo(&'static str),
@@ -24,6 +25,7 @@ impl fmt::Display for NetworkClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidArgument(name) => write!(formatter, "invalid-argument: {}", name),
+            Self::InvalidState(name) => write!(formatter, "invalid-state: {}", name),
             Self::UnauthorizedDisk { disk_id } => {
                 write!(formatter, "unauthorized-disk: {}", disk_id)
             }

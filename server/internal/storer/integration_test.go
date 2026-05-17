@@ -132,8 +132,8 @@ func TestServerMinimalClosure(t *testing.T) {
 	binary.BigEndian.PutUint64(pingBody, 123)
 	pingResp := mustRoundTrip(t, conn2, buildRequest(proto.OpPing, requestID, sessionID, pingBody))
 	pingHeader := mustParseHeader(t, pingResp)
-	if pingHeader.StatusCode != proto.StatusSessionUnavailable {
-		t.Fatalf("expected session unavailable after disconnect, got %d", pingHeader.StatusCode)
+	if pingHeader.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("expected invalid request after disconnect, got %d", pingHeader.StatusCode)
 	}
 
 	cancel()

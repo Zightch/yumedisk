@@ -119,6 +119,96 @@ func TestAuthenticatorFakeDiskUsesUnifiedFailure(t *testing.T) {
 	}
 }
 
+func TestAuthenticatorRejectsWrongPhaseRequests(t *testing.T) {
+	t.Parallel()
+
+	claimCode, err := auth.GenerateClaimCode(64)
+	if err != nil {
+		t.Fatalf("generate claim code: %v", err)
+	}
+	material, err := auth.ParseClaimCode(claimCode)
+	if err != nil {
+		t.Fatalf("parse claim code: %v", err)
+	}
+
+	handler, err := newAuthHandler(t, material)
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+
+	state := handler.NewConnectionState(88)
+
+	finishBody := proto.BuildAuthFinishRequestBody([]byte("token"), [proto.AuthProofSize]byte{})
+	finishReq := buildRequest(proto.OpAuthFinish, 1, 0, finishBody)
+	finishResp, err := handler.HandlePayload(state, finishReq)
+	if err != nil {
+		t.Fatalf("auth finish without start: %v", err)
+	}
+	finishHeader, err := proto.ParseHeader(finishResp)
+	if err != nil {
+		t.Fatalf("parse auth finish without start: %v", err)
+	}
+	if finishHeader.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected auth finish without start status: %d", finishHeader.StatusCode)
+	}
+
+	startReq := buildRequest(proto.OpAuthStart, 2, 0, []byte(material.DiskID))
+	startResp, err := handler.HandlePayload(state, startReq)
+	if err != nil {
+		t.Fatalf("auth start: %v", err)
+	}
+	startHeader, err := proto.ParseHeader(startResp)
+	if err != nil {
+		t.Fatalf("parse auth start response: %v", err)
+	}
+	if startHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected auth start status: %d", startHeader.StatusCode)
+	}
+
+	restartResp, err := handler.HandlePayload(state, startReq)
+	if err != nil {
+		t.Fatalf("second auth start: %v", err)
+	}
+	restartHeader, err := proto.ParseHeader(restartResp)
+	if err != nil {
+		t.Fatalf("parse second auth start response: %v", err)
+	}
+	if restartHeader.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected second auth start status: %d", restartHeader.StatusCode)
+	}
+
+	startBody, err := proto.ParseAuthStartResponseBody(startResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse auth start body: %v", err)
+	}
+	proof := auth.ComputeProof(material.AuthVerifier, startBody.Salt[:])
+	successFinishBody := proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof)
+	successFinishReq := buildRequest(proto.OpAuthFinish, 3, 0, successFinishBody)
+	successFinishResp, err := handler.HandlePayload(state, successFinishReq)
+	if err != nil {
+		t.Fatalf("auth finish: %v", err)
+	}
+	successFinishHeader, err := proto.ParseHeader(successFinishResp)
+	if err != nil {
+		t.Fatalf("parse auth finish response: %v", err)
+	}
+	if successFinishHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected auth finish status: %d", successFinishHeader.StatusCode)
+	}
+
+	postAuthStartResp, err := handler.HandlePayload(state, startReq)
+	if err != nil {
+		t.Fatalf("auth start after auth: %v", err)
+	}
+	postAuthStartHeader, err := proto.ParseHeader(postAuthStartResp)
+	if err != nil {
+		t.Fatalf("parse auth start after auth: %v", err)
+	}
+	if postAuthStartHeader.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected auth start after auth status: %d", postAuthStartHeader.StatusCode)
+	}
+}
+
 func buildRequest(opCode uint8, requestID uint64, sessionID uint64, body []byte) []byte {
 	payload := make([]byte, proto.HeaderSize+len(body))
 	proto.EncodeHeader(proto.Header{
