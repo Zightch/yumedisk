@@ -17,21 +17,21 @@ const (
 )
 
 type authenticator struct {
-	auths        AuthVerifierSource
+	routes       RouteSource
 	tokenCodec   *auth.TokenCodec
 	challengeTTL time.Duration
 	sleep        func(time.Duration)
 	randomDelay  func() time.Duration
 }
 
-func newAuthenticator(auths AuthVerifierSource) (*authenticator, error) {
+func newAuthenticator(routes RouteSource) (*authenticator, error) {
 	tokenCodec, err := auth.NewRandomTokenCodec(32)
 	if err != nil {
 		return nil, err
 	}
 
 	a := &authenticator{
-		auths:        auths,
+		routes:       routes,
 		tokenCodec:   tokenCodec,
 		challengeTTL: defaultChallengeTTL,
 		sleep:        time.Sleep,
@@ -82,13 +82,13 @@ func (a *authenticator) handleAuthFinish(state *ConnectionState, header proto.He
 		return proto.BuildErrorResponse(header, proto.StatusAuthChallengeInvalid), nil
 	}
 
-	authVerifier, ok := a.auths.LookupAuthVerifier(challenge.DiskID)
+	entry, ok := a.routes.LookupRoute(challenge.DiskID)
 	if !ok {
 		a.sleep(a.randomDelay())
 		return proto.BuildErrorResponse(header, proto.StatusAuthFailed), nil
 	}
 
-	expected := auth.ComputeProof(authVerifier, challenge.Salt[:])
+	expected := auth.ComputeProof(entry.AuthVerifier, challenge.Salt[:])
 	if proof != expected {
 		a.sleep(a.randomDelay())
 		return proto.BuildErrorResponse(header, proto.StatusAuthFailed), nil

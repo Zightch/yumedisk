@@ -25,21 +25,21 @@ type ConnectionHandler struct {
 	state  *ConnectionState
 }
 
-func NewHandler(auths AuthVerifierSource, sessions SessionDataPlane) (*Handler, error) {
-	if auths == nil {
-		return nil, errors.New("gateway handler requires auth verifier source")
+func NewHandler(routes RouteSource, sessions SessionDataPlane) (*Handler, error) {
+	if routes == nil {
+		return nil, errors.New("gateway handler requires route source")
 	}
 	if sessions == nil {
 		return nil, errors.New("gateway handler requires session data plane")
 	}
 
-	authenticator, err := newAuthenticator(auths)
+	authenticator, err := newAuthenticator(routes)
 	if err != nil {
 		return nil, err
 	}
 	return &Handler{
 		authenticator: authenticator,
-		sessionOpener: newSessionOpener(sessions),
+		sessionOpener: newSessionOpener(routes, sessions),
 	}, nil
 }
 

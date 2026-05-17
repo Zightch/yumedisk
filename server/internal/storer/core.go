@@ -56,6 +56,14 @@ func (c *Core) AuthVerifier() [64]byte {
 	return c.material.AuthVerifier
 }
 
+func (c *Core) DiskSize() uint64 {
+	return c.storage.Size()
+}
+
+func (c *Core) ReadOnly() bool {
+	return c.storage.ReadOnly()
+}
+
 func (c *Core) StoragePath() string {
 	return c.storage.Path()
 }

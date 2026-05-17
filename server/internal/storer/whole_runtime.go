@@ -10,6 +10,7 @@ import (
 
 	"yumedisk/server/internal/config"
 	"yumedisk/server/internal/gateway"
+	"yumedisk/server/internal/route"
 	"yumedisk/server/internal/transport"
 )
 
@@ -17,6 +18,7 @@ type WholeRuntime struct {
 	cfg      config.StorerConfig
 	core     *Core
 	gateway  *gateway.Handler
+	routes   *route.Registry
 	nextConn atomic.Uint64
 }
 
@@ -28,8 +30,23 @@ func NewWholeRuntime(cfg config.StorerConfig, core *Core) (*WholeRuntime, error)
 		return nil, errors.New("whole runtime requires non-nil core")
 	}
 
+	routes := route.NewRegistry()
+	if err := routes.Register(route.Entry{
+		DiskID:            core.DiskID(),
+		AuthVerifier:      core.AuthVerifier(),
+		RouteTarget:       "embedded://whole",
+		ConnectionID:      0,
+		Connected:         true,
+		DiskSizeBytes:     core.DiskSize(),
+		ReadOnly:          core.ReadOnly(),
+		MaxIOBytes:        core.SessionService().MaxIOBytes(),
+		SessionTTLSeconds: core.SessionService().TTLSeconds(),
+	}); err != nil {
+		return nil, err
+	}
+
 	backend := newLocalGatewayBackend(core)
-	gatewayHandler, err := gateway.NewHandler(backend, backend)
+	gatewayHandler, err := gateway.NewHandler(routes, backend)
 	if err != nil {
 		return nil, err
 	}
@@ -38,6 +55,7 @@ func NewWholeRuntime(cfg config.StorerConfig, core *Core) (*WholeRuntime, error)
 		cfg:     cfg,
 		core:    core,
 		gateway: gatewayHandler,
+		routes:  routes,
 	}, nil
 }
 

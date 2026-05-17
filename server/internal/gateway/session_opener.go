@@ -6,11 +6,13 @@ import (
 )
 
 type sessionOpener struct {
+	routes   RouteSource
 	sessions SessionDataPlane
 }
 
-func newSessionOpener(sessions SessionDataPlane) *sessionOpener {
+func newSessionOpener(routes RouteSource, sessions SessionDataPlane) *sessionOpener {
 	return &sessionOpener{
+		routes:   routes,
 		sessions: sessions,
 	}
 }
@@ -26,6 +28,9 @@ func (o *sessionOpener) handleSessionOpen(state *ConnectionState, header proto.H
 	}
 	if !state.isAuthenticated(diskID) {
 		return proto.BuildErrorResponse(header, proto.StatusAuthRequired), nil
+	}
+	if _, ok := o.routes.LookupRoute(diskID); !ok {
+		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
 
 	desc, err := o.sessions.Open(state.ID, diskID)

@@ -1,9 +1,12 @@
 package gateway
 
-import "yumedisk/server/internal/session"
+import (
+	"yumedisk/server/internal/route"
+	"yumedisk/server/internal/session"
+)
 
-type AuthVerifierSource interface {
-	LookupAuthVerifier(diskID string) ([64]byte, bool)
+type RouteSource interface {
+	LookupRoute(diskID string) (route.Entry, bool)
 }
 
 type SessionDataPlane interface {

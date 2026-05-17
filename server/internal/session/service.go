@@ -69,6 +69,10 @@ func (s *Service) TTLSeconds() uint32 {
 	return uint32(s.defaultTTL / time.Second)
 }
 
+func (s *Service) MaxIOBytes() uint32 {
+	return s.defaultMaxIO
+}
+
 func (s *Service) Manager() *Manager {
 	return s.manager
 }

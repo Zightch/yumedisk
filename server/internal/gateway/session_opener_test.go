@@ -199,6 +199,28 @@ func TestSessionOpenRejectsSecondClientWhileDiskIsAlreadyOpened(t *testing.T) {
 	}
 }
 
+func TestSessionOpenReturnsUnavailableWhenRouteIsGone(t *testing.T) {
+	t.Parallel()
+
+	handler, state, material := newSessionTestHandler(t)
+	state.markAuthenticated(material.DiskID)
+	backend := handler.authenticator.routes.(*testGatewayBackend)
+	backend.DisconnectRoute()
+
+	openReq := buildRequest(proto.OpSessionOpen, 121, 0, []byte(material.DiskID))
+	openResp, err := handler.HandlePayload(state, openReq)
+	if err != nil {
+		t.Fatalf("open session without route: %v", err)
+	}
+	openHeader, err := proto.ParseHeader(openResp)
+	if err != nil {
+		t.Fatalf("parse open-without-route response: %v", err)
+	}
+	if openHeader.StatusCode != proto.StatusSessionUnavailable {
+		t.Fatalf("unexpected open-without-route status: %d", openHeader.StatusCode)
+	}
+}
+
 func newSessionTestHandler(t *testing.T) (*Handler, *ConnectionState, auth.Material) {
 	handler, state, material, _ := newSessionTestHandlerWithRaw(t, false)
 	return handler, state, material

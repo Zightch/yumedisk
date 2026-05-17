@@ -2,26 +2,40 @@ package gateway
 
 import (
 	"yumedisk/server/internal/auth"
+	"yumedisk/server/internal/route"
 	"yumedisk/server/internal/session"
 )
 
 type testGatewayBackend struct {
 	material auth.Material
 	sessions *session.Service
+	routes   *route.Registry
 }
 
 func newTestGatewayBackend(material auth.Material, sessions *session.Service) *testGatewayBackend {
+	routes := route.NewRegistry()
+	_ = routes.Register(route.Entry{
+		DiskID:            material.DiskID,
+		AuthVerifier:      material.AuthVerifier,
+		RouteTarget:       "test://local",
+		ConnectionID:      0,
+		Connected:         true,
+		MaxIOBytes:        sessions.MaxIOBytes(),
+		SessionTTLSeconds: sessions.TTLSeconds(),
+	})
 	return &testGatewayBackend{
 		material: material,
 		sessions: sessions,
+		routes:   routes,
 	}
 }
 
-func (b *testGatewayBackend) LookupAuthVerifier(diskID string) ([64]byte, bool) {
-	if diskID != b.material.DiskID {
-		return [64]byte{}, false
-	}
-	return b.material.AuthVerifier, true
+func (b *testGatewayBackend) LookupRoute(diskID string) (route.Entry, bool) {
+	return b.routes.LookupRoute(diskID)
+}
+
+func (b *testGatewayBackend) DisconnectRoute() {
+	b.routes.DisconnectConnection(0)
 }
 
 func (b *testGatewayBackend) Open(connectionID uint64, diskID string) (session.Descriptor, error) {
