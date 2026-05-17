@@ -316,7 +316,7 @@ impl CliHost {
             .expect("mounted_network_disks poisoned")
             .iter()
             .filter_map(|(target_id, mounted)| {
-                if mounted.session.is_terminal() {
+                if mounted.session.is_terminal() || !mounted.session.is_connection_alive() {
                     Some(*target_id)
                 } else {
                     None

@@ -1,5 +1,11 @@
 use std::io;
 use std::io::Write;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 
 use backend_rust::YUMEDISK_MAX_USABLE_TARGET_ID;
 
@@ -14,41 +20,51 @@ enum LoopControl {
 }
 
 pub fn run_shell() -> AppResult<()> {
-    let mut host = CliHost::open()?;
+    let host = Arc::new(Mutex::new(CliHost::open()?));
+    let reaper = start_dead_network_reaper(Arc::clone(&host));
     println!("state=ready(rust-cli)");
-    println!("{}", host.query_session_state_text());
+    println!("{}", host.lock().expect("host poisoned").query_session_state_text());
     print_runtime_help();
 
-    let loop_result = run_command_loop(&mut host);
-    host.shutdown();
+    let loop_result = run_command_loop(&host);
+    stop_dead_network_reaper(reaper);
+    host.lock().expect("host poisoned").shutdown();
     loop_result
 }
 
 pub fn run_shell_with_startup_command(planned: PlannedNetworkCommand) -> AppResult<()> {
-    let mut host = CliHost::open()?;
+    let host = Arc::new(Mutex::new(CliHost::open()?));
+    let reaper = start_dead_network_reaper(Arc::clone(&host));
     println!("state=ready(rust-cli)");
-    println!("{}", host.query_session_state_text());
+    println!("{}", host.lock().expect("host poisoned").query_session_state_text());
 
     let args = planned.args.iter().map(String::as_str).collect::<Vec<_>>();
-    match execute_command(&mut host, planned.name, args.as_slice()) {
+    let mut host_guard = host.lock().expect("host poisoned");
+    match execute_command(&mut host_guard, planned.name, args.as_slice()) {
         Ok(LoopControl::Continue) => {
+            drop(host_guard);
             print_runtime_help();
-            let loop_result = run_command_loop(&mut host);
-            host.shutdown();
+            let loop_result = run_command_loop(&host);
+            stop_dead_network_reaper(reaper);
+            host.lock().expect("host poisoned").shutdown();
             loop_result
         }
         Ok(LoopControl::Exit) => {
-            host.shutdown();
+            drop(host_guard);
+            stop_dead_network_reaper(reaper);
+            host.lock().expect("host poisoned").shutdown();
             Ok(())
         }
         Err(error) => {
-            host.shutdown();
+            drop(host_guard);
+            stop_dead_network_reaper(reaper);
+            host.lock().expect("host poisoned").shutdown();
             Err(error)
         }
     }
 }
 
-fn run_command_loop(host: &mut CliHost) -> AppResult<()> {
+fn run_command_loop(host: &Arc<Mutex<CliHost>>) -> AppResult<()> {
     let stdin = io::stdin();
 
     loop {
@@ -72,11 +88,16 @@ fn run_command_loop(host: &mut CliHost) -> AppResult<()> {
             continue;
         }
 
-        match execute_command(host, tokens[0], &tokens[1..]) {
+        let mut host_guard = host.lock().expect("host poisoned");
+        match execute_command(&mut host_guard, tokens[0], &tokens[1..]) {
             Ok(LoopControl::Continue) => {
+                drop(host_guard);
                 reap_dead_network_disks(host);
             }
-            Ok(LoopControl::Exit) => return Ok(()),
+            Ok(LoopControl::Exit) => {
+                drop(host_guard);
+                return Ok(());
+            }
             Err(error) => eprintln!("error: {}", error),
         }
     }
@@ -317,8 +338,8 @@ fn bool_to_text(value: bool) -> &'static str {
     if value { "true" } else { "false" }
 }
 
-fn reap_dead_network_disks(host: &mut CliHost) {
-    match host.reap_dead_network_disks() {
+fn reap_dead_network_disks(host: &Arc<Mutex<CliHost>>) {
+    match host.lock().expect("host poisoned").reap_dead_network_disks() {
         Ok(removed) => {
             for target_id in removed {
                 eprintln!("notice: removed dead network target={}", target_id);
@@ -326,6 +347,28 @@ fn reap_dead_network_disks(host: &mut CliHost) {
         }
         Err(error) => eprintln!("error: auto-remove-dead-network-disks: {}", error),
     }
+}
+
+struct DeadNetworkReaper {
+    stop: Arc<AtomicBool>,
+    thread: thread::JoinHandle<()>,
+}
+
+fn start_dead_network_reaper(host: Arc<Mutex<CliHost>>) -> DeadNetworkReaper {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+    let thread = thread::spawn(move || {
+        while !stop_flag.load(Ordering::Acquire) {
+            reap_dead_network_disks(&host);
+            thread::sleep(Duration::from_millis(200));
+        }
+    });
+    DeadNetworkReaper { stop, thread }
+}
+
+fn stop_dead_network_reaper(reaper: DeadNetworkReaper) {
+    reaper.stop.store(true, Ordering::Release);
+    let _ = reaper.thread.join();
 }
 
 #[cfg(test)]

@@ -180,8 +180,8 @@ func (o *sessionOpener) closeConnection(connectionID uint64) {
 	o.sessions.CloseConnection(connectionID)
 }
 
-func (o *sessionOpener) closeRouteConnection(routeConnectionID uint64) {
-	o.registry.CloseRouteConnection(routeConnectionID)
+func (o *sessionOpener) closeRouteConnection(routeConnectionID uint64) []gatewaySession {
+	return o.registry.CloseRouteConnection(routeConnectionID)
 }
 
 func (o *sessionOpener) mapSessionError(header proto.Header, err error) []byte {

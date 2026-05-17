@@ -9,8 +9,9 @@ import (
 )
 
 type Handler struct {
-	authenticator *authenticator
-	sessionOpener *sessionOpener
+	authenticator        *authenticator
+	sessionOpener        *sessionOpener
+	clientDisconnectHook clientDisconnectHandler
 }
 
 type ConnectionState struct {
@@ -25,6 +26,10 @@ type ConnectionState struct {
 type ConnectionHandler struct {
 	parent *Handler
 	state  *ConnectionState
+}
+
+type clientDisconnectHandler interface {
+	CloseClientConnection(connectionID uint64)
 }
 
 func NewHandler(routes RouteSource, sessions SessionDataPlane) (*Handler, error) {
@@ -97,7 +102,23 @@ func (h *Handler) CloseConnection(connectionID uint64) {
 }
 
 func (h *Handler) CloseRouteConnection(routeConnectionID uint64) {
-	h.sessionOpener.closeRouteConnection(routeConnectionID)
+	sessions := h.sessionOpener.closeRouteConnection(routeConnectionID)
+	if h.clientDisconnectHook == nil {
+		return
+	}
+
+	seen := make(map[uint64]struct{})
+	for _, mapped := range sessions {
+		if _, ok := seen[mapped.ClientConnection]; ok {
+			continue
+		}
+		seen[mapped.ClientConnection] = struct{}{}
+		h.clientDisconnectHook.CloseClientConnection(mapped.ClientConnection)
+	}
+}
+
+func (h *Handler) SetClientDisconnectHandler(handler clientDisconnectHandler) {
+	h.clientDisconnectHook = handler
 }
 
 var _ routeDisconnectHandler = (*Handler)(nil)

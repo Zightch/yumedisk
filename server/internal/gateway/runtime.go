@@ -19,6 +19,9 @@ type Runtime struct {
 	storerHandler *StorerHandler
 	routes        *StorerRouteRegistry
 	nextConn      atomic.Uint64
+
+	clientConnMu sync.RWMutex
+	clientConns  map[uint64]net.Conn
 }
 
 func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
@@ -32,13 +35,15 @@ func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
 		return nil, err
 	}
 	routes.SetDisconnectHandler(clientHandler)
-
-	return &Runtime{
+	runtime := &Runtime{
 		cfg:           cfg,
 		clientHandler: clientHandler,
 		storerHandler: storerHandler,
 		routes:        routes,
-	}, nil
+		clientConns:   make(map[uint64]net.Conn),
+	}
+	clientHandler.SetClientDisconnectHandler(runtime)
+	return runtime, nil
 }
 
 func (r *Runtime) Run(ctx context.Context) error {
@@ -136,7 +141,15 @@ func (r *Runtime) serveStorerListener(ctx context.Context, listener net.Listener
 }
 
 func (r *Runtime) serveClientConnection(ctx context.Context, state *ConnectionState, conn net.Conn) {
+	r.clientConnMu.Lock()
+	r.clientConns[state.ID] = conn
+	r.clientConnMu.Unlock()
 	defer r.clientHandler.CloseConnection(state.ID)
+	defer func() {
+		r.clientConnMu.Lock()
+		delete(r.clientConns, state.ID)
+		r.clientConnMu.Unlock()
+	}()
 	defer conn.Close()
 
 	log.Printf("gateway client connection %d accepted from %s", state.ID, conn.RemoteAddr())
@@ -178,5 +191,14 @@ func (r *Runtime) serveStorerConnection(ctx context.Context, connectionID uint64
 		if err != nil && !errors.Is(err, net.ErrClosed) {
 			log.Printf("gateway storer connection %d runtime: %v", connectionID, err)
 		}
+	}
+}
+
+func (r *Runtime) CloseClientConnection(connectionID uint64) {
+	r.clientConnMu.RLock()
+	conn := r.clientConns[connectionID]
+	r.clientConnMu.RUnlock()
+	if conn != nil {
+		_ = conn.Close()
 	}
 }

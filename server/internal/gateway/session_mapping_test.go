@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"testing"
+	"sync"
 
 	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/route"
@@ -175,6 +176,58 @@ func TestGatewaySessionMappingIsReleasedOnConnectionClose(t *testing.T) {
 	}
 }
 
+func TestGatewayRouteDisconnectClosesClientConnection(t *testing.T) {
+	t.Parallel()
+
+	diskID := "DISK000000000001"
+	routes := &mappingRouteSource{
+		entry: route.Entry{
+			DiskID:       diskID,
+			RouteTarget:  "storer://conn-15",
+			ConnectionID: 15,
+			Connected:    true,
+		},
+	}
+	dataPlane := &mappingDataPlane{
+		openDesc: session.Descriptor{
+			ID:         91,
+			DiskID:     diskID,
+			DiskSize:   4096,
+			MaxIOBytes: 1024,
+		},
+		pingOK: true,
+	}
+
+	handler, err := NewHandler(routes, dataPlane)
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	collector := &clientDisconnectCollector{}
+	handler.SetClientDisconnectHandler(collector)
+
+	state := handler.NewConnectionState(77)
+	state.markAuthenticated(diskID)
+	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, []byte(diskID)))
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	openHeader, err := proto.ParseHeader(openResp)
+	if err != nil {
+		t.Fatalf("parse open response: %v", err)
+	}
+	if openHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected open status: %d", openHeader.StatusCode)
+	}
+
+	handler.CloseRouteConnection(routes.entry.ConnectionID)
+
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if len(collector.ids) != 1 || collector.ids[0] != state.ID {
+		t.Fatalf("unexpected client disconnect ids: %#v", collector.ids)
+	}
+}
+
 type mappingRouteSource struct {
 	entry route.Entry
 }
@@ -198,6 +251,17 @@ type mappingDataPlane struct {
 	lastWriteSessionID    uint64
 	lastCloseSessionID    uint64
 	lastCloseConnectionID uint64
+}
+
+type clientDisconnectCollector struct {
+	mu  sync.Mutex
+	ids []uint64
+}
+
+func (c *clientDisconnectCollector) CloseClientConnection(connectionID uint64) {
+	c.mu.Lock()
+	c.ids = append(c.ids, connectionID)
+	c.mu.Unlock()
 }
 
 func (p *mappingDataPlane) Open(uint64, string) (session.Descriptor, error) {
