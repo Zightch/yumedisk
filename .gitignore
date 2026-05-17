@@ -46,10 +46,10 @@ jsoncpp/
 
 # Temporary docs / scratch
 **/tmp*/
+**/.tmp*/
 !docs/tmp/
 docs/tmp/*
 !docs/tmp/todo.md
-!docs/tmp/backend-dll-boundary-draft.md
 
 # Local environment
 **/env.cmake

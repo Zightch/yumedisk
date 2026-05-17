@@ -334,9 +334,12 @@ mod tests {
 
     #[test]
     fn parse_auth_args_accepts_optional_target() {
-        let parsed =
-            parse_auth_args(&["127.0.0.1:9736", "A1b2C3d4E5f6G7h8abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab", "3"])
-                .expect("parse should succeed");
+        let parsed = parse_auth_args(&[
+            "127.0.0.1:9736",
+            "A1b2C3d4E5f6G7h8abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab",
+            "3",
+        ])
+        .expect("parse should succeed");
         assert_eq!(parsed.0, "127.0.0.1:9736");
         assert_eq!(parsed.2, Some(3));
     }

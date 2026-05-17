@@ -35,12 +35,10 @@ where
     match command.as_str() {
         "shell" => Ok(CliCommand::Shell),
         "help" | "--help" | "-h" => Ok(CliCommand::Help),
-        "auth" => {
-            Ok(CliCommand::Network(PlannedNetworkCommand {
-                name: "auth",
-                args: args.collect(),
-            }))
-        }
+        "auth" => Ok(CliCommand::Network(PlannedNetworkCommand {
+            name: "auth",
+            args: args.collect(),
+        })),
         _ => Err(format!("unknown command: {}", command)),
     }
 }
