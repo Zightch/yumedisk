@@ -43,8 +43,7 @@ func TestServerMinimalClosure(t *testing.T) {
 			ListenAddr: reserveLocalAddr(t),
 		},
 		Storer: config.StorerRemoteConfig{
-			GatewayAddr:      config.DefaultStorerGatewayAddr,
-			ReconnectSeconds: config.DefaultStorerReconnectSeconds,
+			GatewayAddr: config.DefaultStorerGatewayAddr,
 		},
 	}
 
@@ -174,8 +173,7 @@ func TestServerRejectsSecondSessionOpenWhileDiskIsAlreadyOpened(t *testing.T) {
 			ListenAddr: reserveLocalAddr(t),
 		},
 		Storer: config.StorerRemoteConfig{
-			GatewayAddr:      config.DefaultStorerGatewayAddr,
-			ReconnectSeconds: config.DefaultStorerReconnectSeconds,
+			GatewayAddr: config.DefaultStorerGatewayAddr,
 		},
 	}
 
@@ -254,9 +252,8 @@ func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
 			ListenAddr: config.DefaultWholeListenAddr,
 		},
 		Storer: config.StorerRemoteConfig{
-			GatewayAddr:      gatewayAddr,
-			GatewayToken:     "gateway-token",
-			ReconnectSeconds: 1,
+			GatewayAddr:  gatewayAddr,
+			GatewayToken: "gateway-token",
 		},
 	}
 

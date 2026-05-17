@@ -20,7 +20,6 @@ const (
 	DefaultGatewayClientListenAddr = "127.0.0.1:9736"
 	DefaultGatewayStorerListenAddr = "127.0.0.1:9836"
 	DefaultStorerGatewayAddr       = "127.0.0.1:9836"
-	DefaultStorerReconnectSeconds  = 3
 	DefaultClaimSecretLen          = 64
 	DefaultGatewayTokenLen         = 64
 	DefaultConfigFileName          = "config.toml"
@@ -40,9 +39,8 @@ type StorerWholeConfig struct {
 }
 
 type StorerRemoteConfig struct {
-	GatewayAddr      string
-	GatewayToken     string
-	ReconnectSeconds uint32
+	GatewayAddr  string
+	GatewayToken string
 }
 
 type StorerConfig struct {
@@ -125,9 +123,8 @@ func LoadStorer(path string) (StorerConfig, error) {
 			ListenAddr: getString(values, "whole.listen_addr", DefaultWholeListenAddr),
 		},
 		Storer: StorerRemoteConfig{
-			GatewayAddr:      getString(values, "storer.gateway_addr", DefaultStorerGatewayAddr),
-			GatewayToken:     getString(values, "storer.gateway_token", ""),
-			ReconnectSeconds: getUint32(values, "storer.reconnect_seconds", DefaultStorerReconnectSeconds),
+			GatewayAddr:  getString(values, "storer.gateway_addr", DefaultStorerGatewayAddr),
+			GatewayToken: getString(values, "storer.gateway_token", ""),
 		},
 	}
 	if err := cfg.Validate(); err != nil {
@@ -166,14 +163,13 @@ func SaveStorer(path string, cfg StorerConfig) error {
 	}
 
 	content := fmt.Sprintf(
-		"role = %q\nstorage_file_path = %q\nclaim_code = %q\n\n[whole]\nlisten_addr = %q\n\n[storer]\ngateway_addr = %q\ngateway_token = %q\nreconnect_seconds = %d\n",
+		"role = %q\nstorage_file_path = %q\nclaim_code = %q\n\n[whole]\nlisten_addr = %q\n\n[storer]\ngateway_addr = %q\ngateway_token = %q\n",
 		string(cfg.Role),
 		cfg.StorageFilePath,
 		cfg.ClaimCode,
 		cfg.Whole.ListenAddr,
 		cfg.Storer.GatewayAddr,
 		cfg.Storer.GatewayToken,
-		cfg.Storer.ReconnectSeconds,
 	)
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write config file: %w", err)
@@ -227,9 +223,6 @@ func (c StorerConfig) Validate() error {
 		if strings.TrimSpace(c.Storer.GatewayToken) == "" {
 			return errors.New("storer.gateway_token must not be empty")
 		}
-		if c.Storer.ReconnectSeconds == 0 {
-			return errors.New("storer.reconnect_seconds must be > 0")
-		}
 	}
 	return nil
 }
@@ -277,8 +270,7 @@ func promptAndCreateStorer(path string, stdin io.Reader, stdout io.Writer) (Stor
 			ListenAddr: DefaultWholeListenAddr,
 		},
 		Storer: StorerRemoteConfig{
-			GatewayAddr:      DefaultStorerGatewayAddr,
-			ReconnectSeconds: DefaultStorerReconnectSeconds,
+			GatewayAddr: DefaultStorerGatewayAddr,
 		},
 	}
 

@@ -35,8 +35,7 @@ func TestNewCoreBuildsLocalDiskAndSessionPlane(t *testing.T) {
 			ListenAddr: "127.0.0.1:9736",
 		},
 		Storer: config.StorerRemoteConfig{
-			GatewayAddr:      config.DefaultStorerGatewayAddr,
-			ReconnectSeconds: config.DefaultStorerReconnectSeconds,
+			GatewayAddr: config.DefaultStorerGatewayAddr,
 		},
 	})
 	if err != nil {

@@ -114,9 +114,8 @@ func testStorerConfig(rawPath, claimCode string) config.StorerConfig {
 			ListenAddr: config.DefaultWholeListenAddr,
 		},
 		Storer: config.StorerRemoteConfig{
-			GatewayAddr:      config.DefaultStorerGatewayAddr,
-			GatewayToken:     "gateway-token",
-			ReconnectSeconds: 1,
+			GatewayAddr:  config.DefaultStorerGatewayAddr,
+			GatewayToken: "gateway-token",
 		},
 	}
 }

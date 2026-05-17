@@ -90,8 +90,7 @@ func TestLoadOrInitStorerUsesExistingConfigWithoutReprintingClaimCode(t *testing
 			ListenAddr: "127.0.0.1:9736",
 		},
 		Storer: StorerRemoteConfig{
-			GatewayAddr:      DefaultStorerGatewayAddr,
-			ReconnectSeconds: DefaultStorerReconnectSeconds,
+			GatewayAddr: DefaultStorerGatewayAddr,
 		},
 	}
 	if err := SaveStorer(configPath, cfg); err != nil {
@@ -135,7 +134,6 @@ func TestLoadStorerParsesSectionedRoleConfigWithInlineComments(t *testing.T) {
 		`[storer]`,
 		`gateway_addr = "127.0.0.1:9836"`,
 		`gateway_token = "dev-gateway-token"`,
-		`reconnect_seconds = 5`,
 		``,
 	}, "\n")
 	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
@@ -155,9 +153,6 @@ func TestLoadStorerParsesSectionedRoleConfigWithInlineComments(t *testing.T) {
 	}
 	if cfg.Storer.GatewayToken != "dev-gateway-token" {
 		t.Fatalf("unexpected gateway token: %q", cfg.Storer.GatewayToken)
-	}
-	if cfg.Storer.ReconnectSeconds != 5 {
-		t.Fatalf("unexpected reconnect seconds: %d", cfg.Storer.ReconnectSeconds)
 	}
 }
 

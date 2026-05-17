@@ -34,8 +34,7 @@ func TestNewRoleRuntimeBuildsWholeRuntimeOnTopOfCore(t *testing.T) {
 			ListenAddr: "127.0.0.1:9736",
 		},
 		Storer: config.StorerRemoteConfig{
-			GatewayAddr:      config.DefaultStorerGatewayAddr,
-			ReconnectSeconds: config.DefaultStorerReconnectSeconds,
+			GatewayAddr: config.DefaultStorerGatewayAddr,
 		},
 	})
 	if err != nil {
@@ -76,9 +75,8 @@ func TestNewRoleRuntimeBuildsStorerRuntimeOnTopOfCore(t *testing.T) {
 			ListenAddr: config.DefaultWholeListenAddr,
 		},
 		Storer: config.StorerRemoteConfig{
-			GatewayAddr:      reserveLocalAddr(t),
-			GatewayToken:     "gateway-token",
-			ReconnectSeconds: 3,
+			GatewayAddr:  reserveLocalAddr(t),
+			GatewayToken: "gateway-token",
 		},
 	})
 	if err != nil {

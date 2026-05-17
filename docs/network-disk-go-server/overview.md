@@ -181,7 +181,8 @@ server/
   - 使用本地 `Core`
   - 不监听 client TCP
   - 主动长连 `gateway.storer.listen_addr`
-  - 先注册，再复用长连接承接后续数据面请求
+  - 启动时只尝试连接一次
+  - 连接成功后先注册，再复用长连接承接后续数据面请求
 ### 4.1 角色配置口径
 
 `storer` 可执行文件配置：
@@ -198,7 +199,6 @@ listen_addr = "127.0.0.1:9736"
 [storer]
 gateway_addr = "127.0.0.1:9836"
 gateway_token = "..."
-reconnect_seconds = 3
 ```
 
 约束：

@@ -59,9 +59,8 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 			ListenAddr: config.DefaultWholeListenAddr,
 		},
 		Storer: config.StorerRemoteConfig{
-			GatewayAddr:      storerListenAddr,
-			GatewayToken:     gatewayToken,
-			ReconnectSeconds: 1,
+			GatewayAddr:  storerListenAddr,
+			GatewayToken: gatewayToken,
 		},
 	})
 	if err != nil {

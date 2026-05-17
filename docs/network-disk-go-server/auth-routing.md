@@ -78,6 +78,7 @@ auth_verifier = SHA512(claim_code_bytes)
 - `gateway_token` 是 `storer <-> gateway` 控制面凭据
 - 注册成功后，`gateway <-> storer` 不重新设计第二套数据面命令，而是复用 `SessionOpen / ReadAt / WriteAt / Ping / Close`
 - 两个可执行文件都按“可执行文件所在目录的 `config.toml`”取配置
+- `role = storer` 当前只在启动时尝试连接一次 `gateway`，不做自动重连
 
 ## 3. 认证协议
 

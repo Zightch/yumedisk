@@ -6,7 +6,6 @@ import (
 	"log"
 	"net"
 	"sync/atomic"
-	"time"
 
 	"yumedisk/server/internal/config"
 	"yumedisk/server/internal/proto"
@@ -38,37 +37,24 @@ func NewStorerRuntime(cfg config.StorerConfig, core *Core) (*StorerRuntime, erro
 }
 
 func (r *StorerRuntime) Run(ctx context.Context) error {
-	retryDelay := time.Duration(r.cfg.Storer.ReconnectSeconds) * time.Second
-	if retryDelay <= 0 {
-		retryDelay = time.Second
-	}
-
-	for {
-		conn, err := net.Dial("tcp", r.cfg.Storer.GatewayAddr)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			log.Printf("storer dial gateway %s failed: %v", r.cfg.Storer.GatewayAddr, err)
-			if err := waitReconnect(ctx, retryDelay); err != nil {
-				return nil
-			}
-			continue
-		}
-
-		connectionID := r.nextConn.Add(1)
-		handler := newDataPlaneHandler(connectionID, r.core.DiskID(), r.core.SessionService())
-		runErr := r.runGatewayConnection(ctx, connectionID, conn, handler)
+	conn, err := net.Dial("tcp", r.cfg.Storer.GatewayAddr)
+	if err != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
-		if runErr != nil {
-			log.Printf("storer gateway connection %d ended: %v", connectionID, runErr)
-		}
-		if err := waitReconnect(ctx, retryDelay); err != nil {
-			return nil
-		}
+		return fmt.Errorf("dial gateway %s: %w", r.cfg.Storer.GatewayAddr, err)
 	}
+
+	connectionID := r.nextConn.Add(1)
+	handler := newDataPlaneHandler(connectionID, r.core.DiskID(), r.core.SessionService())
+	runErr := r.runGatewayConnection(ctx, connectionID, conn, handler)
+	if ctx.Err() != nil {
+		return nil
+	}
+	if runErr != nil {
+		log.Printf("storer gateway connection %d ended: %v", connectionID, runErr)
+	}
+	return runErr
 }
 
 func (r *StorerRuntime) runGatewayConnection(ctx context.Context, connectionID uint64, conn net.Conn, handler *dataPlaneHandler) error {
@@ -123,18 +109,6 @@ func (r *StorerRuntime) runGatewayConnection(ctx context.Context, connectionID u
 		return nil
 	case err := <-done:
 		return err
-	}
-}
-
-func waitReconnect(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
 	}
 }
 
