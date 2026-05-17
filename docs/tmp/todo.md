@@ -251,18 +251,21 @@
 
 ## 推荐实现顺序
 
-1. B4 新增 storer-facing gateway 边界
-2. C1 + C2 收紧 storer / whole 结构
+1. C1 明确 storer 只做真实数据面
+2. C2 保留 whole 的 embedded gateway 形态
 3. D1 + D2 + D3 接通协议主路径
 4. E1 + E2 启动入口与联调
 5. F1 + F2 文档收口
 
 ## 当前下一步
 
-下一步直接开始 `B4. 新增 storer-facing gateway 边界`：
+下一步直接开始 `C1. 明确 storer 只做真实数据面`：
 
-- 新增独立监听端口
-- 建立独立注册流程
-- 注册完成后，为后续会话透传复用现有数据面语义
+- `role = storer` 不再伪装成 `not implemented yet`
+- 收紧职责到：
+  - 存储
+  - 会话
+  - gateway 对接
 - 必须避免：
-  - 重新发明第二套 `SessionOpen / ReadAt / WriteAt / Ping / Close` 业务定义
+  - 直接承接 client 协议入口
+  - 直接面向 client 做认证

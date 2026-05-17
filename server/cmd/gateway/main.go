@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"yumedisk/server/internal/config"
+	"yumedisk/server/internal/gateway"
 )
 
 func main() {
@@ -21,9 +25,21 @@ func main() {
 		log.Printf("initialized gateway config at %s", configPath)
 	}
 
-	log.Fatalf(
-		"gateway runtime not implemented yet: client_addr=%s storer_addr=%s",
+	runtime, err := gateway.NewRuntime(cfg)
+	if err != nil {
+		log.Fatalf("create gateway runtime: %v", err)
+	}
+
+	log.Printf(
+		"gateway runtime ready: client_addr=%s storer_addr=%s",
 		cfg.Client.ListenAddr,
 		cfg.Storer.ListenAddr,
 	)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := runtime.Run(ctx); err != nil {
+		log.Fatalf("run gateway runtime: %v", err)
+	}
 }
