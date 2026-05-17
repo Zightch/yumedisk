@@ -219,11 +219,15 @@ impl GatewayConnection {
             ConnectionPhase::Authorized {
                 disk_id: authorized_disk_id,
             } if authorized_disk_id == disk_id => Ok(()),
-            ConnectionPhase::Authorized { .. } => Err(NetworkClientError::InvalidState("session_open")),
+            ConnectionPhase::Authorized { .. } => {
+                Err(NetworkClientError::InvalidState("session_open"))
+            }
             ConnectionPhase::Idle | ConnectionPhase::AuthPending { .. } => {
                 Err(NetworkClientError::InvalidState("session_open"))
             }
-            ConnectionPhase::SessionOpen { .. } => Err(NetworkClientError::InvalidState("session_open")),
+            ConnectionPhase::SessionOpen { .. } => {
+                Err(NetworkClientError::InvalidState("session_open"))
+            }
         }
     }
 
@@ -264,14 +268,22 @@ impl GatewayConnection {
             ConnectionPhase::SessionOpen {
                 disk_id: phase_disk_id,
                 session_id: phase_session_id,
-            } if *phase_session_id == session_id && disk_id.is_none_or(|value| value == phase_disk_id) => Ok(()),
+            } if *phase_session_id == session_id
+                && disk_id.is_none_or(|value| value == phase_disk_id) =>
+            {
+                Ok(())
+            }
             _ => Err(NetworkClientError::InvalidState("session_data_plane")),
         }
     }
 
     pub fn clear_session(&self, session_id: u64) {
         let mut phase = self.phase.lock().expect("phase poisoned");
-        if let ConnectionPhase::SessionOpen { disk_id, session_id: current } = &*phase {
+        if let ConnectionPhase::SessionOpen {
+            disk_id,
+            session_id: current,
+        } = &*phase
+        {
             if *current == session_id {
                 *phase = ConnectionPhase::Authorized {
                     disk_id: disk_id.clone(),
@@ -349,8 +361,8 @@ impl GatewayConnection {
     fn dispatch_response(&self, payload: Vec<u8>) -> Result<(), NetworkClientError> {
         let header = parse_header(&payload).map_err(NetworkClientError::Protocol)?;
         if header.op_code == ClientOperationCode::SessionCloseNotice {
-            let notice =
-                SessionCloseNotice::decode_notice(&payload).map_err(NetworkClientError::Protocol)?;
+            let notice = SessionCloseNotice::decode_notice(&payload)
+                .map_err(NetworkClientError::Protocol)?;
             self.clear_session(notice.session_id);
             if let Some(handler) = self
                 .session_notice_handler
@@ -492,9 +504,9 @@ mod tests {
         let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
         connection.connect().expect("connect should succeed");
 
-        let request_one = ProtocolHeader::new_request(ClientOperationCode::Ping, 1, 7)
+        let request_one = ProtocolHeader::new_request(ClientOperationCode::ConnHeartbeat, 1, 0)
             .expect("request one header")
-            .encode(&1u64.to_be_bytes());
+            .encode(&[]);
         let request_two = ProtocolHeader::new_request(ClientOperationCode::Close, 2, 7)
             .expect("request two header")
             .encode(&[]);
@@ -530,9 +542,9 @@ mod tests {
         let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
         connection.connect().expect("connect should succeed");
 
-        let request = ProtocolHeader::new_request(ClientOperationCode::Ping, 1, 7)
+        let request = ProtocolHeader::new_request(ClientOperationCode::ConnHeartbeat, 1, 0)
             .expect("request header")
-            .encode(&1u64.to_be_bytes());
+            .encode(&[]);
         let future = connection
             .send_request(request)
             .expect("send should succeed");
@@ -567,9 +579,9 @@ mod tests {
         )));
         connection.connect().expect("connect should succeed");
 
-        let request = ProtocolHeader::new_request(ClientOperationCode::Ping, 9, 7)
+        let request = ProtocolHeader::new_request(ClientOperationCode::ConnHeartbeat, 9, 0)
             .expect("request header")
-            .encode(&9u64.to_be_bytes());
+            .encode(&[]);
 
         let _first = connection
             .send_request(request.clone())

@@ -3,10 +3,10 @@ use std::sync::Arc;
 use super::disk_session::DiskSession;
 use super::error::NetworkClientError;
 use super::gateway_connection::GatewayConnection;
+use super::protocol_client::LegacySessionOpenRequest;
+use super::protocol_client::LegacySessionOpenResponse;
 use super::protocol_client::ProtocolClientError;
 use super::protocol_client::ProtocolStatusCode;
-use super::protocol_client::SessionOpenRequest;
-use super::protocol_client::SessionOpenResponse;
 
 #[derive(Debug, Clone)]
 pub struct SessionOpener {
@@ -26,7 +26,7 @@ impl SessionOpener {
         self.connection.begin_session_open(&disk_id)?;
 
         let request_id = self.connection.allocate_request_id();
-        let payload = SessionOpenRequest {
+        let payload = LegacySessionOpenRequest {
             disk_id: disk_id.clone(),
         }
         .encode_request(request_id)
@@ -38,16 +38,20 @@ impl SessionOpener {
                 return Err(error);
             }
         };
-        let response = match SessionOpenResponse::decode_response(&response_payload, request_id)
-            .map_err(map_session_open_error(&disk_id))
+        let response =
+            match LegacySessionOpenResponse::decode_response(&response_payload, request_id)
+                .map_err(map_session_open_error(&disk_id))
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    self.connection.cancel_session_open(&disk_id);
+                    return Err(error);
+                }
+            };
+        if let Err(error) = self
+            .connection
+            .finish_session_open(&disk_id, response.session_id)
         {
-            Ok(response) => response,
-            Err(error) => {
-                self.connection.cancel_session_open(&disk_id);
-                return Err(error);
-            }
-        };
-        if let Err(error) = self.connection.finish_session_open(&disk_id, response.session_id) {
             self.connection.cancel_session_open(&disk_id);
             return Err(error);
         }
@@ -68,7 +72,8 @@ fn map_session_open_error<'a>(
     disk_id: &'a str,
 ) -> impl FnOnce(ProtocolClientError) -> NetworkClientError + 'a {
     move |error| match error {
-        ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrAuthRequired) => {
+        ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrAuthIdInvalid)
+        | ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrAuthIdExpired) => {
             NetworkClientError::UnauthorizedDisk {
                 disk_id: disk_id.to_string(),
             }

@@ -5,14 +5,17 @@ pub const PROTOCOL_VERSION: u8 = 1;
 pub const HEADER_LEN: u8 = 24;
 pub const HEADER_SIZE: usize = 24;
 pub const FLAG_RESPONSE: u8 = 1 << 0;
+pub const FLAG_NOTICE: u8 = 1 << 1;
 
 pub const DISK_ID_BYTES: usize = 16;
 pub const AUTH_SALT_BYTES: usize = 16;
 pub const AUTH_PROOF_BYTES: usize = 64;
 pub const AUTH_CHALLENGE_TOKEN_MIN_BYTES: usize = 1;
 pub const AUTH_ALGO_VERSION_V1: u8 = 1;
-pub const SESSION_OPEN_RESPONSE_BYTES: usize = 20;
-pub const PING_BODY_BYTES: usize = 8;
+pub const AUTH_FINISH_RESPONSE_BYTES: usize = 8;
+pub const SESSION_DESCRIBE_RESPONSE_BYTES: usize = 16;
+pub const LEGACY_SESSION_OPEN_RESPONSE_BYTES: usize = 20;
+pub const LEGACY_SESSION_PING_BODY_BYTES: usize = 8;
 pub const SESSION_CLOSE_NOTICE_BYTES: usize = 2;
 pub const READ_WRITE_FIXED_BODY_BYTES: usize = 12;
 pub const SESSION_FLAG_READ_ONLY: u16 = 1 << 0;
@@ -24,12 +27,12 @@ pub enum ClientOperationCode {
     AuthStart = 0x01,
     AuthFinish = 0x02,
     SessionOpen = 0x03,
-    SessionCloseNotice = 0x04,
+    SessionDescribe = 0x04,
+    SessionCloseNotice = 0x05,
     ReadAt = 0x10,
     WriteAt = 0x11,
-    Ping = 0x12,
+    ConnHeartbeat = 0x12,
     Close = 0x13,
-    LinkHeartbeat = 0x21,
 }
 
 impl ClientOperationCode {
@@ -38,12 +41,12 @@ impl ClientOperationCode {
             0x01 => Ok(Self::AuthStart),
             0x02 => Ok(Self::AuthFinish),
             0x03 => Ok(Self::SessionOpen),
-            0x04 => Ok(Self::SessionCloseNotice),
+            0x04 => Ok(Self::SessionDescribe),
+            0x05 => Ok(Self::SessionCloseNotice),
             0x10 => Ok(Self::ReadAt),
             0x11 => Ok(Self::WriteAt),
-            0x12 => Ok(Self::Ping),
+            0x12 => Ok(Self::ConnHeartbeat),
             0x13 => Ok(Self::Close),
-            0x21 => Ok(Self::LinkHeartbeat),
             actual => Err(ProtocolClientError::UnexpectedOpCode {
                 expected: None,
                 actual,
@@ -63,7 +66,8 @@ pub enum ProtocolStatusCode {
     ErrAuthFailed,
     ErrAuthExpired,
     ErrAuthChallengeInvalid,
-    ErrAuthRequired,
+    ErrAuthIdInvalid,
+    ErrAuthIdExpired,
     ErrSessionUnavailable,
     ErrSessionBusy,
     ErrIoOutOfRange,
@@ -85,7 +89,8 @@ impl ProtocolStatusCode {
             Self::ErrAuthFailed => 0x1101,
             Self::ErrAuthExpired => 0x1102,
             Self::ErrAuthChallengeInvalid => 0x1103,
-            Self::ErrAuthRequired => 0x1104,
+            Self::ErrAuthIdInvalid => 0x1104,
+            Self::ErrAuthIdExpired => 0x1105,
             Self::ErrSessionUnavailable => 0x1201,
             Self::ErrSessionBusy => 0x1202,
             Self::ErrIoOutOfRange => 0x1301,
@@ -107,7 +112,8 @@ impl ProtocolStatusCode {
             0x1101 => Self::ErrAuthFailed,
             0x1102 => Self::ErrAuthExpired,
             0x1103 => Self::ErrAuthChallengeInvalid,
-            0x1104 => Self::ErrAuthRequired,
+            0x1104 => Self::ErrAuthIdInvalid,
+            0x1105 => Self::ErrAuthIdExpired,
             0x1201 => Self::ErrSessionUnavailable,
             0x1202 => Self::ErrSessionBusy,
             0x1301 => Self::ErrIoOutOfRange,
@@ -168,7 +174,11 @@ impl ProtocolHeader {
     }
 
     pub fn is_response(self) -> bool {
-        self.flags & FLAG_RESPONSE != 0
+        self.flags == FLAG_RESPONSE
+    }
+
+    pub fn is_notice(self) -> bool {
+        self.flags == FLAG_NOTICE
     }
 }
 
@@ -192,16 +202,30 @@ pub struct AuthFinishRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthFinishResponse {
+    pub auth_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionOpenRequest {
-    pub disk_id: String,
+    pub auth_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionOpenResponse {
     pub session_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionDescribeRequest {
+    pub session_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionDescribeResponse {
+    pub session_id: u64,
     pub disk_size_bytes: u64,
     pub max_io_bytes: u32,
-    pub session_ttl_seconds: u32,
     pub read_only: bool,
 }
 
@@ -225,15 +249,10 @@ pub struct WriteAtRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PingRequest {
-    pub session_id: u64,
-    pub nonce: u64,
-}
+pub struct ConnHeartbeatRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PingResponse {
-    pub nonce: u64,
-}
+pub struct ConnHeartbeatResponse;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CloseRequest {
@@ -244,6 +263,33 @@ pub struct CloseRequest {
 pub struct SessionCloseNotice {
     pub session_id: u64,
     pub reason_code: u16,
+}
+
+// Legacy codecs stay private to the current pre-rebuild orchestration and will be
+// removed once the auth/open/session pipeline is rewritten.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacySessionOpenRequest {
+    pub disk_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacySessionOpenResponse {
+    pub session_id: u64,
+    pub disk_size_bytes: u64,
+    pub max_io_bytes: u32,
+    pub session_ttl_seconds: u32,
+    pub read_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacySessionPingRequest {
+    pub session_id: u64,
+    pub nonce: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacySessionPingResponse {
+    pub nonce: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -373,23 +419,35 @@ impl AuthFinishRequest {
     pub fn decode_response(
         payload: &[u8],
         expected_request_id: u64,
-    ) -> Result<(), ProtocolClientError> {
-        let _ = decode_success_response(
+    ) -> Result<AuthFinishResponse, ProtocolClientError> {
+        let (_, body) = decode_success_response(
             payload,
             ClientOperationCode::AuthFinish,
             expected_request_id,
             Some(0),
         )?;
-        Ok(())
+        if body.len() != AUTH_FINISH_RESPONSE_BYTES {
+            return Err(ProtocolClientError::InvalidBody("auth_finish_response_len"));
+        }
+
+        let auth_id = u64::from_be_bytes(body.try_into().expect("slice length fixed"));
+        if auth_id == 0 {
+            return Err(ProtocolClientError::InvalidBody("auth_id"));
+        }
+
+        Ok(AuthFinishResponse { auth_id })
     }
 }
 
 impl SessionOpenRequest {
     pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
-        let body = encode_disk_id(&self.disk_id)?;
+        if self.auth_id == 0 {
+            return Err(ProtocolClientError::InvalidBody("auth_id"));
+        }
+
         Ok(
             ProtocolHeader::new_request(ClientOperationCode::SessionOpen, request_id, 0)?
-                .encode(&body),
+                .encode(&self.auth_id.to_be_bytes()),
         )
     }
 }
@@ -411,36 +469,74 @@ impl SessionOpenResponse {
                 actual: 0,
             });
         }
-        if body.len() != SESSION_OPEN_RESPONSE_BYTES {
+        if !body.is_empty() {
             return Err(ProtocolClientError::InvalidBody(
-                "session_open_response_len",
+                "session_open_response_body",
+            ));
+        }
+
+        Ok(Self {
+            session_id: header.session_id,
+        })
+    }
+}
+
+impl SessionDescribeRequest {
+    pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
+        validate_non_zero_session_id(self.session_id)?;
+        Ok(ProtocolHeader::new_request(
+            ClientOperationCode::SessionDescribe,
+            request_id,
+            self.session_id,
+        )?
+        .encode(&[]))
+    }
+}
+
+impl SessionDescribeResponse {
+    pub fn decode_response(
+        payload: &[u8],
+        expected_request_id: u64,
+        expected_session_id: u64,
+    ) -> Result<Self, ProtocolClientError> {
+        let (_, body) = decode_success_response(
+            payload,
+            ClientOperationCode::SessionDescribe,
+            expected_request_id,
+            Some(expected_session_id),
+        )?;
+        if body.len() != SESSION_DESCRIBE_RESPONSE_BYTES {
+            return Err(ProtocolClientError::InvalidBody(
+                "session_describe_response_len",
             ));
         }
 
         let disk_size_bytes =
             u64::from_be_bytes(body[0..8].try_into().expect("slice length fixed"));
         let max_io_bytes = u32::from_be_bytes(body[8..12].try_into().expect("slice length fixed"));
-        let session_ttl_seconds =
-            u32::from_be_bytes(body[12..16].try_into().expect("slice length fixed"));
         let session_flags =
-            u16::from_be_bytes(body[16..18].try_into().expect("slice length fixed"));
-        let reserved = u16::from_be_bytes(body[18..20].try_into().expect("slice length fixed"));
+            u16::from_be_bytes(body[12..14].try_into().expect("slice length fixed"));
+        let reserved = u16::from_be_bytes(body[14..16].try_into().expect("slice length fixed"));
 
         if reserved != 0 {
-            return Err(ProtocolClientError::InvalidBody("session_open_reserved"));
+            return Err(ProtocolClientError::InvalidBody(
+                "session_describe_reserved",
+            ));
         }
         if session_flags & !SESSION_FLAG_READ_ONLY != 0 {
             return Err(ProtocolClientError::InvalidBody("session_flags"));
+        }
+        if disk_size_bytes == 0 {
+            return Err(ProtocolClientError::InvalidBody("disk_size_bytes"));
         }
         if max_io_bytes == 0 || max_io_bytes > ABSOLUTE_MAX_IO_BYTES {
             return Err(ProtocolClientError::InvalidBody("max_io_bytes"));
         }
 
         Ok(Self {
-            session_id: header.session_id,
+            session_id: expected_session_id,
             disk_size_bytes,
             max_io_bytes,
-            session_ttl_seconds,
             read_only: session_flags & SESSION_FLAG_READ_ONLY != 0,
         })
     }
@@ -520,36 +616,32 @@ impl WriteAtRequest {
     }
 }
 
-impl PingRequest {
+impl ConnHeartbeatRequest {
     pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
-        validate_non_zero_session_id(self.session_id)?;
-
-        let body = self.nonce.to_be_bytes();
         Ok(
-            ProtocolHeader::new_request(ClientOperationCode::Ping, request_id, self.session_id)?
-                .encode(&body),
+            ProtocolHeader::new_request(ClientOperationCode::ConnHeartbeat, request_id, 0)?
+                .encode(&[]),
         )
     }
 }
 
-impl PingResponse {
+impl ConnHeartbeatResponse {
     pub fn decode_response(
         payload: &[u8],
         expected_request_id: u64,
-        expected_session_id: u64,
     ) -> Result<Self, ProtocolClientError> {
         let (_, body) = decode_success_response(
             payload,
-            ClientOperationCode::Ping,
+            ClientOperationCode::ConnHeartbeat,
             expected_request_id,
-            Some(expected_session_id),
+            Some(0),
         )?;
-        if body.len() != PING_BODY_BYTES {
-            return Err(ProtocolClientError::InvalidBody("ping_response_len"));
+        if !body.is_empty() {
+            return Err(ProtocolClientError::InvalidBody(
+                "conn_heartbeat_response_body",
+            ));
         }
-
-        let nonce = u64::from_be_bytes(body.try_into().expect("slice length fixed"));
-        Ok(Self { nonce })
+        Ok(Self)
     }
 }
 
@@ -583,9 +675,9 @@ impl CloseRequest {
 impl SessionCloseNotice {
     pub fn decode_notice(payload: &[u8]) -> Result<Self, ProtocolClientError> {
         let header = parse_header(payload)?;
-        if header.flags != 0 {
+        if header.flags != FLAG_NOTICE {
             return Err(ProtocolClientError::UnexpectedFlags {
-                expected: 0,
+                expected: FLAG_NOTICE,
                 actual: header.flags,
             });
         }
@@ -601,8 +693,10 @@ impl SessionCloseNotice {
         if header.status_code != ProtocolStatusCode::Ok {
             return Err(ProtocolClientError::InvalidBody("notice_status_code"));
         }
-        if header.request_id == 0 || header.session_id == 0 {
-            return Err(ProtocolClientError::InvalidBody("session_close_notice_header"));
+        if header.request_id != 0 || header.session_id == 0 {
+            return Err(ProtocolClientError::InvalidBody(
+                "session_close_notice_header",
+            ));
         }
         let body = &payload[HEADER_SIZE..];
         if body.len() != SESSION_CLOSE_NOTICE_BYTES {
@@ -613,6 +707,105 @@ impl SessionCloseNotice {
             session_id: header.session_id,
             reason_code,
         })
+    }
+}
+
+impl LegacySessionOpenRequest {
+    pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
+        let body = encode_disk_id(&self.disk_id)?;
+        Ok(
+            ProtocolHeader::new_request(ClientOperationCode::SessionOpen, request_id, 0)?
+                .encode(&body),
+        )
+    }
+}
+
+impl LegacySessionOpenResponse {
+    pub fn decode_response(
+        payload: &[u8],
+        expected_request_id: u64,
+    ) -> Result<Self, ProtocolClientError> {
+        let (header, body) = decode_success_response(
+            payload,
+            ClientOperationCode::SessionOpen,
+            expected_request_id,
+            None,
+        )?;
+        if header.session_id == 0 {
+            return Err(ProtocolClientError::UnexpectedSessionId {
+                expected: None,
+                actual: 0,
+            });
+        }
+        if body.len() != LEGACY_SESSION_OPEN_RESPONSE_BYTES {
+            return Err(ProtocolClientError::InvalidBody(
+                "session_open_response_len",
+            ));
+        }
+
+        let disk_size_bytes =
+            u64::from_be_bytes(body[0..8].try_into().expect("slice length fixed"));
+        let max_io_bytes = u32::from_be_bytes(body[8..12].try_into().expect("slice length fixed"));
+        let session_ttl_seconds =
+            u32::from_be_bytes(body[12..16].try_into().expect("slice length fixed"));
+        let session_flags =
+            u16::from_be_bytes(body[16..18].try_into().expect("slice length fixed"));
+        let reserved = u16::from_be_bytes(body[18..20].try_into().expect("slice length fixed"));
+
+        if reserved != 0 {
+            return Err(ProtocolClientError::InvalidBody("session_open_reserved"));
+        }
+        if session_flags & !SESSION_FLAG_READ_ONLY != 0 {
+            return Err(ProtocolClientError::InvalidBody("session_flags"));
+        }
+        if disk_size_bytes == 0 {
+            return Err(ProtocolClientError::InvalidBody("disk_size_bytes"));
+        }
+        if max_io_bytes == 0 || max_io_bytes > ABSOLUTE_MAX_IO_BYTES {
+            return Err(ProtocolClientError::InvalidBody("max_io_bytes"));
+        }
+
+        Ok(Self {
+            session_id: header.session_id,
+            disk_size_bytes,
+            max_io_bytes,
+            session_ttl_seconds,
+            read_only: session_flags & SESSION_FLAG_READ_ONLY != 0,
+        })
+    }
+}
+
+impl LegacySessionPingRequest {
+    pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
+        validate_non_zero_session_id(self.session_id)?;
+        let body = self.nonce.to_be_bytes();
+        Ok(ProtocolHeader::new_request(
+            ClientOperationCode::ConnHeartbeat,
+            request_id,
+            self.session_id,
+        )?
+        .encode(&body))
+    }
+}
+
+impl LegacySessionPingResponse {
+    pub fn decode_response(
+        payload: &[u8],
+        expected_request_id: u64,
+        expected_session_id: u64,
+    ) -> Result<Self, ProtocolClientError> {
+        let (_, body) = decode_success_response(
+            payload,
+            ClientOperationCode::ConnHeartbeat,
+            expected_request_id,
+            Some(expected_session_id),
+        )?;
+        if body.len() != LEGACY_SESSION_PING_BODY_BYTES {
+            return Err(ProtocolClientError::InvalidBody("ping_response_len"));
+        }
+
+        let nonce = u64::from_be_bytes(body.try_into().expect("slice length fixed"));
+        Ok(Self { nonce })
     }
 }
 
@@ -816,18 +1009,24 @@ mod tests {
     use super::AuthStartResponse;
     use super::ClientOperationCode;
     use super::CloseRequest;
+    use super::ConnHeartbeatRequest;
+    use super::ConnHeartbeatResponse;
+    use super::FLAG_NOTICE;
     use super::FLAG_RESPONSE;
     use super::HEADER_LEN;
     use super::HEADER_SIZE;
-    use super::PING_BODY_BYTES;
+    use super::LegacySessionOpenResponse;
+    use super::LegacySessionPingRequest;
+    use super::LegacySessionPingResponse;
     use super::PROTOCOL_VERSION;
-    use super::PingRequest;
-    use super::PingResponse;
     use super::ProtocolClientError;
     use super::ProtocolHeader;
     use super::ProtocolStatusCode;
     use super::ReadAtRequest;
     use super::ReadAtResponse;
+    use super::SessionCloseNotice;
+    use super::SessionDescribeRequest;
+    use super::SessionDescribeResponse;
     use super::SessionOpenRequest;
     use super::SessionOpenResponse;
     use super::WriteAtRequest;
@@ -875,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn auth_finish_request_matches_documented_layout() {
+    fn auth_finish_request_and_response_match_documented_layout() {
         let mut proof = [0u8; AUTH_PROOF_BYTES];
         proof[0] = 0xAA;
         proof[63] = 0xBB;
@@ -892,10 +1091,82 @@ mod tests {
         assert_eq!(&payload[HEADER_SIZE + 2..HEADER_SIZE + 7], b"token");
         assert_eq!(payload[HEADER_SIZE + 7], 0xAA);
         assert_eq!(payload.last().copied(), Some(0xBB));
+
+        let response_payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::AuthFinish,
+            flags: FLAG_RESPONSE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 77,
+            session_id: 0,
+        }
+        .encode(&42u64.to_be_bytes());
+        let response = AuthFinishRequest::decode_response(&response_payload, 77)
+            .expect("decode should succeed");
+        assert_eq!(response.auth_id, 42);
     }
 
     #[test]
-    fn session_open_response_decodes_metadata_and_flags() {
+    fn session_open_request_and_response_follow_new_wire() {
+        let payload = SessionOpenRequest { auth_id: 88 }
+            .encode_request(12)
+            .expect("encode should succeed");
+        assert_eq!(payload[2], ClientOperationCode::SessionOpen as u8);
+        assert_eq!(&payload[HEADER_SIZE..], &88u64.to_be_bytes());
+
+        let response_payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::SessionOpen,
+            flags: FLAG_RESPONSE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 12,
+            session_id: 99,
+        }
+        .encode(&[]);
+        let response = SessionOpenResponse::decode_response(&response_payload, 12)
+            .expect("decode should succeed");
+        assert_eq!(response.session_id, 99);
+    }
+
+    #[test]
+    fn session_describe_request_and_response_follow_new_wire() {
+        let payload = SessionDescribeRequest { session_id: 9 }
+            .encode_request(21)
+            .expect("encode should succeed");
+        assert_eq!(payload[2], ClientOperationCode::SessionDescribe as u8);
+        assert_eq!(payload.len(), HEADER_SIZE);
+        assert_eq!(&payload[16..24], &9u64.to_be_bytes());
+
+        let mut body = Vec::new();
+        body.extend_from_slice(&4096u64.to_be_bytes());
+        body.extend_from_slice(&60_000u32.to_be_bytes());
+        body.extend_from_slice(&1u16.to_be_bytes());
+        body.extend_from_slice(&0u16.to_be_bytes());
+        let response_payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::SessionDescribe,
+            flags: FLAG_RESPONSE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 21,
+            session_id: 9,
+        }
+        .encode(&body);
+        let response = SessionDescribeResponse::decode_response(&response_payload, 21, 9)
+            .expect("decode should succeed");
+        assert_eq!(response.session_id, 9);
+        assert_eq!(response.disk_size_bytes, 4096);
+        assert_eq!(response.max_io_bytes, 60_000);
+        assert!(response.read_only);
+    }
+
+    #[test]
+    fn legacy_session_open_response_decodes_old_metadata_body() {
         let mut body = Vec::new();
         body.extend_from_slice(&4096u64.to_be_bytes());
         body.extend_from_slice(&60_000u32.to_be_bytes());
@@ -914,8 +1185,8 @@ mod tests {
         }
         .encode(&body);
 
-        let decoded =
-            SessionOpenResponse::decode_response(&payload, 12).expect("decode should succeed");
+        let decoded = LegacySessionOpenResponse::decode_response(&payload, 12)
+            .expect("decode should succeed");
         assert_eq!(decoded.session_id, 99);
         assert_eq!(decoded.disk_size_bytes, 4096);
         assert_eq!(decoded.max_io_bytes, 60_000);
@@ -954,20 +1225,53 @@ mod tests {
     }
 
     #[test]
-    fn ping_and_close_follow_documented_shapes() {
-        let ping_payload = PingRequest {
+    fn conn_heartbeat_and_close_follow_documented_shapes() {
+        let heartbeat_payload = ConnHeartbeatRequest
+            .encode_request(21)
+            .expect("heartbeat encode should succeed");
+        assert_eq!(heartbeat_payload.len(), HEADER_SIZE);
+        assert_eq!(
+            heartbeat_payload[2],
+            ClientOperationCode::ConnHeartbeat as u8
+        );
+        assert_eq!(&heartbeat_payload[16..24], &0u64.to_be_bytes());
+
+        let response_payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::ConnHeartbeat,
+            flags: FLAG_RESPONSE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 21,
+            session_id: 0,
+        }
+        .encode(&[]);
+        ConnHeartbeatResponse::decode_response(&response_payload, 21)
+            .expect("heartbeat decode should succeed");
+
+        let close_payload = CloseRequest { session_id: 7 }
+            .encode_request(22)
+            .expect("close encode should succeed");
+        assert_eq!(close_payload.len(), HEADER_SIZE);
+    }
+
+    #[test]
+    fn legacy_session_ping_preserves_old_shape_for_interim_callers() {
+        let ping_payload = LegacySessionPingRequest {
             session_id: 7,
             nonce: 12345,
         }
         .encode_request(21)
         .expect("ping encode should succeed");
-        assert_eq!(ping_payload.len(), HEADER_SIZE + PING_BODY_BYTES);
+        assert_eq!(ping_payload.len(), HEADER_SIZE + 8);
+        assert_eq!(ping_payload[2], ClientOperationCode::ConnHeartbeat as u8);
         assert_eq!(&ping_payload[HEADER_SIZE..], &12345u64.to_be_bytes());
 
         let response_payload = ProtocolHeader {
             protocol_version: PROTOCOL_VERSION,
             header_len: HEADER_LEN,
-            op_code: ClientOperationCode::Ping,
+            op_code: ClientOperationCode::ConnHeartbeat,
             flags: FLAG_RESPONSE,
             status_code: ProtocolStatusCode::Ok,
             reserved: 0,
@@ -975,14 +1279,28 @@ mod tests {
             session_id: 7,
         }
         .encode(&12345u64.to_be_bytes());
-        let response = PingResponse::decode_response(&response_payload, 21, 7)
+        let response = LegacySessionPingResponse::decode_response(&response_payload, 21, 7)
             .expect("ping decode should succeed");
         assert_eq!(response.nonce, 12345);
+    }
 
-        let close_payload = CloseRequest { session_id: 7 }
-            .encode_request(22)
-            .expect("close encode should succeed");
-        assert_eq!(close_payload.len(), HEADER_SIZE);
+    #[test]
+    fn session_close_notice_requires_notice_flag_and_zero_request_id() {
+        let payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::SessionCloseNotice,
+            flags: FLAG_NOTICE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 0,
+            session_id: 77,
+        }
+        .encode(&1u16.to_be_bytes());
+
+        let decoded = SessionCloseNotice::decode_notice(&payload).expect("decode should succeed");
+        assert_eq!(decoded.session_id, 77);
+        assert_eq!(decoded.reason_code, 1);
     }
 
     #[test]
@@ -1005,15 +1323,5 @@ mod tests {
             error,
             ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrIoOutOfRange)
         );
-    }
-
-    #[test]
-    fn session_open_request_and_response_use_formal_opcode() {
-        let payload = SessionOpenRequest {
-            disk_id: "A1b2C3d4E5f6G7h8".to_string(),
-        }
-        .encode_request(88)
-        .expect("encode should succeed");
-        assert_eq!(payload[2], ClientOperationCode::SessionOpen as u8);
     }
 }

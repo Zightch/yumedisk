@@ -73,8 +73,9 @@ impl ConnectionAuthenticator {
                 return Err(error);
             }
         };
-        if let Err(error) = AuthFinishRequest::decode_response(&finish_response_payload, finish_request_id)
-            .map_err(map_auth_finish_error(&material.disk_id))
+        if let Err(error) =
+            AuthFinishRequest::decode_response(&finish_response_payload, finish_request_id)
+                .map_err(map_auth_finish_error(&material.disk_id))
         {
             self.connection.fail_auth();
             return Err(error);
@@ -126,8 +127,7 @@ fn map_auth_finish_error<'a>(
     disk_id: &'a str,
 ) -> impl FnOnce(ProtocolClientError) -> NetworkClientError + 'a {
     move |error| match error {
-        ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrAuthFailed)
-        | ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrAuthRequired) => {
+        ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrAuthFailed) => {
             NetworkClientError::UnauthorizedDisk {
                 disk_id: disk_id.to_string(),
             }
@@ -216,7 +216,7 @@ mod tests {
                 request_id: finish_header.request_id,
                 session_id: 0,
             }
-            .encode(&[]);
+            .encode(&1u64.to_be_bytes());
             write_frame(&mut stream, &finish_response).expect("write auth finish response");
         });
 

@@ -11,8 +11,8 @@ use std::time::SystemTime;
 use super::error::NetworkClientError;
 use super::gateway_connection::GatewayConnection;
 use super::protocol_client::CloseRequest;
-use super::protocol_client::PingRequest;
-use super::protocol_client::PingResponse;
+use super::protocol_client::LegacySessionPingRequest;
+use super::protocol_client::LegacySessionPingResponse;
 use super::protocol_client::ProtocolClientError;
 use super::protocol_client::ProtocolStatusCode;
 use super::protocol_client::ReadAtRequest;
@@ -457,13 +457,14 @@ fn send_ping_once(
     nonce: u64,
 ) -> Result<u64, NetworkClientError> {
     let request_id = connection.allocate_request_id();
-    let payload = PingRequest { session_id, nonce }
+    let payload = LegacySessionPingRequest { session_id, nonce }
         .encode_request(request_id)
         .map_err(NetworkClientError::Protocol)?;
 
     let response_payload = connection.send_request_and_wait(payload)?;
-    let response = PingResponse::decode_response(&response_payload, request_id, session_id)
-        .map_err(map_data_plane_error)?;
+    let response =
+        LegacySessionPingResponse::decode_response(&response_payload, request_id, session_id)
+            .map_err(map_data_plane_error)?;
     Ok(response.nonce)
 }
 
@@ -789,7 +790,7 @@ mod tests {
             let ping_response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
                 header_len: HEADER_SIZE as u8,
-                op_code: ClientOperationCode::Ping,
+                op_code: ClientOperationCode::ConnHeartbeat,
                 flags: FLAG_RESPONSE,
                 status_code: ProtocolStatusCode::Ok,
                 reserved: 0,
