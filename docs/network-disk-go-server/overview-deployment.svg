@@ -250,7 +250,7 @@
   <path d="M 1200 770 C 1200 540, 1208 520, 1208 330" class="dashed" marker-end="url(#arrow-green)"/>
   <text x="1090" y="470" class="accent">single TCP connection</text>
 
-  <path d="M 1290 300 C 1495 340, 1700 470, 1810 612" class="routed" marker-end="url(#arrow-purple)"/>
-  <path d="M 1290 318 C 1480 380, 1705 540, 1810 692" class="routed" marker-end="url(#arrow-purple)"/>
-  <text x="1515" y="420" class="accent-route">route</text>
+  <path d="M 1810 612 C 1700 470, 1495 340, 1290 300" class="routed" marker-end="url(#arrow-purple)"/>
+  <path d="M 1810 692 C 1705 540, 1480 380, 1290 318" class="routed" marker-end="url(#arrow-purple)"/>
+  <text x="1510" y="420" class="accent-route">register / route</text>
 </svg>
