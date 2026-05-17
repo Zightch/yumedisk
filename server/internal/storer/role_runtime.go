@@ -3,8 +3,13 @@ package storer
 import (
 	"context"
 	"fmt"
+	"log"
+	"net"
+	"sync/atomic"
+	"time"
 
 	"yumedisk/server/internal/config"
+	"yumedisk/server/internal/transport"
 )
 
 type Runtime interface {
@@ -12,8 +17,9 @@ type Runtime interface {
 }
 
 type StorerRuntime struct {
-	cfg  config.StorerConfig
-	core *Core
+	cfg      config.StorerConfig
+	core     *Core
+	nextConn atomic.Uint64
 }
 
 func NewStorerRuntime(cfg config.StorerConfig, core *Core) (*StorerRuntime, error) {
@@ -30,12 +36,72 @@ func NewStorerRuntime(cfg config.StorerConfig, core *Core) (*StorerRuntime, erro
 	}, nil
 }
 
-func (r *StorerRuntime) Run(context.Context) error {
-	return fmt.Errorf(
-		"storer runtime not implemented yet: gateway_addr=%s disk_id=%s",
-		r.cfg.Storer.GatewayAddr,
-		r.core.DiskID(),
-	)
+func (r *StorerRuntime) Run(ctx context.Context) error {
+	retryDelay := time.Duration(r.cfg.Storer.ReconnectSeconds) * time.Second
+	if retryDelay <= 0 {
+		retryDelay = time.Second
+	}
+
+	for {
+		conn, err := net.Dial("tcp", r.cfg.Storer.GatewayAddr)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			log.Printf("storer dial gateway %s failed: %v", r.cfg.Storer.GatewayAddr, err)
+			if err := waitReconnect(ctx, retryDelay); err != nil {
+				return nil
+			}
+			continue
+		}
+
+		connectionID := r.nextConn.Add(1)
+		handler := newDataPlaneHandler(connectionID, r.core.DiskID(), r.core.SessionService())
+		runErr := r.runGatewayConnection(ctx, connectionID, conn, handler)
+		if ctx.Err() != nil {
+			return nil
+		}
+		if runErr != nil {
+			log.Printf("storer gateway connection %d ended: %v", connectionID, runErr)
+		}
+		if err := waitReconnect(ctx, retryDelay); err != nil {
+			return nil
+		}
+	}
+}
+
+func (r *StorerRuntime) runGatewayConnection(ctx context.Context, connectionID uint64, conn net.Conn, handler *dataPlaneHandler) error {
+	defer r.core.SessionService().CloseConnection(connectionID)
+	defer conn.Close()
+
+	log.Printf("storer connected to gateway %s as connection %d", r.cfg.Storer.GatewayAddr, connectionID)
+
+	runtime := transport.NewRuntime(conn, handler)
+	done := make(chan error, 1)
+	go func() {
+		done <- runtime.Run()
+	}()
+
+	select {
+	case <-ctx.Done():
+		_ = runtime.Close()
+		<-done
+		return nil
+	case err := <-done:
+		return err
+	}
+}
+
+func waitReconnect(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 type RoleRuntime struct {

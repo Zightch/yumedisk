@@ -227,6 +227,108 @@ func TestServerRejectsSecondSessionOpenWhileDiskIsAlreadyOpened(t *testing.T) {
 	}
 }
 
+func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	rawPath := filepath.Join(tempDir, "disk.raw")
+	if err := os.WriteFile(rawPath, make([]byte, 4096), 0o644); err != nil {
+		t.Fatalf("write raw file: %v", err)
+	}
+
+	claimCode, err := auth.GenerateClaimCode(64)
+	if err != nil {
+		t.Fatalf("generate claim code: %v", err)
+	}
+	material, err := auth.ParseClaimCode(claimCode)
+	if err != nil {
+		t.Fatalf("parse claim code: %v", err)
+	}
+
+	gatewayAddr := reserveLocalAddr(t)
+	cfg := config.StorerConfig{
+		Role:            config.StorerRoleStorer,
+		StorageFilePath: rawPath,
+		ClaimCode:       claimCode,
+		Whole: config.StorerWholeConfig{
+			ListenAddr: config.DefaultWholeListenAddr,
+		},
+		Storer: config.StorerRemoteConfig{
+			GatewayAddr:      gatewayAddr,
+			GatewayToken:     "gateway-token",
+			ReconnectSeconds: 1,
+		},
+	}
+
+	listener, err := net.Listen("tcp", gatewayAddr)
+	if err != nil {
+		t.Fatalf("listen mock gateway: %v", err)
+	}
+	defer listener.Close()
+
+	runtime, err := NewRoleRuntime(cfg)
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = runtime.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runtime.Run(ctx)
+	}()
+
+	conn, err := listener.Accept()
+	if err != nil {
+		t.Fatalf("accept storer runtime: %v", err)
+	}
+	defer conn.Close()
+
+	authResp := mustRoundTrip(t, conn, buildRequest(proto.OpAuthStart, 1, 0, []byte(material.DiskID)))
+	authHeader := mustParseHeader(t, authResp)
+	if authHeader.StatusCode != proto.StatusUnsupportedOp {
+		t.Fatalf("expected auth op to be unsupported, got %d", authHeader.StatusCode)
+	}
+
+	openResp := mustRoundTrip(t, conn, buildRequest(proto.OpSessionOpen, 2, 0, []byte(material.DiskID)))
+	openHeader := mustParseHeader(t, openResp)
+	if openHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("session open status: %d", openHeader.StatusCode)
+	}
+	sessionID := openHeader.SessionID
+	if sessionID == 0 {
+		t.Fatal("expected non-zero storer session id")
+	}
+
+	writePayload := append(proto.BuildReadWriteBody(16, 4), []byte("DATA")...)
+	writeResp := mustRoundTrip(t, conn, buildRequest(proto.OpWriteAt, 3, sessionID, writePayload))
+	writeHeader := mustParseHeader(t, writeResp)
+	if writeHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("write status: %d", writeHeader.StatusCode)
+	}
+
+	readResp := mustRoundTrip(t, conn, buildRequest(proto.OpReadAt, 4, sessionID, proto.BuildReadBody(16, 4)))
+	readHeader := mustParseHeader(t, readResp)
+	if readHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("read status: %d", readHeader.StatusCode)
+	}
+	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("DATA")) {
+		t.Fatalf("unexpected read payload: %q", string(readResp[proto.HeaderSize:]))
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("storer runtime exited with error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("storer runtime did not stop in time")
+	}
+}
+
 func authenticateAndOpenSession(t *testing.T, conn net.Conn, material auth.Material) uint64 {
 	t.Helper()
 

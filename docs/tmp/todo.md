@@ -251,21 +251,21 @@
 
 ## 推荐实现顺序
 
-1. C1 明确 storer 只做真实数据面
-2. C2 保留 whole 的 embedded gateway 形态
-3. D1 + D2 + D3 接通协议主路径
+1. D1 接通 gateway-and-storer 注册阶段
+2. D2 接通 SessionOpen 透传链
+3. D3 接通 ReadAt / WriteAt / Ping / Close
 4. E1 + E2 启动入口与联调
 5. F1 + F2 文档收口
 
 ## 当前下一步
 
-下一步直接开始 `C1. 明确 storer 只做真实数据面`：
+下一步直接开始 `D1. 接通 gateway-and-storer 注册阶段`：
 
-- `role = storer` 不再伪装成 `not implemented yet`
-- 收紧职责到：
-  - 存储
-  - 会话
-  - gateway 对接
+- storer 向 gateway 提交：
+  - `gateway_token`
+  - `disk_id`
+  - `auth_verifier`
+- gateway 建立真实注册表
+- 注册成功后，再进入后续数据面复用阶段
 - 必须避免：
-  - 直接承接 client 协议入口
-  - 直接面向 client 做认证
+  - 让 client-facing handler 感知注册细节

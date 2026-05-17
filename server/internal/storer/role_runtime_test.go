@@ -2,10 +2,11 @@ package storer
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+	"time"
 
 	"yumedisk/server/internal/auth"
 	"yumedisk/server/internal/config"
@@ -75,7 +76,7 @@ func TestNewRoleRuntimeBuildsStorerRuntimeOnTopOfCore(t *testing.T) {
 			ListenAddr: config.DefaultWholeListenAddr,
 		},
 		Storer: config.StorerRemoteConfig{
-			GatewayAddr:      "127.0.0.1:9836",
+			GatewayAddr:      reserveLocalAddr(t),
 			GatewayToken:     "gateway-token",
 			ReconnectSeconds: 3,
 		},
@@ -88,18 +89,40 @@ func TestNewRoleRuntimeBuildsStorerRuntimeOnTopOfCore(t *testing.T) {
 	if runtime.Role() != config.StorerRoleStorer {
 		t.Fatalf("unexpected role: %q", runtime.Role())
 	}
-	if runtime.GatewayAddr() != "127.0.0.1:9836" {
+	if runtime.GatewayAddr() == "" {
 		t.Fatalf("unexpected gateway addr: %q", runtime.GatewayAddr())
 	}
 	if runtime.ListenAddr() != "" {
 		t.Fatalf("storer role should not expose listen addr, got %q", runtime.ListenAddr())
 	}
 
-	err = runtime.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected storer runtime placeholder error")
+	listener, err := net.Listen("tcp", runtime.GatewayAddr())
+	if err != nil {
+		t.Fatalf("listen mock gateway: %v", err)
 	}
-	if !strings.Contains(err.Error(), "storer runtime not implemented yet") {
-		t.Fatalf("unexpected runtime error: %v", err)
+	defer listener.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runtime.Run(ctx)
+	}()
+
+	conn, err := listener.Accept()
+	if err != nil {
+		t.Fatalf("accept storer runtime connection: %v", err)
+	}
+	_ = conn.Close()
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unexpected runtime error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("storer runtime did not stop in time")
 	}
 }
