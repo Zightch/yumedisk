@@ -19,6 +19,7 @@
 
 - `whole` 角色：`storer` 自带 `embedded gateway`
 - `storer` 角色：只持有后端存储并主动注册到独立 `gateway`
+- `gateway` 为独立可执行文件，不属于 `storer` 的 `role`
 - 单网盘
 - `client` 只连 `gateway`
 
@@ -53,23 +54,24 @@ storer = external gateway + external storer
 ## 当前已定口径
 
 1. `server` 使用 Go
-2. `gateway` 与 `storer` 拆成两个子项目
-3. `storer` 支持 embedded gateway 形态
-4. `client-and-gateway.md` 是当前第一版唯一正式业务协议 SDK
-5. `gateway-and-storer.md` 只单独定义注册阶段和复用规则
-6. 认证流程为 `disk_id -> challenge -> proof`
-7. `gateway` 预缓存 `storer` 路由与 `auth_verifier`
-8. `gateway` 本地完成 `proof` 校验
-9. `client` 只连接对外 gateway 入口，不直接理解 `storer` 内部结构
-10. 认证成功后只获得当前连接上的开会话资格，不直接得到 `session_id`
-11. 假盘不分配完整 pending 表，不进入真实数据路径
-12. 同一 `disk_id` 的多连接认证互不覆盖
-13. 多登录后的权限策略属于 `storer`，不属于认证层
-14. 所有 `AuthFinish` 失败统一随机延迟 `2-5s`
-15. 数据面第一版允许多 `DiskSession` 并发复用同一条 `client -> gateway` TCP 连接
-16. 第一版 `NetworkMedia` 不做断线重连、不做本地写缓存、不做自动重试
-17. `gateway <-> storer` 注册成功后复用 `SessionOpen / ReadAt / WriteAt / Ping / Close` 语义
-18. `gateway` 对 `request_id` 和 `session_id` 负责本地映射，不做裸字节盲转发
+2. `gateway` 与 `storer` 拆成两个可执行文件
+3. `storer` 可执行文件内部只支持 `role = whole | storer`
+4. `gateway` 是独立程序，不进入 `storer.role`
+5. `client-and-gateway.md` 是当前第一版唯一正式业务协议 SDK
+6. `gateway-and-storer.md` 只单独定义注册阶段和复用规则
+7. 认证流程为 `disk_id -> challenge -> proof`
+8. `gateway` 预缓存 `storer` 路由与 `auth_verifier`
+9. `gateway` 本地完成 `proof` 校验
+10. `client` 只连接对外 gateway 入口，不直接理解 `storer` 内部结构
+11. 认证成功后只获得当前连接上的开会话资格，不直接得到 `session_id`
+12. 假盘不分配完整 pending 表，不进入真实数据路径
+13. 同一 `disk_id` 的多连接认证互不覆盖
+14. 多登录后的权限策略属于 `storer`，不属于认证层
+15. 所有 `AuthFinish` 失败统一随机延迟 `2-5s`
+16. 数据面第一版允许多 `DiskSession` 并发复用同一条 `client -> gateway` TCP 连接
+17. 第一版 `NetworkMedia` 不做断线重连、不做本地写缓存、不做自动重试
+18. `gateway <-> storer` 注册成功后复用 `SessionOpen / ReadAt / WriteAt / Ping / Close` 语义
+19. `gateway` 对 `request_id` 和 `session_id` 负责本地映射，不做裸字节盲转发
 
 当前 `client-and-gateway` 业务协议必须拆成三段：
 

@@ -1,35 +1,302 @@
 # 当前总目标
 
-同步 `windows/tauri-client` 当前主页启动链、会话状态入口和启动期磁盘展示覆盖到正式文档。
+按 `docs/network-disk-go-server` 当前正式设计，重建 `server` 结构，使其从“单盘 embedded gateway 一体机”收束为两个可执行文件的清晰模型：
 
-## 当前状态
+- `storer` 可执行文件：仅支持 `whole | storer`
+- `gateway` 可执行文件：独立程序，不属于 `storer` 的 `role`
 
-本轮已完成：
+本轮目标是先把结构任务树落定，不直接进入实现细节。
 
-1. 正式架构文档已同步主页启动顺序
-   - 已明确唯一启动顺序为“恢复配置 -> 查询 runtime 磁盘 -> 打开会话 -> 启动重扫 -> 退出启动覆盖 -> 自动连接”。
-   - 已明确 `restore_client_state` 与 `open_session` 继续保持拆分，不回退到单一初始化命令。
-   - 已明确失败重试只覆盖“打开会话 -> 启动重扫 -> 自动连接”。
+## 当前结构判断
 
-2. 正式 UI 文档已同步会话状态入口
-   - 已明确顶部会话状态块是可点击按钮，不是静态标签。
-   - 已明确初始化 / 正常 / 失败三态展示规则。
-   - 已明确会话状态对话框是查看状态与执行失败重试的唯一正式入口。
+当前 `server` 已具备可复用地基：
 
-3. 正式文档已同步启动期展示覆盖边界
-   - 已明确“正在初始化 / 会话失败”属于主页展示覆盖，而不是 Backend 真实磁盘状态。
-   - 已明确启动重扫成功前，主页允许继续显示 `invalid` 覆盖。
-   - 已明确覆盖映射只能在主页单一映射口完成，不允许散到卡片组件和 API 层。
+- `internal/transport`
+- `internal/auth`
+- `internal/session`
+- `internal/storage/file`
 
-4. 当前轮边界已写入正式文档
-   - 当前轮不处理运行期 `session broken` 自动自愈。
-   - 托盘重新显示主窗口不重复执行启动自动连接。
-   - 会话状态入口、启动覆盖和手动重扫继续保持职责分离。
+当前 `server` 仍存在的核心问题：
 
-## 当前轮结论
+1. `internal/storer/service.go` 同时承担：
+   - 本地存储宿主
+   - 本地会话宿主
+   - embedded gateway
+   - client TCP 监听入口
+2. `internal/gateway` 仍按“单盘 + 本地 session”建模，不能承接路由型 gateway。
+3. `internal/config` 还没有“`storer` 仅 `whole | storer`，`gateway` 独立可执行文件”的角色模型。
+4. 缺少 `disk_id -> storer` 注册/路由层。
+5. 缺少 gateway 自己的 session 映射层。
 
-这一轮“文档同步实现口径”的工作已经完成。后续进入新阶段前，以上规则视为正式约束，不再只是代码层事实。
+结论：
 
-## 当前唯一下一步
+- 现状足以支撑单盘 `whole` 最小闭环。
+- 现状不足以直接承接 `gateway + storer` 分体模型。
+- 必须按开发原则做结构重建，而不是继续在现有 `storer/service.go` 上叠补丁。
 
-等待下一轮目标确认后，再开启新的结构或功能阶段。
+## 重建原则
+
+本轮 server 重建遵守以下固定口径：
+
+1. 先保留唯一主路径，不预做分布式扩展。
+2. 先拆职责，再补协议接线。
+3. 优先删除旧耦合入口，不保留长期双轨。
+4. `Go` 侧维持单向依赖，不引入包循环。
+5. 文档、任务树、实现同步收束到当前唯一结构。
+
+## 任务树
+
+### A. 重建 server 角色地基
+
+#### A1. 重建配置模型
+
+目标：
+
+- 把当前扁平 `Config` 改为角色化配置入口。
+
+收口要求：
+
+- `storer` 可执行文件只支持 `role = whole | storer`
+- `gateway` 使用自己的独立配置模型，不进入 `storer.role`
+- `config.toml` 仍固定在可执行文件同级目录
+- `whole` 配置单独成段
+- `storer` 配置单独成段
+- `gateway` 可执行文件维护自己的配置段和启动配置
+
+必须删除：
+
+- 当前只适配单一 `listen_addr + storage_file_path + claim_code` 的默认结构
+
+#### A2. 拆分本地存储宿主
+
+目标：
+
+- 从当前 `internal/storer/service.go` 中拆出“真实盘宿主”最小核心。
+
+收口要求：
+
+- 本地 raw 存储打开与关闭独立
+- 本地 `session.Service` 独立
+- 不在这一层承担 client 监听职责
+- 不在这一层承担 gateway 路由职责
+
+输出形态：
+
+- 一个只负责“本地盘 + 本地 session 数据面”的 storer core
+
+#### A3. 定义运行形态装配层
+
+目标：
+
+- 在上层把角色拼起来，而不是让底层对象自己混合所有职责。
+
+收口要求：
+
+- `whole` = `storer` 可执行文件中的本地 storer core + embedded gateway
+- `storer` = `storer` 可执行文件中的本地 storer core + 向外注册
+- `gateway` = 独立 `gateway` 可执行文件
+
+必须避免：
+
+- 再做一个巨大的总 `Service` 把三种角色重新揉回一起
+
+### B. 重建 gateway 结构
+
+#### B1. 拆 client-facing gateway
+
+目标：
+
+- 把当前 `internal/gateway` 从“单盘本地 handler”重建为 client-facing gateway 边界层。
+
+收口要求：
+
+- 认证入口只处理 `AuthStart / AuthFinish`
+- 会话入口只处理 `SessionOpen`
+- 数据面入口只处理 `ReadAt / WriteAt / Ping / Close`
+- client 连接上的认证资格仍为 connection-scoped
+
+必须删除：
+
+- `NewHandler(realDiskID, authVerifier, sessions)` 这种单盘本地直绑入口
+
+#### B2. 新增路由/注册层
+
+目标：
+
+- 提供 `disk_id -> storer route` 的唯一真实来源。
+
+收口要求：
+
+- 保存 storer 注册信息
+- 保存 `auth_verifier`
+- 保存 storer 当前连接状态
+- 为 client-facing gateway 提供只读路由查询入口
+
+必须避免：
+
+- 在多个 handler 内各自缓存 disk 路由状态
+
+#### B3. 新增 gateway session 映射层
+
+目标：
+
+- 明确 gateway 和 storer 的 session 边界。
+
+收口要求：
+
+- `gateway_session_id -> storer_connection + storer_session_id`
+- gateway 负责本地 `session_id` 分配与释放
+- storer 返回的真实 `session_id` 只留在 gateway 内部
+
+必须避免：
+
+- 把 storer 原始 `session_id` 直接暴露给 client
+
+#### B4. 新增 storer-facing gateway 边界
+
+目标：
+
+- 为 storer 注册和后续会话透传建立独立入口。
+
+收口要求：
+
+- 独立监听端口
+- 独立注册流程
+- 注册后复用现有数据面语义，不重复发明第二套数据面业务定义
+
+### C. 重建 storer 结构
+
+#### C1. 明确 storer 只做真实数据面
+
+目标：
+
+- 在 `storer` 角色下，收紧职责到“存储 + 会话 + gateway 对接”。
+
+收口要求：
+
+- 不直接承接 client 协议入口
+- 不直接面向 client 做认证
+- 只接受 gateway 注册链路与后续会话/IO 请求
+
+#### C2. 保留 whole 的 embedded gateway 形态
+
+目标：
+
+- 不破坏当前单盘最小闭环。
+
+收口要求：
+
+- `whole` 仍可单独启动并对 client 提供完整服务
+- 但实现上通过装配层完成，而不是把所有逻辑继续塞回 `storer/service.go`
+
+### D. 协议接线与最小闭环
+
+#### D1. 接通 gateway-and-storer 注册阶段
+
+目标：
+
+- 让独立 storer 能把自己挂到 gateway。
+
+收口要求：
+
+- storer 提交：
+  - `gateway_token`
+  - `disk_id`
+  - `auth_verifier`
+- gateway 建立注册表
+
+#### D2. 接通 SessionOpen 透传链
+
+目标：
+
+- 先打通单盘最小闭环最关键的会话打开链路。
+
+收口要求：
+
+- client 只连 gateway
+- gateway 认证成功后，向目标 storer 发起 `SessionOpen`
+- storer 返回 busy / success / readonly 等结果
+- gateway 完成本地 session 映射
+
+#### D3. 接通 ReadAt / WriteAt / Ping / Close
+
+目标：
+
+- 完成 `gateway <-> storer` 数据面主路径。
+
+收口要求：
+
+- 沿用既有业务语义
+- gateway 负责 `request_id` / `session_id` 映射
+- storer 只理解 gateway 发来的业务包
+
+### E. 启动入口与联调
+
+#### E1. 新增独立启动入口
+
+目标：
+
+- 明确两个可执行文件的实际启动方式。
+
+收口要求：
+
+- `cmd/storer`：内部 `role = whole | storer`
+- `cmd/gateway`：独立 gateway 程序
+
+#### E2. 保持现有联调工具继续可用
+
+目标：
+
+- 不让协议联调重新绑回 KMDF/AppKernel 宿主。
+
+收口要求：
+
+- `windows/rust-cli/src/bin/network-auth-open.rs` 继续可直连 gateway
+- 先覆盖：
+  - auth
+  - open
+  - busy
+  - close
+  - reopen
+
+### F. 文档同步
+
+#### F1. 同步正式文档
+
+目标：
+
+- 文档只描述当前真实结构。
+
+收口要求：
+
+- `README.md`
+- `overview.md`
+- `gateway-and-storer.md`
+- `auth-routing.md`
+- `data-plane.md`
+
+必须删除：
+
+- 与新结构不一致的旧一体机叙述
+
+#### F2. 同步 progress
+
+目标：
+
+- 每个阶段完成后收进 `docs/progress`
+
+## 推荐实现顺序
+
+1. A1 重建配置模型
+2. A2 拆本地存储宿主
+3. A3 定义角色装配层
+4. B1 + B2 重建 gateway 边界和路由层
+5. B3 + B4 建立 session 映射与 storer-facing 边界
+6. C1 + C2 收紧 storer / whole 结构
+7. D1 + D2 + D3 接通协议主路径
+8. E1 + E2 启动入口与联调
+9. F1 + F2 文档收口
+
+## 当前下一步
+
+下一步建议直接开始 `A1. 重建配置模型`。
