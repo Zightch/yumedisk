@@ -58,7 +58,7 @@
 - `GatewayConnection` 只做 connection 级职责，不再冒充 session 真源。
 - `DiskSession` 和 `NetworkMedia` 要分清：session 是连接上的远端会话句柄，metadata 属于 `NetworkMedia` 的可见盘视图。
 - `NetworkMedia` 显式记录 `disk_id + DiskSession + metadata`。
-- 失效处理遵守正式文档边界：网络层只上报失效，不替宿主硬编码“立即删盘”。
+- 失效处理遵守正式文档边界，但当前阶段 `windows/rust-cli` 的宿主策略固定为：收到失效事件后立即卸载并清理，不实现假死挂起态。
 - 测试必须跟着新语义重写，不能继续用旧 `SessionOpenResponse` 和 `Ping` 断言兜底。
 
 ## 4. 目标结构
@@ -135,6 +135,7 @@
   - 自动重连
   - 自动重新开会话
 - 失效时只暴露给宿主一个明确的无效状态入口，不伪装成功。
+- 当前阶段一旦进入失效状态，宿主立即卸载并清理对应网络盘，不保留挂起对象。
 
 ### 4.7 CliHost
 
@@ -146,9 +147,11 @@
   - build `DiskSession`
   - build `NetworkMedia(disk_id + session + metadata)`
   - mount
-- notice / connection 死亡时：
-  - 网络层只上报失效
-  - 宿主决定立即删除对象，还是先收束成待回收状态
+- 故障策略固定为：
+  - `connection` 断开时立即卸载并清理
+  - 收到 `SessionCloseNotice` 时立即卸载并清理
+  - 读写返回 `session-unavailable` 等终态错误时立即卸载并清理
+  - 不实现待回收状态，不实现严格假死态
 
 ## 5. 实施顺序
 
@@ -264,9 +267,12 @@ Rust CLI 不能先拍脑袋改协议，必须以 `todo-server.md` 里 `server/in
   - describe -> metadata
   - `NetworkMedia::bind(disk_id, session, metadata)`
 - `pending_closed_sessions` 和 `mounted_network_disks` 的回收路径收紧到正式失效边界。
-- notice / connection 死亡时，宿主层统一决定：
-  - 立即卸载
-  - 或先标记为待回收 / 严格假死态
+- notice / connection 死亡时，宿主层统一执行立即卸载并清理。
+- 当前阶段固定覆盖以下场景：
+  - transport 连接断开
+  - `SessionCloseNotice`
+  - `SessionDescribe / ReadAt / WriteAt / Close` 返回 `session-unavailable`
+  - 其他已确定无法继续推进 I/O 的终态错误
 
 相关文件：
 
@@ -276,6 +282,7 @@ Rust CLI 不能先拍脑袋改协议，必须以 `todo-server.md` 里 `server/in
 
 - host 侧不再假设 open 响应自带 metadata。
 - host 侧的盘对象构造严格基于 `disk_id + session + metadata`。
+- host 侧对故障盘不保留挂起态，直接卸载并清理。
 
 ### Phase 6. 重写 Rust CLI 测试
 
@@ -295,7 +302,7 @@ Rust CLI 不能先拍脑袋改协议，必须以 `todo-server.md` 里 `server/in
 - 一个 connection 下可持有多个 session
 - `SessionCloseNotice` 只作为失效事件，而不是直接伪造 cleanup
 - `NetworkMedia` 显式持有 `disk_id`
-- 连接死亡后对象进入宿主定义的无效状态，而不是继续伪装成功
+- `connection` 死亡、`SessionCloseNotice`、`session-unavailable` 等故障场景下，宿主立即卸载并清理
 
 ## 6. 推荐执行顺序
 
@@ -316,5 +323,5 @@ Rust CLI 不能先拍脑袋改协议，必须以 `todo-server.md` 里 `server/in
 - `GatewayConnection` 不再限制一个 connection 只能持有一个 session。
 - `DiskSession` 不再承担 session metadata 和 keepalive TTL 模型。
 - `NetworkMedia` 显式持有 `disk_id + DiskSession + metadata`。
-- notice / connection 死亡只上报失效，宿主决定清理策略。
+- 当前阶段 notice / connection 死亡 / session 终态错误统一直接卸载并清理。
 - `cargo test` 在 `windows/rust-cli` 下通过。
