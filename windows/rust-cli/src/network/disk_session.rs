@@ -175,7 +175,7 @@ impl DiskSession {
 
     pub fn ensure_usable(&self) -> Result<(), NetworkClientError> {
         if self.is_closed() {
-            return Err(NetworkClientError::SessionClosed);
+            return Err(NetworkClientError::SessionUnavailable);
         }
 
         if let Some(error) = self
@@ -190,12 +190,12 @@ impl DiskSession {
         }
 
         if self.is_expired() {
-            self.mark_terminal(NetworkClientError::SessionExpired);
-            return Err(NetworkClientError::SessionExpired);
+            self.mark_terminal(NetworkClientError::SessionUnavailable);
+            return Err(NetworkClientError::SessionUnavailable);
         }
         if !self.is_connection_alive() {
-            self.mark_terminal(NetworkClientError::ConnectionClosed);
-            return Err(NetworkClientError::ConnectionClosed);
+            self.mark_terminal(NetworkClientError::SessionUnavailable);
+            return Err(NetworkClientError::SessionUnavailable);
         }
         Ok(())
     }
@@ -213,10 +213,7 @@ impl DiskSession {
         }
 
         if let Err(error) = self.ensure_usable() {
-            if matches!(
-                error,
-                NetworkClientError::SessionClosed | NetworkClientError::SessionExpired
-            ) {
+            if matches!(error, NetworkClientError::SessionUnavailable) {
                 self.mark_closed();
                 self.stop_keepalive();
                 return Ok(());
@@ -232,8 +229,9 @@ impl DiskSession {
         .map_err(NetworkClientError::Protocol)?;
 
         let response_payload = self.connection.send_request_and_wait(payload)?;
-        let close_result = CloseRequest::decode_response(&response_payload, request_id, self.session_id)
-            .map_err(map_data_plane_error);
+        let close_result =
+            CloseRequest::decode_response(&response_payload, request_id, self.session_id)
+                .map_err(map_data_plane_error);
         self.mark_closed();
         self.stop_keepalive();
         close_result
@@ -277,7 +275,7 @@ impl DiskSession {
     pub fn write_at(&self, offset: u64, data: &[u8]) -> Result<(), NetworkClientError> {
         self.ensure_usable()?;
         if self.read_only {
-            return Err(NetworkClientError::ReadOnlySession);
+            return Err(NetworkClientError::InvalidIo("read_only"));
         }
         validate_single_io(self.disk_size_bytes, self.max_io_bytes, offset, data.len())?;
         if data.is_empty() {
@@ -303,7 +301,9 @@ impl DiskSession {
     fn refresh_expiration(&self) -> Result<(), NetworkClientError> {
         let now = SystemTime::now();
         let next_expires_at = now
-            .checked_add(Duration::from_secs(u64::from(self.lifecycle.session_ttl_seconds)))
+            .checked_add(Duration::from_secs(u64::from(
+                self.lifecycle.session_ttl_seconds,
+            )))
             .ok_or(NetworkClientError::InvalidArgument("session_ttl_seconds"))?;
         let mut runtime = self
             .lifecycle
@@ -329,7 +329,8 @@ impl DiskSession {
             .lifecycle
             .keepalive
             .lock()
-            .expect("disk session keepalive poisoned") = Some(DiskSessionKeepalive { stop_tx, thread });
+            .expect("disk session keepalive poisoned") =
+            Some(DiskSessionKeepalive { stop_tx, thread });
     }
 
     fn stop_keepalive(&self) {
@@ -413,9 +414,9 @@ fn run_keepalive_loop(
         match send_ping_once(&connection, session_id, nonce) {
             Ok(_) => {
                 let now = SystemTime::now();
-                let Some(next_expires_at) = now
-                    .checked_add(Duration::from_secs(u64::from(lifecycle.session_ttl_seconds)))
-                else {
+                let Some(next_expires_at) = now.checked_add(Duration::from_secs(u64::from(
+                    lifecycle.session_ttl_seconds,
+                ))) else {
                     return;
                 };
                 let mut runtime = lifecycle
@@ -470,12 +471,7 @@ fn map_request_error<'a>(
 }
 
 fn is_terminal_session_error(error: &NetworkClientError) -> bool {
-    matches!(
-        error,
-        NetworkClientError::SessionClosed
-            | NetworkClientError::SessionExpired
-            | NetworkClientError::ConnectionClosed
-    )
+    matches!(error, NetworkClientError::SessionUnavailable)
 }
 
 fn validate_single_io(
@@ -505,20 +501,20 @@ fn validate_single_io(
 fn map_data_plane_error(error: ProtocolClientError) -> NetworkClientError {
     match error {
         ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrSessionExpired) => {
-            NetworkClientError::SessionExpired
+            NetworkClientError::SessionUnavailable
         }
         ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrSessionClosed)
         | ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrSessionNotFound) => {
-            NetworkClientError::SessionClosed
+            NetworkClientError::SessionUnavailable
         }
         ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrIoOutOfRange) => {
-            NetworkClientError::IoOutOfRange
+            NetworkClientError::InvalidIo("out_of_range")
         }
         ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrIoTooLarge) => {
-            NetworkClientError::IoTooLarge
+            NetworkClientError::InvalidIo("too_large")
         }
         ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrIoReadOnly) => {
-            NetworkClientError::ReadOnlySession
+            NetworkClientError::InvalidIo("read_only")
         }
         ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrIoFailed) => {
             NetworkClientError::IoFailed
@@ -580,7 +576,7 @@ mod tests {
                 .ensure_usable()
                 .expect_err("closed session should fail")
                 .to_string(),
-            "session-closed"
+            "session-unavailable"
         );
     }
 
@@ -842,19 +838,19 @@ mod tests {
             map_data_plane_error(ProtocolClientError::GatewayStatus(
                 ProtocolStatusCode::ErrIoOutOfRange
             )),
-            NetworkClientError::IoOutOfRange
+            NetworkClientError::InvalidIo("out_of_range")
         );
         assert_eq!(
             map_data_plane_error(ProtocolClientError::GatewayStatus(
                 ProtocolStatusCode::ErrIoTooLarge
             )),
-            NetworkClientError::IoTooLarge
+            NetworkClientError::InvalidIo("too_large")
         );
         assert_eq!(
             map_data_plane_error(ProtocolClientError::GatewayStatus(
                 ProtocolStatusCode::ErrIoReadOnly
             )),
-            NetworkClientError::ReadOnlySession
+            NetworkClientError::InvalidIo("read_only")
         );
         assert_eq!(
             map_data_plane_error(ProtocolClientError::GatewayStatus(

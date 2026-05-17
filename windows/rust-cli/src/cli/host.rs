@@ -16,8 +16,8 @@ use crate::cli::local::DenseMem;
 use crate::network::ConnectionAuthenticator;
 use crate::network::DiskSession;
 use crate::network::GatewayConnection;
-use crate::network::NetworkMedia;
 use crate::network::NetworkClientError;
+use crate::network::NetworkMedia;
 use crate::network::SessionOpener;
 use crate::network::TransportEndpoint;
 
@@ -191,7 +191,9 @@ impl CliHost {
             .map_err(|error| error.to_string())?;
 
         let opener = SessionOpener::new(Arc::clone(&connection));
-        let session = opener.open(disk_id.clone()).map_err(|error| error.to_string())?;
+        let session = opener
+            .open(disk_id.clone())
+            .map_err(|error| error.to_string())?;
 
         let media = NetworkMedia::bind(
             session.clone(),
@@ -258,7 +260,7 @@ impl CliHost {
         {
             match mounted.session.close() {
                 Ok(()) => {}
-                Err(NetworkClientError::SessionClosed | NetworkClientError::SessionExpired) => {}
+                Err(NetworkClientError::SessionUnavailable) => {}
                 Err(error) => return Err(error.to_string()),
             }
         }

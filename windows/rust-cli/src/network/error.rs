@@ -7,13 +7,9 @@ use super::protocol_client::ProtocolClientError;
 pub enum NetworkClientError {
     InvalidArgument(&'static str),
     UnauthorizedDisk { disk_id: String },
-    IoOutOfRange,
-    IoTooLarge,
+    InvalidIo(&'static str),
     IoFailed,
-    ReadOnlySession,
-    SessionClosed,
-    SessionExpired,
-    ConnectionClosed,
+    SessionUnavailable,
     AlreadyConnected,
     PendingRequestConflict { request_id: u64 },
     UnknownPendingRequest { request_id: u64 },
@@ -30,13 +26,9 @@ impl fmt::Display for NetworkClientError {
             Self::UnauthorizedDisk { disk_id } => {
                 write!(formatter, "unauthorized-disk: {}", disk_id)
             }
-            Self::IoOutOfRange => formatter.write_str("io-out-of-range"),
-            Self::IoTooLarge => formatter.write_str("io-too-large"),
+            Self::InvalidIo(reason) => write!(formatter, "invalid-io: {}", reason),
             Self::IoFailed => formatter.write_str("io-failed"),
-            Self::ReadOnlySession => formatter.write_str("read-only-session"),
-            Self::SessionClosed => formatter.write_str("session-closed"),
-            Self::SessionExpired => formatter.write_str("session-expired"),
-            Self::ConnectionClosed => formatter.write_str("connection-closed"),
+            Self::SessionUnavailable => formatter.write_str("session-unavailable"),
             Self::AlreadyConnected => formatter.write_str("already-connected"),
             Self::PendingRequestConflict { request_id } => {
                 write!(formatter, "pending-request-conflict: {}", request_id)

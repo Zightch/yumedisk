@@ -47,7 +47,7 @@ impl GatewayResponseFuture {
     pub fn recv(self) -> Result<Vec<u8>, NetworkClientError> {
         self.response_rx
             .recv()
-            .unwrap_or(Err(NetworkClientError::ConnectionClosed))
+            .unwrap_or(Err(NetworkClientError::SessionUnavailable))
     }
 }
 
@@ -83,7 +83,7 @@ impl GatewayConnection {
 
     pub fn close(&self) -> Result<(), NetworkClientError> {
         self.transport.close().map_err(map_transport_error)?;
-        self.fail_all_pending(NetworkClientError::ConnectionClosed);
+        self.fail_all_pending(NetworkClientError::SessionUnavailable);
         Ok(())
     }
 
@@ -245,7 +245,7 @@ fn map_transport_error(error: TransportError) -> NetworkClientError {
     match error {
         TransportError::AlreadyConnected => NetworkClientError::AlreadyConnected,
         TransportError::ConnectionClosed | TransportError::NotConnected => {
-            NetworkClientError::ConnectionClosed
+            NetworkClientError::SessionUnavailable
         }
         other => NetworkClientError::Transport(other.to_string()),
     }
@@ -365,7 +365,7 @@ mod tests {
             .expect("send should succeed");
 
         let error = future.recv().expect_err("pending request should fail");
-        assert_eq!(error.to_string(), "connection-closed");
+        assert_eq!(error.to_string(), "session-unavailable");
         assert_eq!(connection.pending_request_count(), 0);
 
         server.join().expect("server thread should join");

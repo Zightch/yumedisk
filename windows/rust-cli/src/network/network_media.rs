@@ -122,20 +122,16 @@ fn validate_range(disk_size_bytes: u64, offset: u64, length: usize) -> Result<()
 fn map_network_error_to_backend_error(error: NetworkClientError) -> BackendError {
     match error {
         NetworkClientError::InvalidArgument(_)
-        | NetworkClientError::IoOutOfRange
-        | NetworkClientError::IoTooLarge
+        | NetworkClientError::InvalidIo(_)
         | NetworkClientError::IoFailed => BackendError::InvalidParameter,
-        NetworkClientError::ReadOnlySession => BackendError::InvalidParameter,
-        NetworkClientError::SessionClosed
-        | NetworkClientError::SessionExpired
+        NetworkClientError::SessionUnavailable
+        | NetworkClientError::UnauthorizedDisk { .. }
         | NetworkClientError::AlreadyConnected
         | NetworkClientError::PendingRequestConflict { .. }
         | NetworkClientError::UnknownPendingRequest { .. }
         | NetworkClientError::Protocol(_)
         | NetworkClientError::Transport(_)
         | NetworkClientError::Crypto(_)
-        | NetworkClientError::UnauthorizedDisk { .. }
-        | NetworkClientError::ConnectionClosed
         | NetworkClientError::Unimplemented(_) => BackendError::SessionNotOpen,
     }
 }
@@ -337,11 +333,13 @@ mod tests {
     #[test]
     fn network_media_maps_network_failures_to_backend_errors() {
         assert_eq!(
-            map_network_error_to_backend_error(NetworkClientError::SessionClosed),
+            map_network_error_to_backend_error(NetworkClientError::SessionUnavailable),
             BackendError::SessionNotOpen
         );
         assert_eq!(
-            map_network_error_to_backend_error(NetworkClientError::ConnectionClosed),
+            map_network_error_to_backend_error(NetworkClientError::Transport(
+                "disconnect".to_string()
+            )),
             BackendError::SessionNotOpen
         );
         assert_eq!(
@@ -349,7 +347,7 @@ mod tests {
             BackendError::InvalidParameter
         );
         assert_eq!(
-            map_network_error_to_backend_error(NetworkClientError::ReadOnlySession),
+            map_network_error_to_backend_error(NetworkClientError::InvalidIo("read_only")),
             BackendError::InvalidParameter
         );
     }
