@@ -45,7 +45,7 @@
 
 ## 2. 路由缓存来源
 
-当前草案默认采用 `storer -> gateway` 注册方式。
+当前默认采用 `storer -> gateway` 注册方式。
 
 `storer` 启动后向 `gateway` 注册：
 
@@ -77,6 +77,7 @@ auth_verifier = SHA512(claim_code_bytes)
 - `claim_code` 仍然只由存储侧持有
 - `gateway_token` 是 `storer <-> gateway` 控制面凭据
 - 注册成功后，`gateway <-> storer` 不重新设计第二套数据面命令，而是复用 `SessionOpen / ReadAt / WriteAt / Ping / Close`
+- 两个可执行文件都按“可执行文件所在目录的 `config.toml`”取配置
 
 ## 3. 认证协议
 
@@ -147,7 +148,6 @@ challenge_token = Seal({
   issued_at,
   expire_at,
   conn_nonce,
-  auth_version
 })
 ```
 
@@ -254,8 +254,8 @@ SessionOpenRequest {
 2. 根据路由缓存找到目标 `storer`
 3. 把“打开这个盘会话”的请求交给 `storer`
 4. 由 `storer` 根据打开策略决定是否允许打开
-5. 若允许，则在内部建立 `gateway session -> storer session` 映射
-6. 分配新的 `session_id`
+5. 若允许，则在内部建立 `gateway_session_id -> (route_connection, storer_session_id)` 映射
+6. 分配新的 `gateway_session_id`
 7. 把会话元数据返回给 client
 
 返回：
@@ -274,7 +274,7 @@ SessionOpenResponse {
 
 - `session_id` 是 client 后续全部数据面请求的唯一盘会话标识
 - `disk_size_bytes`、`read_only`、`max_io_bytes` 是 `NetworkMedia` 构造所需最小元数据
-- `gateway` 内部持有 `session_id -> storer session` 映射
+- `gateway` 内部持有 `gateway_session_id -> (route_connection, storer_session_id)` 映射
 - client 不持有 `storer_addr`
 - 只有这一步成功后，client 才能构造 `DiskSession`
 - 如果 `SessionOpen` 返回 busy，client 可以保留当前连接与认证资格，稍后继续重试 `SessionOpen`
@@ -291,7 +291,7 @@ SessionOpenResponse {
 转发边界：
 
 - client 的 `ReadAt / WriteAt / Ping / Close` 全部先到 `gateway`
-- `gateway` 按 `session_id` 找到对应 `storer session`
+- `gateway` 按 `gateway_session_id` 找到对应 `(route_connection, storer_session_id)`
 - `gateway` 再把请求转发给目标 `storer`
 - `storer` 返回结果后，由 `gateway` 回给原 client
 

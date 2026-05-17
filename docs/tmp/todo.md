@@ -251,25 +251,10 @@
 
 ## 推荐实现顺序
 
-1. F1 + F2 文档收口
+1. A-F 已完成
 
 ## 当前下一步
 
-下一步直接开始 `F1 + F2. 文档收口`：
+本轮 `A-F` 已收完。
 
-- 同步正式文档到当前真实结构：
-  - `README.md`
-  - `overview.md`
-  - `gateway-and-storer.md`
-  - `auth-routing.md`
-  - `data-plane.md`
-- 收进当前真实启动方式：
-  - `cmd/gateway`
-  - `cmd/storer`
-- 收进当前真实联调口径：
-  - `network-auth-open`
-  - auth
-  - open
-  - busy
-  - close
-  - reopen
+如果继续推进，下一步应新开任务树，而不是继续修改本轮 server 结构文档。

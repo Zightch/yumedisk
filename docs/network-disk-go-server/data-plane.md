@@ -170,7 +170,7 @@ header {
 转发语义：
 
 1. client 发送带 `session_id` 的业务请求到 `gateway`
-2. `gateway` 根据本地 `session_id -> storer session` 映射定位目标
+2. `gateway` 根据本地 `gateway_session_id -> (route_connection, storer_session_id)` 映射定位目标
 3. `gateway` 把请求转发给目标 `storer`
 4. `storer` 返回结果
 5. `gateway` 带回原始 `request_id` 回给 client

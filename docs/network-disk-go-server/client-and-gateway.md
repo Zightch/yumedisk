@@ -37,7 +37,7 @@ client <-> gateway <-> storer
 - `gateway` 负责认证、路由、转发
 - `storer` 持有真实存储介质并执行块读写
 - 认证成功后，`client` 不直接连接 `storer`
-- `gateway` 内部维护 `session_id -> storer session` 映射
+- `gateway` 内部维护 `gateway_session_id -> (route_connection, storer_session_id)` 映射
 
 当前 client 侧必须明确以下对象边界：
 
@@ -51,13 +51,13 @@ client <-> gateway <-> storer
 
 - 本文档：`client <-> gateway` 业务层协议
 - [transport.md](transport.md)：通用传输层拆帧协议
-- `gateway <-> storer` 业务层协议：后续独立定义，不在本文档中固定
+- [gateway-and-storer.md](gateway-and-storer.md)：`gateway <-> storer` 注册与数据面复用规则
 
 当前口径：
 
-- `gateway <-> storer` 不要求复用本文档
-- 后续即使两侧字段相近，也应视为独立协议面
-- `gateway <-> storer` 可以针对内部转发语义做不同设计
+- `gateway <-> storer` 复用 `SessionOpen / ReadAt / WriteAt / Ping / Close` 业务语义
+- 但两侧仍是不同协议边界，`request_id` 和 `session_id` 由 `gateway` 本地改写与映射
+- `client` 永远不直接看到 `storer_session_id`
 
 ## 3. 版本与兼容策略
 

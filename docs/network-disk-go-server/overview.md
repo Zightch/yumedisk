@@ -38,7 +38,7 @@ UI
     -> GatewayConnection(server endpoint, connection reuse core)
       -> ConnectionAuthenticator
       -> SessionOpener
-      -> DiskSession(storer session)
+      -> DiskSession(gateway session)
 
 ConnectionAuthenticator
   -> authenticate disk_id on GatewayConnection
@@ -112,7 +112,7 @@ server/
 - `cmd/storer`：独立存储器进程入口
 - `internal/auth`：领盘码、challenge、proof
 - `internal/route`：盘路由与认证缓存
-- `internal/session`：client session 与 gateway 到 storer 的转发会话
+- `internal/session`：真实盘会话与数据面语义
 - `internal/storage/file`：第一阶段唯一存储后端
 
 第一阶段只实现 `file` backend，不提前做数据库 backend。
@@ -128,7 +128,7 @@ server/
 - 在本地使用缓存的认证信息校验 `proof`
 - 为认证成功的 connection 记录认证资格
 - 在 `SessionOpen` 时向 `storer` 申请真实会话
-- 维护 `client session -> storer session` 映射
+- 维护 `gateway session -> (route connection, storer session)` 映射
 - 转发 `ReadAt / WriteAt / Ping / Close`
 
 不负责：
@@ -156,6 +156,32 @@ server/
 - 使用同一套业务层请求头和数据面命令
 - 只是部署形态不同，不派生第二套认证或数据面逻辑
 
+### 4.3 当前实际启动入口
+
+当前真实入口固定为：
+
+- `cmd/gateway`
+  - 独立进程
+  - 读取可执行文件同目录 `config.toml`
+  - 同时启动：
+    - `client.listen_addr`
+    - `storer.listen_addr`
+- `cmd/storer`
+  - 独立进程
+  - 读取可执行文件同目录 `config.toml`
+  - 内部按 `role = whole | storer` 选择运行形态
+
+当前真实行为：
+
+- `whole`
+  - 使用本地 `Core`
+  - 装配 embedded gateway
+  - 直接监听 client TCP
+- `storer`
+  - 使用本地 `Core`
+  - 不监听 client TCP
+  - 主动长连 `gateway.storer.listen_addr`
+  - 先注册，再复用长连接承接后续数据面请求
 ### 4.1 角色配置口径
 
 `storer` 可执行文件配置：
@@ -210,20 +236,22 @@ gateway_token = "..."
 
 - 完整领盘码 `claim_code`
 - 存储后端配置
-- `storer` 对外监听地址
+- `whole.listen_addr` 或 `storer.gateway_addr`
 - 绑定的盘实例
 
 ### gateway 路由缓存
 
-`gateway` 本地内存缓存只保存认证和路由所需最小信息：
+`gateway` 本地内存缓存当前保存的最小真实信息为：
 
 - `disk_id`
 - `auth_verifier`
-- `storer_id`
 - `route_target`
-- `auth_version`
+- `connection_id`
 - 路由存活信息
-- `storer_connection`
+- `disk_size_bytes`
+- `read_only`
+- `max_io_bytes`
+- `session_ttl_seconds`
 
 其中：
 
@@ -295,29 +323,36 @@ DiskSession {
 约束：
 
 - `session_id` 由 `gateway` 分配
-- `gateway` 持有 `session_id -> storer session` 映射
+- `gateway` 持有 `gateway_session_id -> (route_connection, storer_session_id)` 映射
 - `client` 后续所有数据面请求只带 `session_id`
 - `NetworkMedia` 构造时必须拿到 `disk_size_bytes`、`read_only`、`max_io_bytes`
 - `DiskSession` 只表示已打开会话，不表示仅已认证状态
 - 第一版同一 `disk_id` 同时只允许一个活跃 `DiskSession`
 - 当 `SessionOpen` 返回 busy 时，client 允许保留当前连接与认证资格，稍后继续重试 `SessionOpen`
 
-## 7. 第一版实现顺序
+## 7. 当前实现状态
 
-建议按下面顺序推进：
+当前 `server` 已经完成：
 
-1. `storer` 本地配置与领盘码生成
-2. embedded gateway 模式下的 `AuthStart/AuthFinish`
-3. `SessionOpen` 与最小数据面命令
-4. `NetworkMedia` 最小接入
-5. 独立 `gateway`
-6. `storer -> gateway` 注册与路由缓存
+1. `whole | storer` 双角色配置与启动入口
+2. embedded gateway 单盘最小闭环
+3. 独立 `gateway` 运行时
+4. `storer -> gateway` 注册与路由缓存
+5. `SessionOpen / ReadAt / WriteAt / Ping / Close` 转发
+6. `gateway_session_id -> (route_connection, storer_session_id)` 映射
+7. `network-auth-open` 对独立 `gateway + storer` 的真实联调验证
 
 ## 8. 第一版验收口径
 
-第一版只验收以下最小闭环：
+当前第一版已验收以下最小闭环：
 
 1. 假盘与错码在外部观察上都走同样认证流程
 2. 一个 `GatewayConnection` 上能同时承载多个 `DiskSession`
 3. `NetworkMedia` 能完成真实 `read/write`
 4. `tauri-client` 能完成网络盘的添加、挂载、拔出、重挂载
+5. 独立 `gateway + storer + network-auth-open` 已验证：
+   - auth
+   - open
+   - busy
+   - close
+   - reopen

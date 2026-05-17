@@ -71,27 +71,48 @@ client[
 - 多个 `NetworkMedia` 可以并发抢同一个 `GatewayConnection`
 - 并发抢的本质是：多个业务请求并发复用同一条 transport/TCP
 
-### 3.2 在 gateway 侧的位置
+### 3.2 在 server 侧的位置
 
-当前第一版先以 `embedded gateway storer` 为准，传输层对象在服务端内部的位置应理解为：
+当前传输层对象在服务端内部有两种真实挂载位置。
+
+#### 独立 `gateway` 形态
 
 ```text
-storer(embedded gateway)
-  -> listener
+gateway
+  -> client listener
     -> accepted client TCP
       -> transport object
       -> client-and-gateway business handler
-      -> local storer runtime
+
+gateway
+  -> storer listener
+    -> accepted storer TCP
+      -> transport object
+      -> storer-facing register/response runtime
 ```
 
 含义：
 
-- 传输层对象位于 client 外部连接入口之后
-- 上面挂 `client-and-gateway` 业务协议处理器
-- 再往内才进入本地 `storer` 数据面
+- client-facing 与 storer-facing 都各自有独立 transport runtime
+- client-facing 上面挂 `client-and-gateway` 业务协议处理器
+- storer-facing 上面挂注册接收和 request/response 配对逻辑
 - 传输层是可复用底座，不是协议边界本身
 
-后续如果再做独立 `gateway` 与 `storer` 分离部署，可以在另一处入口再挂第二套业务协议，但这不属于当前第一版实现前提。
+#### `whole` 形态
+
+```text
+storer(embedded gateway)
+  -> client listener
+    -> accepted client TCP
+      -> transport object
+      -> client-and-gateway business handler
+      -> local storer core
+```
+
+含义：
+
+- `whole` 只是把 gateway 直接装配在本地 storer core 之上
+- 协议和 transport 语义不变，只是部署形态不同
 
 ## 4. 帧格式
 
@@ -224,4 +245,4 @@ frame = u16be payload_size_m1 + payload[payload_size_m1 + 1]
 当前正式业务层协议文档：
 
 - [client-and-gateway.md](client-and-gateway.md)
-- `gateway-and-storer.md` 后续独立定义
+- [gateway-and-storer.md](gateway-and-storer.md)

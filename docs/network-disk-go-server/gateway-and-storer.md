@@ -1,4 +1,4 @@
-# Gateway-and-Storer 业务层协议草案
+# Gateway-and-Storer 业务层协议
 
 ## 1. 当前定位
 
@@ -46,6 +46,24 @@ storer ----主动长连----> gateway
 - gateway 主动反连 storer
 - 多条 storer 控制连接
 - storer 多盘批量注册
+
+## 2.1 当前实际运行方式
+
+当前真实部署入口：
+
+- `cmd/gateway`
+  - 独立进程
+  - 监听：
+    - `client.listen_addr`
+    - `storer.listen_addr`
+- `cmd/storer`
+  - 独立进程
+  - `role = storer` 时主动连接 `gateway.storer.listen_addr`
+
+配置读取规则固定为：
+
+- 两个可执行文件都读取“可执行文件同目录 `config.toml`”
+- `gateway_token` 只用于 `storer <-> gateway` 注册信任
 
 ## 3. 注册阶段
 
@@ -199,14 +217,22 @@ gateway_session_id -> (storer_connection, storer_session_id)
 - 不向 storer 传 client 的认证流程
 - 认证资格绑定在 gateway 看到的 client connection 上
 
-## 9. 第一版实现顺序
+## 9. 当前实现状态
 
-建议按下面顺序推进：
+当前已经完成：
 
 1. 配置角色：`whole | storer`
-2. `storer` 长连 `gateway` 的注册骨架
-3. `gateway` 的 storer listener 骨架
+2. `storer` 长连 `gateway` 并注册
+3. `gateway` 的 storer-facing listener
 4. 盘路由表
 5. `SessionOpen` 转发
 6. `ReadAt / WriteAt / Ping / Close` 转发
 7. 掉线清理盘路由和会话映射
+
+当前已经完成真实联调验证：
+
+1. `storer` 独立启动后主动注册到 `gateway`
+2. client 直连 `gateway` 完成 `AuthStart / AuthFinish`
+3. `SessionOpen` 能透传到目标 `storer`
+4. 第二个 client 在盘已打开时收到 `disk-busy`
+5. 已认证但 busy 的 client 可保留原连接，等待后再次 `open`

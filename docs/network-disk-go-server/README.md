@@ -1,21 +1,21 @@
-# 网络盘 Go Server 草案
+# 网络盘 Go Server
 
-当前草案按职责拆分，避免把传输层、认证层、路由层、数据面约束全部挤在一份文档里。
+当前文档按职责拆分，避免把传输层、认证层、路由层、数据面约束全部挤在一份文档里。
 
 ## 文档索引
 
 - [总览](overview.md)
 - [Client-and-Gateway 业务层协议 SDK](client-and-gateway.md)
-- [Gateway-and-Storer 业务层协议草案](gateway-and-storer.md)
+- [Gateway-and-Storer 业务层协议](gateway-and-storer.md)
 - [传输层协议](transport.md)
 - [认证与路由](auth-routing.md)
 - [数据面最小闭环](data-plane.md)
 
-## 当前目标
+## 当前实现目标
 
-当前阶段先只做网络盘最小闭环，不直接做真正的分布式存储系统。
+当前阶段只做网络盘最小闭环，不直接做真正的分布式存储系统。
 
-当前第一版实现目标先收敛为：
+当前第一版已收口为：
 
 - `whole` 角色：`storer` 自带 `embedded gateway`
 - `storer` 角色：只持有后端存储并主动注册到独立 `gateway`
@@ -23,7 +23,7 @@
 - 单网盘
 - `client` 只连 `gateway`
 
-当前阶段已经确认 `gateway-and-storer` 不重新发明一整套数据面业务协议，而是拆成：
+当前 `gateway-and-storer` 已明确不重新发明一整套数据面业务协议，而是拆成：
 
 1. 注册阶段
 2. 复用现有 `SessionOpen / ReadAt / WriteAt / Ping / Close`
@@ -50,6 +50,29 @@ client <-> gateway <-> storer
 whole  = storer(embedded gateway)
 storer = external gateway + external storer
 ```
+
+## 当前启动方式
+
+- `cmd/gateway`
+  - 独立可执行文件
+  - 读取可执行文件同目录 `config.toml`
+  - 启动 client-facing 与 storer-facing 两个监听入口
+- `cmd/storer`
+  - 独立可执行文件
+  - 读取可执行文件同目录 `config.toml`
+  - 内部只支持 `role = whole | storer`
+  - `role = whole` 时直接对 client 提供完整服务
+  - `role = storer` 时主动长连外部 `gateway`
+
+当前已完成真实独立联调：
+
+- `gateway + storer + windows/rust-cli/src/bin/network-auth-open.rs`
+- 已验证：
+  - auth
+  - open
+  - busy
+  - close
+  - reopen
 
 ## 当前已定口径
 
@@ -109,7 +132,6 @@ storer = external gateway + external storer
 - rebalance
 - 断线自动重连
 - `client -> storer` 直连
-- 独立 `gateway-and-storer` 业务协议实现
 - 多条 `client -> gateway` 连接池
 - locator
 - 隐藏预认证
