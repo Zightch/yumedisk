@@ -35,10 +35,17 @@ func TestServerMinimalClosure(t *testing.T) {
 		t.Fatalf("parse claim code: %v", err)
 	}
 
-	cfg := config.Config{
-		ListenAddr:      reserveLocalAddr(t),
+	cfg := config.StorerConfig{
+		Role:            config.StorerRoleWhole,
 		StorageFilePath: rawPath,
 		ClaimCode:       claimCode,
+		Whole: config.StorerWholeConfig{
+			ListenAddr: reserveLocalAddr(t),
+		},
+		Storer: config.StorerRemoteConfig{
+			GatewayAddr:      config.DefaultStorerGatewayAddr,
+			ReconnectSeconds: config.DefaultStorerReconnectSeconds,
+		},
 	}
 
 	service, err := NewService(cfg)
@@ -54,9 +61,9 @@ func TestServerMinimalClosure(t *testing.T) {
 	go func() {
 		serverDone <- service.Run(ctx)
 	}()
-	waitForTCP(t, cfg.ListenAddr)
+	waitForTCP(t, cfg.Whole.ListenAddr)
 
-	conn, err := net.Dial("tcp", cfg.ListenAddr)
+	conn, err := net.Dial("tcp", cfg.Whole.ListenAddr)
 	if err != nil {
 		t.Fatalf("dial server: %v", err)
 	}
@@ -115,7 +122,7 @@ func TestServerMinimalClosure(t *testing.T) {
 	}
 	time.Sleep(150 * time.Millisecond)
 
-	conn2, err := net.Dial("tcp", cfg.ListenAddr)
+	conn2, err := net.Dial("tcp", cfg.Whole.ListenAddr)
 	if err != nil {
 		t.Fatalf("dial server second connection: %v", err)
 	}
@@ -159,10 +166,17 @@ func TestServerRejectsSecondSessionOpenWhileDiskIsAlreadyOpened(t *testing.T) {
 		t.Fatalf("parse claim code: %v", err)
 	}
 
-	cfg := config.Config{
-		ListenAddr:      reserveLocalAddr(t),
+	cfg := config.StorerConfig{
+		Role:            config.StorerRoleWhole,
 		StorageFilePath: rawPath,
 		ClaimCode:       claimCode,
+		Whole: config.StorerWholeConfig{
+			ListenAddr: reserveLocalAddr(t),
+		},
+		Storer: config.StorerRemoteConfig{
+			GatewayAddr:      config.DefaultStorerGatewayAddr,
+			ReconnectSeconds: config.DefaultStorerReconnectSeconds,
+		},
 	}
 
 	service, err := NewService(cfg)
@@ -178,9 +192,9 @@ func TestServerRejectsSecondSessionOpenWhileDiskIsAlreadyOpened(t *testing.T) {
 	go func() {
 		serverDone <- service.Run(ctx)
 	}()
-	waitForTCP(t, cfg.ListenAddr)
+	waitForTCP(t, cfg.Whole.ListenAddr)
 
-	connOne, err := net.Dial("tcp", cfg.ListenAddr)
+	connOne, err := net.Dial("tcp", cfg.Whole.ListenAddr)
 	if err != nil {
 		t.Fatalf("dial first client: %v", err)
 	}
@@ -188,7 +202,7 @@ func TestServerRejectsSecondSessionOpenWhileDiskIsAlreadyOpened(t *testing.T) {
 
 	authenticateAndOpenSession(t, connOne, material)
 
-	connTwo, err := net.Dial("tcp", cfg.ListenAddr)
+	connTwo, err := net.Dial("tcp", cfg.Whole.ListenAddr)
 	if err != nil {
 		t.Fatalf("dial second client: %v", err)
 	}

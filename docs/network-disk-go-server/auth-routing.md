@@ -13,18 +13,35 @@
 
 如果与可执行文件同级目录下存在 `config.toml`，则直接读取：
 
+- `role = whole | storer`
 - `claim_code`
 - 存储文件路径
-- 监听地址
+- `whole.listen_addr` 或 `storer.gateway_addr + gateway_token`
 
 如果 `config.toml` 不存在，则进入初始化流程：
 
-1. 交互输入存储文件路径和监听地址
-2. 自动生成 `claim_code`
-3. 写回 `config.toml`
-4. 仅在初始化时向终端打印一次完整领盘码
+1. 交互输入 `role`
+2. 交互输入存储文件路径
+3. 按 `role` 输入：
+   - `whole.listen_addr`
+   - 或 `storer.gateway_addr + storer.gateway_token`
+4. 自动生成 `claim_code`
+5. 写回 `config.toml`
+6. 仅在初始化时向终端打印一次完整领盘码
 
 第一阶段不要求用户手动输入领盘码，也不要求用户手动生成 `disk_id`。
+
+### gateway 初始化
+
+`gateway` 也使用与可执行文件同级目录下的 `config.toml`。
+
+如果 `config.toml` 不存在，则进入初始化流程：
+
+1. 交互输入 `client.listen_addr`
+2. 交互输入 `storer.listen_addr`
+3. 自动生成 `gateway_token`
+4. 写回 `config.toml`
+5. 仅在初始化时向终端打印一次完整 `gateway_token`
 
 ## 2. 路由缓存来源
 

@@ -10,27 +10,30 @@ import (
 	"yumedisk/server/internal/auth"
 )
 
-func TestLoadOrInitCreatesConfigOnFirstRun(t *testing.T) {
+func TestLoadOrInitStorerCreatesWholeConfigOnFirstRun(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.toml")
 
 	var output bytes.Buffer
-	cfg, initialized, err := LoadOrInit(
+	cfg, initialized, err := LoadOrInitStorer(
 		configPath,
-		strings.NewReader("127.0.0.1:9810\nstorage/test-disk.img\n"),
+		strings.NewReader("\nstorage/test-disk.img\n127.0.0.1:9810\n"),
 		&output,
 	)
 	if err != nil {
-		t.Fatalf("LoadOrInit returned error: %v", err)
+		t.Fatalf("LoadOrInitStorer returned error: %v", err)
 	}
 	if !initialized {
 		t.Fatal("expected first run to initialize config")
 	}
 
-	if cfg.ListenAddr != "127.0.0.1:9810" {
-		t.Fatalf("unexpected listen address: %q", cfg.ListenAddr)
+	if cfg.Role != StorerRoleWhole {
+		t.Fatalf("unexpected role: %q", cfg.Role)
+	}
+	if cfg.Whole.ListenAddr != "127.0.0.1:9810" {
+		t.Fatalf("unexpected listen address: %q", cfg.Whole.ListenAddr)
 	}
 	if cfg.StorageFilePath != "storage/test-disk.img" {
 		t.Fatalf("unexpected storage file path: %q", cfg.StorageFilePath)
@@ -43,14 +46,24 @@ func TestLoadOrInitCreatesConfigOnFirstRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read generated config: %v", err)
 	}
-	if !strings.Contains(string(saved), `listen_addr = "127.0.0.1:9810"`) {
-		t.Fatalf("generated config missing listen_addr: %s", string(saved))
+	savedText := string(saved)
+	if !strings.Contains(savedText, `role = "whole"`) {
+		t.Fatalf("generated config missing role: %s", savedText)
 	}
-	if !strings.Contains(string(saved), `storage_file_path = "storage/test-disk.img"`) {
-		t.Fatalf("generated config missing storage_file_path: %s", string(saved))
+	if !strings.Contains(savedText, `[whole]`) {
+		t.Fatalf("generated config missing [whole] section: %s", savedText)
 	}
-	if !strings.Contains(string(saved), `claim_code = "`) {
-		t.Fatalf("generated config missing claim_code: %s", string(saved))
+	if !strings.Contains(savedText, `listen_addr = "127.0.0.1:9810"`) {
+		t.Fatalf("generated config missing whole.listen_addr: %s", savedText)
+	}
+	if !strings.Contains(savedText, `[storer]`) {
+		t.Fatalf("generated config missing [storer] section: %s", savedText)
+	}
+	if !strings.Contains(savedText, `storage_file_path = "storage/test-disk.img"`) {
+		t.Fatalf("generated config missing storage_file_path: %s", savedText)
+	}
+	if !strings.Contains(savedText, `claim_code = "`) {
+		t.Fatalf("generated config missing claim_code: %s", savedText)
 	}
 
 	printed := output.String()
@@ -59,7 +72,7 @@ func TestLoadOrInitCreatesConfigOnFirstRun(t *testing.T) {
 	}
 }
 
-func TestLoadOrInitUsesExistingConfigWithoutReprintingClaimCode(t *testing.T) {
+func TestLoadOrInitStorerUsesExistingConfigWithoutReprintingClaimCode(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
@@ -69,19 +82,26 @@ func TestLoadOrInitUsesExistingConfigWithoutReprintingClaimCode(t *testing.T) {
 		t.Fatalf("generate claim code: %v", err)
 	}
 
-	cfg := Config{
-		ListenAddr:      "127.0.0.1:9736",
+	cfg := StorerConfig{
+		Role:            StorerRoleWhole,
 		StorageFilePath: "data/existing.img",
 		ClaimCode:       claimCode,
+		Whole: StorerWholeConfig{
+			ListenAddr: "127.0.0.1:9736",
+		},
+		Storer: StorerRemoteConfig{
+			GatewayAddr:      DefaultStorerGatewayAddr,
+			ReconnectSeconds: DefaultStorerReconnectSeconds,
+		},
 	}
-	if err := Save(configPath, cfg); err != nil {
+	if err := SaveStorer(configPath, cfg); err != nil {
 		t.Fatalf("save config: %v", err)
 	}
 
 	var output bytes.Buffer
-	loaded, initialized, err := LoadOrInit(configPath, strings.NewReader(""), &output)
+	loaded, initialized, err := LoadOrInitStorer(configPath, strings.NewReader(""), &output)
 	if err != nil {
-		t.Fatalf("LoadOrInit returned error: %v", err)
+		t.Fatalf("LoadOrInitStorer returned error: %v", err)
 	}
 	if initialized {
 		t.Fatal("expected existing config to skip initialization")
@@ -91,6 +111,95 @@ func TestLoadOrInitUsesExistingConfigWithoutReprintingClaimCode(t *testing.T) {
 	}
 	if output.Len() != 0 {
 		t.Fatalf("expected no claim code output on existing config, got: %q", output.String())
+	}
+}
+
+func TestLoadStorerParsesSectionedRoleConfigWithInlineComments(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.toml")
+	claimCode, err := auth.GenerateClaimCode(DefaultClaimSecretLen)
+	if err != nil {
+		t.Fatalf("generate claim code: %v", err)
+	}
+
+	content := strings.Join([]string{
+		`role = "storer" # whole | storer`,
+		`storage_file_path = "data/disk.img"`,
+		`claim_code = "` + claimCode + `"`,
+		``,
+		`[whole]`,
+		`listen_addr = "127.0.0.1:9736"`,
+		``,
+		`[storer]`,
+		`gateway_addr = "127.0.0.1:9836"`,
+		`gateway_token = "dev-gateway-token"`,
+		`reconnect_seconds = 5`,
+		``,
+	}, "\n")
+	if err := os.WriteFile(configPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadStorer(configPath)
+	if err != nil {
+		t.Fatalf("LoadStorer returned error: %v", err)
+	}
+
+	if cfg.Role != StorerRoleStorer {
+		t.Fatalf("unexpected role: %q", cfg.Role)
+	}
+	if cfg.Storer.GatewayAddr != "127.0.0.1:9836" {
+		t.Fatalf("unexpected gateway addr: %q", cfg.Storer.GatewayAddr)
+	}
+	if cfg.Storer.GatewayToken != "dev-gateway-token" {
+		t.Fatalf("unexpected gateway token: %q", cfg.Storer.GatewayToken)
+	}
+	if cfg.Storer.ReconnectSeconds != 5 {
+		t.Fatalf("unexpected reconnect seconds: %d", cfg.Storer.ReconnectSeconds)
+	}
+}
+
+func TestLoadOrInitGatewayCreatesConfigOnFirstRun(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.toml")
+
+	var output bytes.Buffer
+	cfg, initialized, err := LoadOrInitGateway(
+		configPath,
+		strings.NewReader("127.0.0.1:9737\n127.0.0.1:9837\n"),
+		&output,
+	)
+	if err != nil {
+		t.Fatalf("LoadOrInitGateway returned error: %v", err)
+	}
+	if !initialized {
+		t.Fatal("expected first run to initialize gateway config")
+	}
+
+	if cfg.Client.ListenAddr != "127.0.0.1:9737" {
+		t.Fatalf("unexpected client listen addr: %q", cfg.Client.ListenAddr)
+	}
+	if cfg.Storer.ListenAddr != "127.0.0.1:9837" {
+		t.Fatalf("unexpected storer listen addr: %q", cfg.Storer.ListenAddr)
+	}
+	if strings.TrimSpace(cfg.Storer.GatewayToken) == "" {
+		t.Fatal("expected generated gateway token")
+	}
+
+	saved, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read generated gateway config: %v", err)
+	}
+	savedText := string(saved)
+	if !strings.Contains(savedText, `[client]`) || !strings.Contains(savedText, `[storer]`) {
+		t.Fatalf("generated gateway config missing sections: %s", savedText)
+	}
+	if !strings.Contains(output.String(), "generated gateway_token = ") {
+		t.Fatalf("expected init output to print gateway token once, got: %q", output.String())
 	}
 }
 

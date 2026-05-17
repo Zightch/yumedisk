@@ -18,7 +18,7 @@ import (
 )
 
 type Service struct {
-	cfg      config.Config
+	cfg      config.StorerConfig
 	material auth.Material
 	storage  *filestorage.Backend
 	sessions *session.Manager
@@ -26,7 +26,11 @@ type Service struct {
 	nextConn atomic.Uint64
 }
 
-func NewService(cfg config.Config) (*Service, error) {
+func NewService(cfg config.StorerConfig) (*Service, error) {
+	if cfg.Role != config.StorerRoleWhole {
+		return nil, fmt.Errorf("embedded gateway service only supports role=%q", config.StorerRoleWhole)
+	}
+
 	material, err := auth.ParseClaimCode(cfg.ClaimCode)
 	if err != nil {
 		return nil, fmt.Errorf("parse claim code: %w", err)
@@ -60,7 +64,7 @@ func (s *Service) Close() error {
 }
 
 func (s *Service) ListenAddr() string {
-	return s.cfg.ListenAddr
+	return s.cfg.Whole.ListenAddr
 }
 
 func (s *Service) DiskID() string {
@@ -72,9 +76,9 @@ func (s *Service) StoragePath() string {
 }
 
 func (s *Service) Run(ctx context.Context) error {
-	listener, err := net.Listen("tcp", s.cfg.ListenAddr)
+	listener, err := net.Listen("tcp", s.cfg.Whole.ListenAddr)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w", s.cfg.ListenAddr, err)
+		return fmt.Errorf("listen on %s: %w", s.cfg.Whole.ListenAddr, err)
 	}
 	defer listener.Close()
 

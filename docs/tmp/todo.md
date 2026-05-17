@@ -24,9 +24,8 @@
    - embedded gateway
    - client TCP 监听入口
 2. `internal/gateway` 仍按“单盘 + 本地 session”建模，不能承接路由型 gateway。
-3. `internal/config` 还没有“`storer` 仅 `whole | storer`，`gateway` 独立可执行文件”的角色模型。
-4. 缺少 `disk_id -> storer` 注册/路由层。
-5. 缺少 gateway 自己的 session 映射层。
+3. 缺少 `disk_id -> storer` 注册/路由层。
+4. 缺少 gateway 自己的 session 映射层。
 
 结论：
 
@@ -47,25 +46,6 @@
 ## 任务树
 
 ### A. 重建 server 角色地基
-
-#### A1. 重建配置模型
-
-目标：
-
-- 把当前扁平 `Config` 改为角色化配置入口。
-
-收口要求：
-
-- `storer` 可执行文件只支持 `role = whole | storer`
-- `gateway` 使用自己的独立配置模型，不进入 `storer.role`
-- `config.toml` 仍固定在可执行文件同级目录
-- `whole` 配置单独成段
-- `storer` 配置单独成段
-- `gateway` 可执行文件维护自己的配置段和启动配置
-
-必须删除：
-
-- 当前只适配单一 `listen_addr + storage_file_path + claim_code` 的默认结构
 
 #### A2. 拆分本地存储宿主
 
@@ -287,16 +267,15 @@
 
 ## 推荐实现顺序
 
-1. A1 重建配置模型
-2. A2 拆本地存储宿主
-3. A3 定义角色装配层
-4. B1 + B2 重建 gateway 边界和路由层
-5. B3 + B4 建立 session 映射与 storer-facing 边界
-6. C1 + C2 收紧 storer / whole 结构
-7. D1 + D2 + D3 接通协议主路径
-8. E1 + E2 启动入口与联调
-9. F1 + F2 文档收口
+1. A2 拆本地存储宿主
+2. A3 定义角色装配层
+3. B1 + B2 重建 gateway 边界和路由层
+4. B3 + B4 建立 session 映射与 storer-facing 边界
+5. C1 + C2 收紧 storer / whole 结构
+6. D1 + D2 + D3 接通协议主路径
+7. E1 + E2 启动入口与联调
+8. F1 + F2 文档收口
 
 ## 当前下一步
 
-下一步建议直接开始 `A1. 重建配置模型`。
+下一步建议直接开始 `A2. 拆分本地存储宿主`。

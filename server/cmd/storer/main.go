@@ -16,12 +16,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("resolve config path: %v", err)
 	}
-	cfg, initialized, err := config.LoadOrInit(configPath, os.Stdin, os.Stdout)
+	cfg, initialized, err := config.LoadOrInitStorer(configPath, os.Stdin, os.Stdout)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
 	if initialized {
 		log.Printf("initialized storer config at %s", configPath)
+	}
+
+	if cfg.Role != config.StorerRoleWhole {
+		log.Fatalf("storer role runtime not implemented yet: role=%s", cfg.Role)
 	}
 
 	service, err := storer.NewService(cfg)

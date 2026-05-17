@@ -158,7 +158,7 @@ server/
 
 ### 4.1 角色配置口径
 
-当前配置角色：
+`storer` 可执行文件配置：
 
 ```toml
 role = "whole" # whole | storer
@@ -181,6 +181,26 @@ reconnect_seconds = 3
 - `role = "storer"` 时不对外监听 client 端口，而是主动长连 `gateway`
 - `claim_code` 仍然只由存储侧持有
 - `gateway_token` 是 `storer <-> gateway` 注册信任凭据，不复用 `claim_code`
+
+### 4.2 gateway 配置口径
+
+`gateway` 可执行文件配置：
+
+```toml
+[client]
+listen_addr = "127.0.0.1:9736"
+
+[storer]
+listen_addr = "127.0.0.1:9836"
+gateway_token = "..."
+```
+
+约束：
+
+- `client.listen_addr` 只承接 `client <-> gateway` 入口
+- `storer.listen_addr` 只承接 `storer -> gateway` 注册和后续数据面复用入口
+- `gateway_token` 是 `storer <-> gateway` 的唯一基础设施凭据
+- `gateway` 不保存 `claim_code`
 
 ## 5. 单一真实来源
 
