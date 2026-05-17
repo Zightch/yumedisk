@@ -6,6 +6,7 @@
 
 - [总览](overview.md)
 - [Client-and-Gateway 业务层协议 SDK](client-and-gateway.md)
+- [Gateway-and-Storer 业务层协议草案](gateway-and-storer.md)
 - [传输层协议](transport.md)
 - [认证与路由](auth-routing.md)
 - [数据面最小闭环](data-plane.md)
@@ -16,34 +17,37 @@
 
 当前第一版实现目标先收敛为：
 
-- `storer` 自带 `embedded gateway`
+- `whole` 角色：`storer` 自带 `embedded gateway`
+- `storer` 角色：只持有后端存储并主动注册到独立 `gateway`
 - 单网盘
-- 单部署点
-- `client` 只连这一处对外服务入口
+- `client` 只连 `gateway`
 
-`gateway-and-storer` 独立业务协议暂时放后，不作为当前第一版实现前提。
+当前阶段已经确认 `gateway-and-storer` 不重新发明一整套数据面业务协议，而是拆成：
+
+1. 注册阶段
+2. 复用现有 `SessionOpen / ReadAt / WriteAt / Ping / Close`
 
 目标路径：
 
 1. `storer` 持有一块真实远端盘
-2. `embedded gateway` 负责认证、路由、转发
+2. `gateway` 负责认证、路由、转发
 3. `client` 输入服务器地址 + 领盘码
 4. `client` 只连接这一处对外入口
-5. `embedded gateway` 认证成功后为 `client` 打开远端盘会话
+5. `gateway` 认证成功后为 `client` 打开远端盘会话
 6. `client` 通过 `NetworkMedia` 使用该会话
 7. `BackendRust` 将该远端盘作为 `Media` 使用
 
 唯一主路径：
 
 ```text
-client <-> storer(embedded gateway)
+client <-> gateway <-> storer
 ```
 
-当前不保留：
+部署形态：
 
 ```text
-client <-> gateway
-client <-> storer
+whole  = storer(embedded gateway)
+storer = external gateway + external storer
 ```
 
 ## 当前已定口径
@@ -52,18 +56,20 @@ client <-> storer
 2. `gateway` 与 `storer` 拆成两个子项目
 3. `storer` 支持 embedded gateway 形态
 4. `client-and-gateway.md` 是当前第一版唯一正式业务协议 SDK
-5. `gateway-and-storer` 独立业务协议暂不进入当前实现
+5. `gateway-and-storer.md` 只单独定义注册阶段和复用规则
 6. 认证流程为 `disk_id -> challenge -> proof`
 7. `gateway` 预缓存 `storer` 路由与 `auth_verifier`
 8. `gateway` 本地完成 `proof` 校验
 9. `client` 只连接对外 gateway 入口，不直接理解 `storer` 内部结构
-10. 认证成功后由 `embedded gateway` 打开并持有本地数据面会话
+10. 认证成功后只获得当前连接上的开会话资格，不直接得到 `session_id`
 11. 假盘不分配完整 pending 表，不进入真实数据路径
 12. 同一 `disk_id` 的多连接认证互不覆盖
 13. 多登录后的权限策略属于 `storer`，不属于认证层
 14. 所有 `AuthFinish` 失败统一随机延迟 `2-5s`
 15. 数据面第一版允许多 `DiskSession` 并发复用同一条 `client -> gateway` TCP 连接
 16. 第一版 `NetworkMedia` 不做断线重连、不做本地写缓存、不做自动重试
+17. `gateway <-> storer` 注册成功后复用 `SessionOpen / ReadAt / WriteAt / Ping / Close` 语义
+18. `gateway` 对 `request_id` 和 `session_id` 负责本地映射，不做裸字节盲转发
 
 当前 `client-and-gateway` 业务协议必须拆成三段：
 
@@ -77,6 +83,20 @@ client <-> storer
 - 认证成功只授予“申请打开该盘会话”的资格
 - 只有 `SessionOpen` 成功后，才能创建 `DiskSession`
 - 第一版 `SessionOpen` 采用单盘独占策略；已有活跃会话时返回 busy
+
+## 当前联调工具
+
+为避免 `BackendRust / AppKernel / KMDF` 宿主单例影响协议联调，当前提供一个独立协议联调工具：
+
+- `windows/rust-cli/src/bin/network-auth-open.rs`
+
+用途：
+
+- 保持一条真实 `GatewayConnection`
+- 显式执行 `auth`
+- 显式执行 `open`
+- 在 `disk-busy` 后保持同一连接不退出
+- 在远端释放会话后，用同一连接再次 `open`
 
 ## 当前明确不做
 

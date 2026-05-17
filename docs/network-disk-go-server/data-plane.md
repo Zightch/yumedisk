@@ -26,6 +26,12 @@
 
 第一版不额外定义 `AuthGrant` 给 client 中转。
 
+认证资格当前固定为 connection-scoped：
+
+- 不向 client 暴露额外 `auth_id`
+- `SessionOpen` busy 失败后，允许 client 在同一连接上继续重试 `open`
+- 是否继续保有资格，由连接是否存活决定
+
 ## 2. 协议位置
 
 所有业务消息都包装在传输层 payload 中。
@@ -174,6 +180,7 @@ header {
 - `gateway` 不缓存盘数据
 - `gateway` 不改变 `ReadAt / WriteAt` 的成功失败语义
 - `gateway` 只负责会话查找、请求转发、响应回传
+- `gateway <-> storer` 复用同一套数据面业务语义，但 `request_id` 和 `session_id` 由 gateway 做本地映射，不是原始字节盲透传
 
 ## 7. 错误语义
 
@@ -243,3 +250,7 @@ header {
 4. `NetworkMedia` 可完成真实 `read/write`
 5. 连接断开后，相关 `DiskSession` 全部失效
 6. `tauri-client` 可完成网络盘的添加、挂载、拔出、重挂载
+
+当前还额外通过独立协议联调工具验证：
+
+7. client 在同一连接上可完成 `auth -> open(busy) -> 等待 -> open(success)` 链路

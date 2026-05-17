@@ -32,11 +32,13 @@
 
 `storer` 启动后向 `gateway` 注册：
 
+- `gateway_token`
 - `disk_id`
 - `auth_verifier`
-- `storer_id`
-- `route_target`
-- `auth_version`
+- `disk_size_bytes`
+- `read_only`
+- `max_io_bytes`
+- `session_ttl_seconds`
 
 `gateway` 将其放入本地路由缓存，用于后续认证和转发。
 
@@ -52,6 +54,12 @@ auth_verifier = SHA512(claim_code_bytes)
 ```
 
 `gateway` 不保存完整 `claim_code`。
+
+当前口径：
+
+- `claim_code` 仍然只由存储侧持有
+- `gateway_token` 是 `storer <-> gateway` 控制面凭据
+- 注册成功后，`gateway <-> storer` 不重新设计第二套数据面命令，而是复用 `SessionOpen / ReadAt / WriteAt / Ping / Close`
 
 ## 3. 认证协议
 
@@ -252,6 +260,7 @@ SessionOpenResponse {
 - `gateway` 内部持有 `session_id -> storer session` 映射
 - client 不持有 `storer_addr`
 - 只有这一步成功后，client 才能构造 `DiskSession`
+- 如果 `SessionOpen` 返回 busy，client 可以保留当前连接与认证资格，稍后继续重试 `SessionOpen`
 
 ## 6. 路由与转发边界
 

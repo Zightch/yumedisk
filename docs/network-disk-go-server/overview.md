@@ -9,6 +9,10 @@
 - `storer` 持有真实存储介质并执行块读写
 
 第一版不引入真正的分布式存储能力，也不保留 `client -> storer` 直连分支。
+当前 server 运行角色固定为：
+
+- `whole`：内嵌 `gateway` 的单体部署
+- `storer`：只持有后端存储并主动连接外部 `gateway`
 
 唯一主路径：
 
@@ -144,13 +148,39 @@ server/
 
 ### embedded gateway 模式
 
-`storer` 在单盘部署时内建 `gateway` 能力。
+`whole` 角色在单盘部署时内建 `gateway` 能力。
 
 要求：
 
 - 使用与独立 `gateway` 完全相同的认证协议
 - 使用同一套业务层请求头和数据面命令
 - 只是部署形态不同，不派生第二套认证或数据面逻辑
+
+### 4.1 角色配置口径
+
+当前配置角色：
+
+```toml
+role = "whole" # whole | storer
+
+storage_file_path = "data/disk.img"
+claim_code = "..."
+
+[whole]
+listen_addr = "127.0.0.1:9736"
+
+[storer]
+gateway_addr = "127.0.0.1:9836"
+gateway_token = "..."
+reconnect_seconds = 3
+```
+
+约束：
+
+- `role = "whole"` 时对外监听 client 端口，走 `client-and-gateway` 协议
+- `role = "storer"` 时不对外监听 client 端口，而是主动长连 `gateway`
+- `claim_code` 仍然只由存储侧持有
+- `gateway_token` 是 `storer <-> gateway` 注册信任凭据，不复用 `claim_code`
 
 ## 5. 单一真实来源
 
@@ -173,6 +203,7 @@ server/
 - `route_target`
 - `auth_version`
 - 路由存活信息
+- `storer_connection`
 
 其中：
 
@@ -210,6 +241,7 @@ client 本地配置只保存网络盘重建所需最小信息：
 - 认证成功后只是获得“申请打开该盘会话”的资格
 - 能不能真的打开、是否只读、是否共享、是否排它，由 `storer` 在 `SessionOpen` 阶段决定
 - 第一版先固定为单盘独占打开：同一时刻只允许一个 client 持有该盘活跃会话
+- 认证资格绑定在当前连接上，不生成单独的对 client 可见 `auth_id`
 
 ## 6. 第一版最小会话模型
 
@@ -248,6 +280,7 @@ DiskSession {
 - `NetworkMedia` 构造时必须拿到 `disk_size_bytes`、`read_only`、`max_io_bytes`
 - `DiskSession` 只表示已打开会话，不表示仅已认证状态
 - 第一版同一 `disk_id` 同时只允许一个活跃 `DiskSession`
+- 当 `SessionOpen` 返回 busy 时，client 允许保留当前连接与认证资格，稍后继续重试 `SessionOpen`
 
 ## 7. 第一版实现顺序
 
