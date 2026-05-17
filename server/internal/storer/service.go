@@ -7,21 +7,15 @@ import (
 	"log"
 	"net"
 	"sync/atomic"
-	"time"
 
-	"yumedisk/server/internal/auth"
 	"yumedisk/server/internal/config"
 	"yumedisk/server/internal/gateway"
-	"yumedisk/server/internal/session"
-	filestorage "yumedisk/server/internal/storage/file"
 	"yumedisk/server/internal/transport"
 )
 
 type Service struct {
 	cfg      config.StorerConfig
-	material auth.Material
-	storage  *filestorage.Backend
-	sessions *session.Manager
+	core     *Core
 	gateway  *gateway.Handler
 	nextConn atomic.Uint64
 }
@@ -31,36 +25,26 @@ func NewService(cfg config.StorerConfig) (*Service, error) {
 		return nil, fmt.Errorf("embedded gateway service only supports role=%q", config.StorerRoleWhole)
 	}
 
-	material, err := auth.ParseClaimCode(cfg.ClaimCode)
-	if err != nil {
-		return nil, fmt.Errorf("parse claim code: %w", err)
-	}
-
-	storage, err := filestorage.Open(cfg.StorageFilePath, false)
+	core, err := NewCore(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	sessions := session.NewService(session.NewManager(), storage, 30*time.Second, 60*1024)
-	gatewayHandler, err := gateway.NewHandler(material.DiskID, material.AuthVerifier, sessions)
+	gatewayHandler, err := gateway.NewHandler(core.DiskID(), core.AuthVerifier(), core.SessionService())
 	if err != nil {
+		_ = core.Close()
 		return nil, err
 	}
 
 	return &Service{
-		cfg:      cfg,
-		material: material,
-		storage:  storage,
-		sessions: sessions.Manager(),
-		gateway:  gatewayHandler,
+		cfg:     cfg,
+		core:    core,
+		gateway: gatewayHandler,
 	}, nil
 }
 
 func (s *Service) Close() error {
-	if s.storage == nil {
-		return nil
-	}
-	return s.storage.Close()
+	return s.core.Close()
 }
 
 func (s *Service) ListenAddr() string {
@@ -68,11 +52,11 @@ func (s *Service) ListenAddr() string {
 }
 
 func (s *Service) DiskID() string {
-	return s.material.DiskID
+	return s.core.DiskID()
 }
 
 func (s *Service) StoragePath() string {
-	return s.storage.Path()
+	return s.core.StoragePath()
 }
 
 func (s *Service) Run(ctx context.Context) error {
@@ -108,7 +92,7 @@ func (s *Service) Run(ctx context.Context) error {
 }
 
 func (s *Service) serveAcceptedConnection(ctx context.Context, state *gateway.ConnectionState, conn net.Conn) {
-	defer s.sessions.CloseConnection(state.ID)
+	defer s.core.SessionService().CloseConnection(state.ID)
 	defer conn.Close()
 
 	log.Printf("connection %d accepted from %s", state.ID, conn.RemoteAddr())
