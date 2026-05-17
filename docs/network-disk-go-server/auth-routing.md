@@ -1,101 +1,64 @@
 # 认证与路由
 
-## 1. 领盘码模型
+## 1. 文档定位
 
-### 格式
+本文档描述：
+
+- 领盘码模型
+- `gateway` 如何缓存认证材料与 route
+- challenge 与 `auth_id` 的边界
+- `auth_id` 如何进入 `SessionOpen`
+
+当前正式口径不再采用“认证成功只隐式挂在 connection 上”的模型，而是显式返回 `auth_id`。
+
+## 2. 领盘码模型
+
+### 2.1 格式
 
 - 总长度不少于 `80`
 - 前 `16` 个字符为 `disk_id`
 - 剩余 `64+` 个字符为领取密钥
-- 字符集为 `0-9a-zA-Z`
+- 字符集：`0-9a-zA-Z`
 
-### storer 初始化
+### 2.2 本地计算
 
-如果与可执行文件同级目录下存在 `config.toml`，则直接读取：
-
-- `role = whole | storer`
-- `claim_code`
-- 存储文件路径
-- `whole.listen_addr` 或 `storer.gateway_addr + gateway_token`
-
-如果 `config.toml` 不存在，则进入初始化流程：
-
-1. 交互输入 `role`
-2. 交互输入存储文件路径
-3. 按 `role` 输入：
-   - `whole.listen_addr`
-   - 或 `storer.gateway_addr + storer.gateway_token`
-4. 自动生成 `claim_code`
-5. 写回 `config.toml`
-6. 仅在初始化时向终端打印一次完整领盘码
-
-第一阶段不要求用户手动输入领盘码，也不要求用户手动生成 `disk_id`。
-
-### gateway 初始化
-
-`gateway` 也使用与可执行文件同级目录下的 `config.toml`。
-
-如果 `config.toml` 不存在，则进入初始化流程：
-
-1. 交互输入 `client.listen_addr`
-2. 交互输入 `storer.listen_addr`
-3. 自动生成 `gateway_token`
-4. 写回 `config.toml`
-5. 仅在初始化时向终端打印一次完整 `gateway_token`
-
-## 2. 路由缓存来源
-
-当前默认采用 `storer -> gateway` 注册方式。
-
-`storer` 启动后向 `gateway` 注册：
-
-- `gateway_token`
-- `disk_id`
-- `auth_verifier`
-- `disk_size_bytes`
-- `read_only`
-- `max_io_bytes`
-- `session_ttl_seconds`
-
-`gateway` 将其放入本地路由缓存，用于后续认证和转发。
-
-这条缓存链路的目的只有两个：
-
-1. 快速判断某个 `disk_id` 是否存在真实目标
-2. 在 `gateway` 本地完成 `proof` 校验，避免把假盘和错码压力推给 `storer`
-
-其中：
+当前 `algo_version = 1`：
 
 ```text
 auth_verifier = SHA512(claim_code_bytes)
+proof = HMAC-SHA512(key = auth_verifier, msg = salt_bytes)
 ```
 
-`gateway` 不保存完整 `claim_code`。
+其中：
 
-当前口径：
+- `auth_verifier` 固定 `64` 字节
+- `proof` 固定 `64` 字节
+- 线上传输的是原始字节，不是 hex 字符串
 
-- `claim_code` 仍然只由存储侧持有
-- `gateway_token` 是 `storer <-> gateway` 控制面凭据
-- 注册成功后，`gateway <-> storer` 不重新设计第二套数据面命令，而是复用 `SessionOpen / ReadAt / WriteAt / Ping / Close`
-- 两个可执行文件都按“可执行文件所在目录的 `config.toml`”取配置
-- `role = storer` 当前只在启动时尝试连接一次 `gateway`，不做自动重连
+## 3. route 缓存来源
 
-## 3. 认证协议
+当前采用：
 
-当前 `client-and-gateway` 业务协议必须拆成三段语义：
+```text
+storer -> gateway 注册
+```
 
-1. 认证阶段
-2. 会话建立阶段
-3. 数据面阶段
+注册后，`gateway` 至少缓存：
 
-其中认证阶段只包含：
+- `disk_id`
+- `auth_verifier`
+- `route_connection`
+- `disk_size_bytes`
+- `read_only`
+- `max_io_bytes`
 
-1. `AuthStart`
-2. `AuthFinish`
+`gateway` 不保存原始 `claim_code`。
 
-### AuthStart
+## 4. challenge 模型
 
-客户端发送：
+### 4.1 AuthStart
+
+client 发送：
 
 ```text
 AuthStartRequest {
@@ -103,14 +66,7 @@ AuthStartRequest {
 }
 ```
 
-`gateway` 行为：
-
-1. 接收 `disk_id`
-2. 查询本地路由缓存
-3. 无论是真盘还是假盘，都生成一份 challenge 返回
-4. 不在这一阶段暴露认证结果
-
-服务端返回：
+gateway 返回：
 
 ```text
 AuthStartResponse {
@@ -121,29 +77,20 @@ AuthStartResponse {
 }
 ```
 
-约束：
+### 4.2 challenge_token 约束
 
-- `salt` 使用固定长度随机字节，当前建议 `16B`
-- `salt_bytes` 为原始 `16` 字节随机盐
-- 真盘和假盘的返回字段完全一致
-- 真盘和假盘的返回路径都不触发 `storer` 数据面
-
-### challenge_token
-
-`challenge_token` 是一次认证实例的唯一标识，不是 `disk_id` 的附属状态。
-
-必须满足：
+challenge token 必须满足：
 
 - 每次 `AuthStart` 生成新的 token
-- 同一个 `disk_id` 的两个不同连接拿到的 token 必须不同
-- token 绑定当前连接实例，不绑定源 IP
+- 同一 `disk_id` 的不同 connection 拿到的 token 必须不同
+- token 绑定当前 connection
 - token 自带过期信息
-- token 对客户端不透明
+- token 对 client 不透明
 
 建议内容：
 
 ```text
-challenge_token = Seal({
+Seal({
   disk_id,
   salt,
   issued_at,
@@ -152,20 +99,17 @@ challenge_token = Seal({
 })
 ```
 
-说明：
+并发约束：
 
-- `conn_nonce`：网关内部连接实例标识
-- `Seal(...)`：使用网关私有密钥生成客户端不可见的 opaque token，并附带完整性校验
+- 同一条 connection 上同时最多只允许一个 challenge 驱动的 auth 过程
+- auth 过程结束前，不允许同 connection 再开启新的 auth 过程
+- auth 过程结束前，也不允许同 connection 并发进入 `SessionOpen`
 
-这允许我们做到：
+## 5. AuthFinish 与 auth_id
 
-- 不维护 `pending[disk_id]`
-- 同一个 `disk_id` 可并发认证
-- 假盘不需要分配完整的 challenge 临时表
+### 5.1 AuthFinish
 
-### AuthFinish
-
-客户端本地计算：
+client 本地计算：
 
 ```text
 auth_verifier = SHA512(claim_code_bytes)
@@ -181,130 +125,151 @@ AuthFinishRequest {
 }
 ```
 
-`gateway` 行为：
+### 5.2 gateway 成功路径
 
-1. 校验 `challenge_token` 签名
-2. 校验 `challenge_token` 是否过期
-3. 校验 token 是否属于当前连接实例
-4. 根据 token 中的 `disk_id` 查询本地路由缓存
-5. 若命中真实盘，使用缓存的 `auth_verifier` 本地校验 `proof`
-6. 若未命中真实盘，直接进入统一失败路径
-7. `proof` 通过后，只在 `gateway` 内部标记“当前 connection 已对该 `disk_id` 完成认证”
-8. 不向 client 暴露 `storer` 地址
+gateway 依次执行：
 
-硬约束：
-
-- 认证成功不等于会话已建立
-- 认证成功不创建 `DiskSession`
-- 认证成功只表示当前 connection 获得“申请打开该盘会话”的资格
-
-### 失败路径
-
-所有 `AuthFinish` 失败统一走同一套失败语义：
-
-- 真盘但领盘码错误
-- 假盘
-- 过期 token
-- token 签名非法
-- token 不属于当前连接
-- `proof` 格式非法
-
-统一处理：
-
-1. 返回通用认证失败
-2. 随机延迟 `2-5s`
-3. 清理当前未认证连接上下文
-
-这里的关键要求：
-
-- 不允许通过微小延迟差异稳定区分真盘和假盘
-- 延迟只加在 `AuthFinish` 失败路径
-- `AuthStart` 保持快且统一
-
-## 4. 假盘处理口径
-
-假盘必须完整走外部流程，但不进入真实资源路径。
-
-当前口径：
-
-- `AuthStart`：假盘照样返回 challenge
-- `AuthFinish`：假盘照样收 `proof`
-- 校验阶段不接触 `storer`
-- 失败后按统一 `2-5s` 路径清理
-
-这样做的目的只有两个：
-
-1. 不让外部轻易判断某个 `disk_id` 是否真实存在
-2. 不让假盘请求消耗 `storer` 资源
-
-## 5. 会话建立协议
-
-认证通过后，client 不改连到 `storer`，而是继续留在当前 `gateway` 连接上。
-
-下一步由 client 显式发送：
-
-```text
-SessionOpenRequest {
-  disk_id
-}
-```
-
-`gateway` 行为：
-
-1. 校验当前 connection 是否已通过该 `disk_id` 认证
-2. 根据路由缓存找到目标 `storer`
-3. 把“打开这个盘会话”的请求交给 `storer`
-4. 由 `storer` 根据打开策略决定是否允许打开
-5. 若允许，则在内部建立 `gateway_session_id -> (route_connection, storer_session_id)` 映射
-6. 分配新的 `gateway_session_id`
-7. 把会话元数据返回给 client
+1. 校验 challenge token 完整性
+2. 校验 challenge 是否过期
+3. 校验 challenge 是否属于当前 connection
+4. 根据 token 中的 `disk_id` 查 route 缓存
+5. 使用 route 缓存中的 `auth_verifier` 校验 `proof`
+6. 成功后分配新的 `auth_id`
 
 返回：
 
 ```text
-SessionOpenResponse {
-  session_id
-  disk_size_bytes
-  read_only
-  max_io_bytes
-  session_ttl_seconds
+AuthFinishResponse {
+  auth_id
 }
 ```
 
-说明：
+### 5.3 auth_id 的定义
 
-- `session_id` 是 client 后续全部数据面请求的唯一盘会话标识
-- `disk_size_bytes`、`read_only`、`max_io_bytes` 是 `NetworkMedia` 构造所需最小元数据
-- `gateway` 内部持有 `gateway_session_id -> (route_connection, storer_session_id)` 映射
-- client 不持有 `storer_addr`
-- 只有这一步成功后，client 才能构造 `DiskSession`
-- 如果 `SessionOpen` 返回 busy，client 可以保留当前连接与认证资格，稍后继续重试 `SessionOpen`
+`auth_id` 是一个 connection-scoped 的显式授权对象。
 
-## 6. 路由与转发边界
+它至少绑定：
 
-`gateway` 在第一版同时负责：
+- `auth_id`
+- `connection_id`
+- `disk_id`
+- `issued_at`
+- `expire_at`
+- `state`
 
-- 认证
-- 盘路由
-- client 数据面请求转发
-- client 响应回传
+### 5.4 auth_id 的意义
 
-转发边界：
+`auth_id` 只表示：
 
-- client 的 `ReadAt / WriteAt / Ping / Close` 全部先到 `gateway`
-- `gateway` 按 `gateway_session_id` 找到对应 `(route_connection, storer_session_id)`
-- `gateway` 再把请求转发给目标 `storer`
-- `storer` 返回结果后，由 `gateway` 回给原 client
+- 当前 connection 拥有对某个 `disk_id` 申请打开 session 的资格
 
-`gateway` 不缓存盘数据，不承担真实读写语义，只承担会话与请求路由。
+它不表示：
 
-## 7. 多登录口径
+- 会话已打开
+- session 已分配
+- metadata 已下发
 
-认证层不处理“同一 `disk_id` 是否允许多登录”的业务决策。
+## 6. auth_id 生命周期
 
-当前口径：
+`auth_id` 状态建议固定为：
 
-- 两个连接如果都持有正确领盘码，都可以通过认证
-- 两个连接都可以继续发 `SessionOpen`
-- 但能不能真的拿到会话，不由认证层决定
-- 认证成功后谁有操作权、是否共享、是否排它、是否只读，由 `storer` 在 `SessionOpen` 阶段决定
+```text
+granted
+  -> consumed
+  -> expired
+  -> revoked
+```
+
+### 6.1 consumed
+
+`SessionOpen(auth_id)` 成功后，该 `auth_id` 被消费。
+
+### 6.2 expired
+
+认证成功后长时间未消费，应自动过期。
+
+### 6.3 revoked
+
+以下情况应直接撤销：
+
+- connection 死亡
+- route 消失
+- gateway 主动清理
+
+## 7. 认证失败口径
+
+以下失败统一视为认证失败，不关闭 connection：
+
+- 假盘
+- 真盘但领盘码错误
+- challenge 过期
+- challenge 非法
+- challenge 不属于当前 connection
+- proof 格式非法
+
+失败路径建议：
+
+1. 返回统一失败语义
+2. 随机延迟 `2..5s`
+3. 清理本次 challenge 上下文
+
+## 8. SessionOpen 与 route
+
+### 8.1 输入
+
+会话建立不再直接以 `disk_id` 为输入，而以：
+
+```text
+SessionOpen(auth_id)
+```
+
+### 8.2 gateway 行为
+
+gateway 执行：
+
+1. 校验 `auth_id` 是否存在
+2. 校验 `auth_id` 是否属于当前 connection
+3. 校验 `auth_id` 是否过期
+4. 从 `auth_id` 还原 `disk_id`
+5. 用 `disk_id` 查找 route
+6. 向目标 storer 发起 `SessionOpen`
+7. 成功时分配 `gateway_session_id`
+
+并发约束：
+
+- 同一条 connection 上同时最多只允许一个 `SessionOpen` 过程
+- `SessionOpen` 过程未结束前，不允许该 connection 并发开启新的 auth 过程
+
+### 8.3 busy 失败
+
+如果 `SessionOpen` 因 busy 失败：
+
+- connection 保持存活
+- `auth_id` 仍然有效
+- client 可以在未过期前重试
+
+## 9. route 唯一性
+
+当前正式口径固定为：
+
+- 同一时刻一个 `disk_id` 只能对应一个活跃 route
+
+如果不同 storer connection 尝试注册相同 `disk_id`：
+
+- 直接拒绝后到者
+- 不允许隐式覆盖旧 route
+
+## 10. route 失效后的传播
+
+当 route connection 断线或 route heartbeat 超时后，gateway 必须：
+
+1. 撤销该 route
+2. 撤销该 route 名下全部未消费 `auth_id`
+3. 关闭该 route 名下全部 session
+4. 向仍在线的 client 发送 `SessionCloseNotice`
+
+这样可避免：
+
+- 悬空授权对象
+- 悬空 session
+- client 侧迟迟不知道该盘已经失效

@@ -2,255 +2,221 @@
 
 ## 1. 当前范围
 
-当前第一版只保留最小块设备能力：
+当前第一版数据面只保留最小闭环能力：
 
-- `AuthStart`
-- `AuthFinish`
-- `SessionOpen`
+- `SessionDescribe`
 - `ReadAt`
 - `WriteAt`
 - `Close`
-- `Ping`
 
-其中：
+另外保留一个 connection 级命令：
 
-- `AuthStart` / `AuthFinish` 属于认证阶段
-- `SessionOpen` 属于会话建立阶段，是认证后打开盘会话的唯一入口
-- `ReadAt / WriteAt / Close / Ping` 属于数据面最小命令
+- `ConnHeartbeat`
+
+当前正式口径中：
+
+- `ConnHeartbeat` 不属于 session 数据面
+- `SessionDescribe` 属于 session 建立后的 metadata 查询
+- `ReadAt / WriteAt / Close` 属于真正的数据面
+
+## 2. 进入数据面的前置条件
+
+进入数据面前，必须已经完成以下链路：
+
+1. bootstrap 完成
+2. connection 建立
+3. `AuthStart / AuthFinish` 成功
+4. 获得有效 `auth_id`
+5. `SessionOpen(auth_id)` 成功
+6. 获得有效 `session_id`
+7. `SessionDescribe(session_id)` 获得 metadata
 
 硬约束：
 
-- 认证成功不等于会话已建立
-- 认证成功只授予“申请打开该盘会话”的资格
-- 只有 `SessionOpen` 成功后，才能创建 `DiskSession`
+- 认证成功不等于可直接读写
+- `auth_id` 不等于 `session_id`
+- `SessionOpen` 不直接返回 metadata
+- auth 过程与 `SessionOpen` 过程在同一 connection 上必须互斥
+- 同一 connection 上 auth 过程最多一个、`SessionOpen` 过程最多一个
 
-第一版不额外定义 `AuthGrant` 给 client 中转。
+## 3. SessionDescribe
 
-认证资格当前固定为 connection-scoped：
+### 3.1 作用
 
-- 不向 client 暴露额外 `auth_id`
-- `SessionOpen` busy 失败后，允许 client 在同一连接上继续重试 `open`
-- 是否继续保有资格，由连接是否存活决定
+在已打开 session 上查询构造 `NetworkMedia` 所需的最小元数据。
 
-## 2. 协议位置
+### 3.2 返回最小字段
 
-所有业务消息都包装在传输层 payload 中。
-
-传输层只负责拆帧；业务层负责：
-
-- 命令语义
-- 请求和响应配对
-- `session_id` 路由
-- 偏移和长度约束
-- 错误码语义
-
-## 3. 第一版请求头职责
-
-第一版业务层固定使用：
-
-```text
-header {
-  op_code
-  request_id
-  session_id
-}
-```
-
-约束：
-
-- `request_id` 用于并发请求配对
-- 响应允许乱序返回
-- `session_id` 由 `SessionOpen` 成功后获得
-- 认证前命令不带 `session_id`
-
-## 4. 最小命令语义
-
-### AuthStart
-
-用途：
-
-- 提交 `disk_id`
-- 换取 challenge
-
-### AuthFinish
-
-用途：
-
-- 提交基于领盘码和 salt 计算出的 `proof`
-- 让 `gateway` 完成认证
-
-### SessionOpen
-
-用途：
-
-- 在当前 `gateway` 连接上打开一个远端盘会话
-- 由 `storer` 决定是否允许打开，以及最终会话属性
-- 第一版固定为单盘独占打开；若该盘已有其他活跃会话，则拒绝新的 `SessionOpen`
-
-成功返回最少这些字段：
-
-- `session_id`
 - `disk_size_bytes`
 - `read_only`
 - `max_io_bytes`
-- `session_ttl_seconds`
 
-这几个字段是 `NetworkMedia` 构造所需最小元数据。
+这几个字段构成当前 `NetworkMedia` 的最小依赖。
 
-### ReadAt
+## 4. ReadAt
 
-用途：
+### 4.1 输入
 
-- 从 `session_id` 对应的远端盘读取指定范围数据
-
-最小语义字段：
-
+- `session_id`
 - `offset`
 - `length`
 
-响应：
+### 4.2 输出
 
 - 成功时返回完整数据段
 - 失败时返回统一错误
 
-### WriteAt
+## 5. WriteAt
 
-用途：
+### 5.1 输入
 
-- 向 `session_id` 对应的远端盘写入指定范围数据
-
-最小语义字段：
-
+- `session_id`
 - `offset`
 - `length`
 - `payload`
 
-响应：
+### 5.2 输出
 
-- 成功时只表示本次写入已被远端接受
+- 成功时表示远端已接受本次写入
 - 失败时返回统一错误
 
-### Ping
+## 6. Close
 
-用途：
+### 6.1 作用
 
-- 会话保活
-- 探测连接和 session 是否仍有效
+主动关闭一个 session。
 
-### Close
+### 6.2 约束
 
-用途：
+- `Close` 只关闭目标 session
+- 不直接关闭整条 connection
+- 关闭后再次对该 `session_id` 读写应返回 `ERR_SESSION_UNAVAILABLE`
 
-- 主动关闭 `session_id`
+## 7. ConnHeartbeat
 
-约束：
+### 7.1 作用
 
-- `Close` 只关闭目标 `DiskSession`
-- 不直接关闭整条 `GatewayConnection`
+- 维持 client-gateway connection 存活
+- 检查连接是否仍有效
 
-## 5. 大块 I/O 约束
+### 7.2 边界
 
-如果一次盘操作编码后超过单帧上限，必须由业务层主动拆分成多个完整请求。
+它不代表某个盘会话保活。  
+当前正式模型中，client 不再对每个 session 单独做 heartbeat。
 
-规则：
+## 8. 大块 I/O 约束
 
-1. 每个拆分请求都带独立 `request_id`
-2. 每个拆分请求都带完整 `session_id + offset + length`
-3. 对端只按单帧消息处理，不承担跨帧重组责任
-
+传输层单帧 payload 最大 `65536` 字节。  
 因此：
 
-- `max_io_bytes` 必须小于传输层 payload 上限
-- `NetworkMedia` 发起 `read/write` 前必须先按 `max_io_bytes` 切片
+- `max_io_bytes` 必须小于 transport 上限扣除业务头开销后的安全值
+- 大块 I/O 必须由 `NetworkMedia` 主动拆片
 
-## 6. Gateway 转发语义
+拆片规则：
 
-第一版 `gateway` 同时承担数据面转发。
+1. 每个子请求带独立 `request_id`
+2. 每个子请求带完整 `session_id + offset + length`
+3. 对端只处理单帧业务请求，不承担跨帧业务重组
 
-转发语义：
+## 9. gateway 转发语义
 
-1. client 发送带 `session_id` 的业务请求到 `gateway`
-2. `gateway` 根据本地 `gateway_session_id -> (route_connection, storer_session_id)` 映射定位目标
-3. `gateway` 把请求转发给目标 `storer`
-4. `storer` 返回结果
-5. `gateway` 带回原始 `request_id` 回给 client
+当前第一版 `gateway` 同时承担数据面转发。
+
+### 9.1 SessionDescribe
+
+1. client 对 `session_id` 发 `SessionDescribe`
+2. gateway 查 session 映射
+3. 转发到对应 storer session
+4. storer 返回 metadata
+5. gateway 回给 client
+
+### 9.2 ReadAt / WriteAt / Close
+
+1. client 对 `gateway_session_id` 发请求
+2. gateway 查表得到 `(route_connection, storer_session_id)`
+3. gateway 改写为 storer 侧 `request_id + session_id`
+4. storer 返回结果
+5. gateway 恢复 client 侧 `request_id`
+6. gateway 回给 client
 
 要求：
 
 - `gateway` 不缓存盘数据
-- `gateway` 不改变 `ReadAt / WriteAt` 的成功失败语义
-- `gateway` 只负责会话查找、请求转发、响应回传
-- `gateway <-> storer` 复用同一套数据面业务语义，但 `request_id` 和 `session_id` 由 gateway 做本地映射，不是原始字节盲透传
+- `gateway` 不改变成功/失败语义
+- `gateway` 只负责映射、路由、转发、回传
 
-## 7. 错误语义
+并发补充：
 
-第一版必须统一的错误类型至少包括：
+- 上述“单 connection 单 auth 过程、单 `SessionOpen` 过程、二者互斥”的约束只针对建会话前阶段
+- 已打开 session 上的 `SessionDescribe / ReadAt / WriteAt / Close` 允许并发复用同一条 connection
 
-- 未认证
-- session 不存在
-- session 过期
-- 超读写越界
-- 只读盘写入
-- 远端盘 I/O 失败
-- 请求格式非法
+## 10. 错误语义
+
+第一版必须统一至少以下错误：
+
+- `ERR_AUTH_ID_INVALID`
+- `ERR_AUTH_ID_EXPIRED`
+- `ERR_SESSION_UNAVAILABLE`
+- `ERR_SESSION_BUSY`
+- `ERR_IO_OUT_OF_RANGE`
+- `ERR_IO_TOO_LARGE`
+- `ERR_IO_READ_ONLY`
+- `ERR_IO_FAILED`
 
 边界原则：
 
-- 协议格式错误由边界入口直接拒绝
-- `NetworkMedia` 只处理已经成型的业务错误
-- `Media` 层不重复做网络协议级判断
+- 协议结构错误由 connection 边界直接拒绝
+- 数据面只处理已经成立的业务对象错误
+- `NetworkMedia` 不重复做网络协议级判断
 
-## 8. NetworkMedia 第一版接入方式
+## 11. NetworkMedia 接入方式
 
-`NetworkMedia` 第一版采用最小、直接的阻塞实现：
+`NetworkMedia` 第一版采用最小直接实现：
 
 - 构造时保存：
   - 已打开的 `DiskSession`
   - `disk_size_bytes`
   - `read_only`
   - `max_io_bytes`
-- `read_locked()` 串行发送一个或多个 `ReadAt`
-- `write_locked()` 串行发送一个或多个 `WriteAt`
-- 不做本地写缓存
-- 不做断线重连
-- 不做自动重试
+- `read_locked()` 串行发起一个或多个 `ReadAt`
+- `write_locked()` 串行发起一个或多个 `WriteAt`
 
-职责边界：
+它不负责：
 
-- `NetworkMedia` 不负责认证
-- `NetworkMedia` 不负责连接管理
-- `NetworkMedia` 不负责 transport
-- `NetworkMedia` 不负责 `request_id`
-- `NetworkMedia` 不负责 `SessionOpen`
-- `NetworkMedia` 只绑定一个已经完成的 `DiskSession`
+- 认证
+- 建连
+- 心跳
+- 自动重连
+- 自动重新开会话
 
-与当前 `BackendRust::Media` 口径对齐：
+## 12. 连接与 session 失效口径
 
-- `read_locked()` 返回 `Ok(())` 时必须已经拿到完整数据
-- `write_locked()` 返回 `Ok(())` 时表示远端已经接受并承担该次写入的一致性责任
+### 12.1 connection 失效
 
-## 9. 连接失效口径
+一条 `GatewayConnection` 失效时：
 
-第一版收成最硬的单一路径：
+- 该连接下全部 session 一起失效
+- 相关数据面请求全部失败
 
-- 一条 `GatewayConnection` 断开时，其下全部 `DiskSession` 一起失效
-- 失效后的 `NetworkMedia` 读写直接失败
-- 不自动补连
-- 不自动重建会话
+### 12.2 route 失效
 
-恢复策略属于上层宿主动作，不属于 `NetworkMedia` 自动行为。
+一条 storer route 失效时：
 
-## 10. 第一版最小验收
+- 该 route 下全部 session 一起失效
+- gateway 应主动发 `SessionCloseNotice`
+
+### 12.3 session close notice
+
+收到 `SessionCloseNotice` 后，client 必须把对应 session 视为已关闭。  
+后续对该 `session_id` 的任何读写都不应再继续推进。
+
+## 13. 当前最小验收
 
 第一版只验收以下闭环：
 
-1. client 使用 `claim_code` 成功完成认证
-2. `SessionOpen` 成功返回会话元数据
-3. 同一条 `GatewayConnection` 上可并发持有多个 `DiskSession`
-4. `NetworkMedia` 可完成真实 `read/write`
-5. 连接断开后，相关 `DiskSession` 全部失效
-6. `tauri-client` 可完成网络盘的添加、挂载、拔出、重挂载
-
-当前还额外通过独立协议联调工具验证：
-
-7. client 在同一连接上可完成 `auth -> open(busy) -> 等待 -> open(success)` 链路
+1. client 可通过 `SessionDescribe` 获得构造 `NetworkMedia` 的最小 metadata
+2. `NetworkMedia` 可完成真实 `ReadAt / WriteAt`
+3. 一个 `GatewayConnection` 上可并发持有多个 `DiskSession`
+4. connection 断开后，其下全部 session 失效
+5. route 断开后，gateway 可定向通知相关 client session 关闭
+6. 建会话前阶段满足“单 auth 过程、单 `SessionOpen` 过程、二者互斥”，数据面阶段保持可并发

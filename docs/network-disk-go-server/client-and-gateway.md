@@ -2,129 +2,80 @@
 
 ## 1. 文档定位
 
-本文档是 `network-disk-go-server` 第一版 `client <-> gateway` 业务层协议 SDK 文档。
+本文档定义 `client <-> gateway` 正式业务协议。
 
-作用：
+本文档只描述 bootstrap 完成后的业务层，不重复定义 transport 帧格式。  
+`Hello` 与可选 TLS 属于 bootstrap，见 [transport.md](transport.md) 的分层说明。
 
-- 定义 `client <-> gateway` 的正式业务层二进制协议
-- 固定字段布局、字节序、取值范围、错误码和时序要求
-- 作为后续 `GatewayConnection`、`ConnectionAuthenticator`、`SessionOpener`、`DiskSession`、`NetworkMedia` 与 `gateway` 外部接口实现的唯一协议依据
+本文档高于：
 
-优先级：
+- `overview.md`
+- `auth-routing.md`
+- `data-plane.md`
 
-- 本文档高于 `overview.md`、`auth-routing.md`、`data-plane.md` 中的叙述性描述
-- 本文档不替代 `transport.md`
-- 若其他文档与本文档冲突，以本文档为准，并应同步修正其他文档
+若其他文档与本文档冲突，以本文档为准，并应同步修正其他文档。
 
-当前范围：
+## 2. 当前正式主链
 
-- 只覆盖第一版最小闭环
-- 只覆盖 `client <-> gateway` 业务层协议面
-- 默认运行在 [transport.md](transport.md) 定义的传输层之上
-- 不覆盖未来分布式存储、复制、分片、元数据协调
-
-## 2. 主路径与边界
-
-唯一主路径：
+当前正式主链固定为：
 
 ```text
-client <-> gateway <-> storer
+TCP connected
+  -> Hello
+  -> optional TLS
+  -> transport ready
+  -> connection established
+  -> AuthStart
+  -> AuthFinish
+  -> auth_id
+  -> SessionOpen(auth_id)
+  -> session_id
+  -> SessionDescribe(session_id)
+  -> ReadAt / WriteAt / Close
 ```
 
-边界约束：
+关键约束：
 
-- `client` 只连接 `gateway`
-- `gateway` 负责认证、路由、转发
-- `storer` 持有真实存储介质并执行块读写
-- 认证成功后，`client` 不直接连接 `storer`
-- `gateway` 内部维护 `gateway_session_id -> (route_connection, storer_session_id)` 映射
+- `Hello` 不属于本文档
+- TLS 握手不属于本文档
+- 认证成功后必须产生显式 `auth_id`
+- `SessionOpen` 只负责打开会话
+- metadata 必须通过 `SessionDescribe` 获取
 
-当前 client 侧必须明确以下对象边界：
+## 3. 业务语义分层
 
-- `GatewayConnection`：connection 复用核心
-- `ConnectionAuthenticator`：认证阶段模块
-- `SessionOpener`：会话建立阶段模块
-- `DiskSession`：已打开会话对象
-- `NetworkMedia`：只绑定 `DiskSession` 的 `Media` 适配层
-
-协议边界拆分：
-
-- 本文档：`client <-> gateway` 业务层协议
-- [transport.md](transport.md)：通用传输层拆帧协议
-- [gateway-and-storer.md](gateway-and-storer.md)：`gateway <-> storer` 注册与数据面复用规则
-
-当前口径：
-
-- `gateway <-> storer` 复用 `SessionOpen / ReadAt / WriteAt / Ping / Close` 业务语义
-- 但两侧仍是不同协议边界，`request_id` 和 `session_id` 由 `gateway` 本地改写与映射
-- `client` 永远不直接看到 `storer_session_id`
-
-## 3. 版本与兼容策略
-
-### 3.1 协议版本
-
-本文档定义：
-
-- 协议名：`YumeDisk Client-and-Gateway Business Protocol`
-- 协议版本：`v1`
-- 版本号字段：`protocol_version = 1`
-
-### 3.2 兼容策略
-
-第一版不保留长期双轨兼容。
-
-约束：
-
-- `client` 与 `gateway` 的 `protocol_version` 必须一致
-- 收到未知版本时，直接返回 `ERR_PROTOCOL_VERSION`
-- 第一版不协商降级版本
-
-## 3.3 业务语义分层
-
-当前 `client-and-gateway` 协议虽然属于同一份业务协议，但语义上必须拆成三段：
+当前正式协议必须拆成四段：
 
 1. 认证层
-2. 会话建立层
-3. 数据面层
+2. 授权层
+3. 会话层
+4. metadata + 数据面层
 
-硬约束：
+其中：
 
-- 认证成功不等于会话已建立
-- 认证成功只授予“申请打开该盘会话”的资格
-- 只有会话建立层成功后，才能创建 `DiskSession`
+- 认证层：`AuthStart / AuthFinish`
+- 授权层：`auth_id`
+- 会话层：`SessionOpen / SessionCloseNotice`
+- metadata + 数据面层：`SessionDescribe / ReadAt / WriteAt / Close`
+
+并发与互斥规则固定如下：
+
+- 一个 connection 同时最多只允许一个 auth 过程
+- 一个 connection 同时最多只允许一个 `SessionOpen` 过程
+- auth 过程与 `SessionOpen` 过程互斥，不能同时存在
+- 已打开 session 上的数据面请求允许并发
 
 ## 4. 基础约定
 
-### 4.1 传输层引用
+### 4.1 transport 引用
 
-本文档所有业务消息都承载在 [transport.md](transport.md) 定义的单帧 payload 中。
-
-这里不重复定义传输层长度头、拆帧和收包流程，只引用以下结果：
-
-- 单帧 payload 实际长度范围：`1..65536`
-- 一条业务消息必须完整落在一个 transport frame 的 payload 中
-- 传输层不负责业务重组
+所有业务消息都承载在 [transport.md](transport.md) 定义的单帧 payload 中。
 
 ### 4.2 字节序
 
-除特别说明外，所有整数都使用 `big-endian`。
+除特别说明外，所有整数使用 `big-endian`。
 
-### 4.3 字符与编码
-
-#### 固定 ASCII 字段
-
-| 名称 | 长度 | 编码 | 说明 |
-| --- | --- | --- | --- |
-| `disk_id` | 16 字节 | ASCII | 仅允许 `0-9a-zA-Z` |
-
-#### 可变字节字段
-
-| 类型名 | 编码形式 | 长度字段 | 说明 |
-| --- | --- | --- | --- |
-| `bytes_u16` | `u16be len + bytes[len]` | `u16be` | 用于 opaque token 等原始字节 |
-| `utf8_u16` | `u16be len + utf8[len]` | `u16be` | 预留给未来文本字段；v1 外部协议不强依赖 |
-
-### 4.4 基础数值类型
+### 4.3 基础类型
 
 | 类型 | 字节数 | 范围 |
 | --- | --- | --- |
@@ -133,289 +84,143 @@ client <-> gateway <-> storer
 | `u32` | 4 | `0..4294967295` |
 | `u64` | 8 | `0..18446744073709551615` |
 
-### 4.5 保留字段
+### 4.4 字符与字节字段
 
-文中标为 `reserved` 的字段：
+| 名称 | 形式 | 说明 |
+| --- | --- | --- |
+| `disk_id` | `ASCII[16]` | 只允许 `0-9a-zA-Z` |
+| `bytes_u16` | `u16be len + bytes[len]` | opaque token / 原始字节 |
+
+### 4.5 保留字段
 
 - 发送方必须写 `0`
 - 接收方必须校验为 `0`
-- 非 `0` 视为 `ERR_BAD_BODY` 或 `ERR_BAD_HEADER`
+- 非 `0` 视为协议错误
 
-## 5. 认证计算口径
+## 5. 通用头
 
-`claim_code` 不直接上网传输，仅用于本地计算认证材料。
+所有业务 payload 以固定头开始。
 
-### 5.1 领盘码格式
+### 5.1 布局
 
-| 字段 | 长度 | 说明 |
-| --- | --- | --- |
-| `disk_id` | 16 字符 | 领盘码前 16 字符 |
-| `claim_secret` | 64+ 字符 | 领盘码剩余部分 |
-| `claim_code` | 80+ 字符 | `disk_id + claim_secret` |
-
-字符集：
-
-```text
-0-9 a-z A-Z
-```
-
-### 5.2 认证算法 v1
-
-`algo_version = 1` 对应算法：
-
-```text
-auth_verifier = SHA512(claim_code_bytes)
-proof = HMAC-SHA512(key = auth_verifier, msg = salt_bytes)
-```
-
-说明：
-
-- `claim_code_bytes` 为 `claim_code` 的原始 ASCII 字节
-- `auth_verifier` 长度固定为 `64` 字节
-- `proof` 长度固定为 `64` 字节
-- `proof` 在线上按原始 `64` 字节传输，不传十六进制字符串
-- `gateway` 只需要缓存 `auth_verifier`，不需要保存原始 `claim_code`
-
-## 6. payload 通用头
-
-每个 payload 都以固定头开始。
-
-### 6.1 通用头布局
-
-固定头总长度：
+固定长度：
 
 ```text
 24 bytes
 ```
 
-布局：
-
 | 偏移 | 长度 | 字段 | 类型 | 说明 |
 | --- | --- | --- | --- | --- |
-| `0` | 1 | `protocol_version` | `u8` | 当前固定为 `1` |
-| `1` | 1 | `header_len` | `u8` | 当前固定为 `24` |
+| `0` | 1 | `protocol_version` | `u8` | 当前固定 `1` |
+| `1` | 1 | `header_len` | `u8` | 当前固定 `24` |
 | `2` | 1 | `op_code` | `u8` | 命令码 |
-| `3` | 1 | `flags` | `u8` | 方向与控制位 |
-| `4` | 2 | `status_code` | `u16` | 请求时固定为 `0` |
-| `6` | 2 | `reserved` | `u16` | 固定为 `0` |
+| `3` | 1 | `flags` | `u8` | 响应/notice 等标志 |
+| `4` | 2 | `status_code` | `u16` | 请求时固定 `0` |
+| `6` | 2 | `reserved` | `u16` | 固定 `0` |
 | `8` | 8 | `request_id` | `u64` | 请求配对标识 |
-| `16` | 8 | `session_id` | `u64` | 会话标识；未开会话时为 `0` |
+| `16` | 8 | `session_id` | `u64` | session-scoped 命令时使用 |
 
-### 6.2 通用头规则
+### 5.2 flags
 
-#### `protocol_version`
-
-- 请求和响应都必须为 `1`
-- 非 `1` 直接返回 `ERR_PROTOCOL_VERSION`
-
-#### `header_len`
-
-- 第一版固定为 `24`
-- 非 `24` 直接返回 `ERR_BAD_HEADER`
-
-#### `flags`
-
-当前只定义 1 个 bit：
+当前定义：
 
 | bit | 名称 | 含义 |
 | --- | --- | --- |
-| `0` | `FLAG_RESPONSE` | `1` 表示响应，`0` 表示请求 |
+| `0` | `FLAG_RESPONSE` | 响应包 |
+| `1` | `FLAG_NOTICE` | notice 包 |
 
-其他 bit：
+约束：
 
-- 发送方必须写 `0`
-- 接收方发现未知 bit 被置位时，返回 `ERR_BAD_HEADER`
+- request：两个 bit 都为 `0`
+- response：只允许 `FLAG_RESPONSE = 1`
+- notice：只允许 `FLAG_NOTICE = 1`
+- 未知 bit 置位视为协议错误
 
-#### `status_code`
+### 5.3 request_id
 
-- 请求包必须为 `0`
-- 响应包：
-  - `0` 表示成功
-  - 非 `0` 表示失败
+- request 必须为非 `0`
+- 同一 connection 上在飞 request 必须唯一
+- response 必须原样回显 request 的 `request_id`
+- notice 的 `request_id` 固定为 `0`
 
-#### `request_id`
+### 5.4 session_id
 
-- `0` 保留，禁止使用
-- 同一条 TCP 连接上，所有“仍在飞行中的请求”必须唯一
-- 请求方可在收到响应后重用旧 `request_id`
-- 响应方必须原样回显请求的 `request_id`
+- 非 session-scoped 请求固定为 `0`
+- `SessionOpen` 请求固定为 `0`
+- `SessionOpen` 成功响应在头部返回新分配 `session_id`
+- session-scoped 请求必须带有效非 `0` `session_id`
+- notice 若与某个 session 绑定，应在头部写该 `session_id`
 
-#### `session_id`
-
-- `AuthStart` / `AuthFinish` / `SessionOpen` 请求固定为 `0`
-- `SessionOpen` 成功响应使用新分配的 `session_id`
-- 其他数据面请求必须带有效非 `0` `session_id`
-
-### 6.3 头部示意图
-
-```text
- 0        1        2        3        4        5        6        7
-+--------+--------+--------+--------+--------+--------+--------+--------+
-|   pv   |  hlen  |   op   | flags  |   status_code   |    reserved     |
-+--------+--------+--------+--------+--------+--------+--------+--------+
-
- 8        9       10       11       12       13       14       15
-+--------+--------+--------+--------+--------+--------+--------+--------+
-|                          request_id (u64)                             |
-+--------+--------+--------+--------+--------+--------+--------+--------+
-
-16       17       18       19       20       21       22       23
-+--------+--------+--------+--------+--------+--------+--------+--------+
-|                          session_id (u64)                             |
-+--------+--------+--------+--------+--------+--------+--------+--------+
-
-legend:
-pv     = protocol_version
-hlen   = header_len
-op     = op_code
-```
-
-## 7. 通用 body 约束
-
-### 7.1 成功响应
-
-- 成功响应使用与请求同一 `op_code`
-- 成功响应 `status_code = 0`
-- 成功响应 body 结构由具体命令定义
-
-### 7.2 失败响应
-
-- 失败响应使用与请求同一 `op_code`
-- 失败响应 `status_code != 0`
-- 第一版失败响应 body 固定为空
-- 失败原因完全由 `status_code` 表达
-
-### 7.3 未知命令
-
-- 未知 `op_code` 返回 `ERR_UNSUPPORTED_OP`
-
-## 7.4 `GatewayConnection` 复用核心职责
-
-本协议默认运行在一个 connection 复用模型上：
-
-```text
-NetworkMedia1 -> DiskSession1 \
-NetworkMedia2 -> DiskSession2  -> GatewayConnection -> Transport -> TCP
-NetworkMedia3 -> DiskSession3 /
-```
-
-这里的关键约束是：
-
-- 多个 `NetworkMedia` 不直接抢 `TCP`
-- 多个 `NetworkMedia` 通过各自的 `DiskSession` 复用同一个 `GatewayConnection`
-- `GatewayConnection` 是 connection-scoped 并发复用核心
-
-因此必须由 `GatewayConnection` 管理：
-
-- `request_id` 分配
-- pending request map
-- 响应配对
-- 连接断开广播失败
-
-这些职责不属于：
-
-- `NetworkMedia`
-- `DiskSession`
-- 认证层
-
-## 8. 操作码表
+## 6. 操作码
 
 | `op_code` | 名称 | 方向 | 说明 |
 | --- | --- | --- | --- |
-| `0x01` | `AuthStart` | request/response | 发起 challenge |
-| `0x02` | `AuthFinish` | request/response | 提交 proof |
-| `0x03` | `SessionOpen` | request/response | 打开远端盘会话 |
-| `0x10` | `ReadAt` | request/response | 读取远端盘数据 |
-| `0x11` | `WriteAt` | request/response | 写入远端盘数据 |
-| `0x12` | `Ping` | request/response | 保活会话 |
-| `0x13` | `Close` | request/response | 关闭会话 |
+| `0x01` | `AuthStart` | req/resp | 获取 challenge |
+| `0x02` | `AuthFinish` | req/resp | 提交 proof，成功返回 `auth_id` |
+| `0x03` | `SessionOpen` | req/resp | 用 `auth_id` 打开会话 |
+| `0x04` | `SessionDescribe` | req/resp | 查询 session 元数据 |
+| `0x05` | `SessionCloseNotice` | notice | gateway 异步通知 session 已关闭 |
+| `0x10` | `ReadAt` | req/resp | 读取 |
+| `0x11` | `WriteAt` | req/resp | 写入 |
+| `0x12` | `ConnHeartbeat` | req/resp | 连接级心跳 |
+| `0x13` | `Close` | req/resp | 主动关闭 session |
 
-保留范围：
+## 7. 状态码
 
-| 范围 | 用途 |
+### 7.1 成功
+
+| 码值 | 名称 |
 | --- | --- |
-| `0x00` | 保留 |
-| `0x04..0x0F` | 认证/控制扩展保留 |
-| `0x14..0x7F` | 数据面扩展保留 |
-| `0x80..0xFF` | 内部实验保留，不进入正式实现 |
+| `0x0000` | `OK` |
 
-## 9. 状态码表
+### 7.2 协议错误
 
-### 9.1 成功码
-
-| `status_code` | 名称 | 说明 |
+| 码值 | 名称 | 说明 |
 | --- | --- | --- |
-| `0x0000` | `OK` | 请求成功 |
-
-### 9.2 协议层错误
-
-| `status_code` | 名称 | 说明 |
-| --- | --- | --- |
-| `0x1001` | `ERR_PROTOCOL_VERSION` | 协议版本不支持 |
+| `0x1001` | `ERR_PROTOCOL_VERSION` | 协议版本错误 |
 | `0x1002` | `ERR_BAD_HEADER` | 通用头非法 |
-| `0x1003` | `ERR_BAD_BODY` | body 编码非法 |
+| `0x1003` | `ERR_BAD_BODY` | body 非法 |
 | `0x1004` | `ERR_INVALID_REQUEST_ID` | `request_id` 非法 |
-| `0x1005` | `ERR_UNSUPPORTED_OP` | 不支持的 `op_code` |
+| `0x1005` | `ERR_UNSUPPORTED_OP` | 不支持的 op |
 
-### 9.3 认证层错误
+### 7.3 认证与授权错误
 
-| `status_code` | 名称 | 说明 |
+| 码值 | 名称 | 说明 |
 | --- | --- | --- |
-| `0x1101` | `ERR_AUTH_FAILED` | 认证失败；对外统一口径 |
-| `0x1102` | `ERR_AUTH_EXPIRED` | challenge 已过期 |
-| `0x1103` | `ERR_AUTH_CHALLENGE_INVALID` | challenge token 非法或不属于当前连接 |
-| `0x1104` | `ERR_AUTH_REQUIRED` | 当前连接尚未完成指定盘认证 |
+| `0x1101` | `ERR_AUTH_FAILED` | 统一认证失败 |
+| `0x1102` | `ERR_AUTH_EXPIRED` | challenge 过期 |
+| `0x1103` | `ERR_AUTH_CHALLENGE_INVALID` | challenge 非法或不属于当前 connection |
+| `0x1104` | `ERR_AUTH_ID_INVALID` | `auth_id` 不存在、不属于当前 connection 或已消费 |
+| `0x1105` | `ERR_AUTH_ID_EXPIRED` | `auth_id` 过期 |
 
-说明：
+### 7.4 会话错误
 
-- `ERR_AUTH_FAILED` 对外同时覆盖：
-  - 假盘
-  - 真盘但领盘码错误
-  - 不希望额外暴露的统一认证失败情形
-
-### 9.4 会话层错误
-
-| `status_code` | 名称 | 说明 |
+| 码值 | 名称 | 说明 |
 | --- | --- | --- |
-| `0x1201` | `ERR_SESSION_UNAVAILABLE` | `session_id` 不可用；统一覆盖不存在、已过期、已被回收 |
-| `0x1202` | `ERR_SESSION_BUSY` | 目标盘当前已有活跃打开会话，拒绝新的 `SessionOpen` |
+| `0x1201` | `ERR_SESSION_UNAVAILABLE` | session 不存在、已关闭或已回收 |
+| `0x1202` | `ERR_SESSION_BUSY` | 目标盘当前不允许新的会话打开 |
 
-### 9.5 I/O 层错误
+### 7.5 I/O 错误
 
-| `status_code` | 名称 | 说明 |
+| 码值 | 名称 | 说明 |
 | --- | --- | --- |
-| `0x1301` | `ERR_IO_OUT_OF_RANGE` | `offset + length` 越界 |
-| `0x1302` | `ERR_IO_TOO_LARGE` | `length > max_io_bytes` |
+| `0x1301` | `ERR_IO_OUT_OF_RANGE` | 越界 |
+| `0x1302` | `ERR_IO_TOO_LARGE` | 超过 `max_io_bytes` |
 | `0x1303` | `ERR_IO_READ_ONLY` | 只读盘写入 |
-| `0x1304` | `ERR_IO_FAILED` | 远端盘 I/O 失败 |
+| `0x1304` | `ERR_IO_FAILED` | 远端 I/O 失败 |
 
-## 10. 命令详细定义
+## 8. AuthStart
 
-当前命令必须按语义阶段阅读，而不是堆成一层理解：
+### 8.1 作用
 
-- 认证层：`AuthStart / AuthFinish`
-- 会话建立层：`SessionOpen`
-- 数据面层：`ReadAt / WriteAt / Ping / Close`
+- client 提交 `disk_id`
+- gateway 返回统一 challenge
+- 真盘与假盘都走同样外部流程
 
-## 10.1 AuthStart
+当前 `AuthStart -> AuthFinish` 整体视为一个 auth 过程。  
+该过程从 `AuthStart` 被接受开始，到 `AuthFinish` 成功、失败或超时结束为止。
 
-作用：
-
-- client 发起 challenge 请求
-- gateway 无论真盘还是假盘，都返回统一形态 challenge
-- 属于认证层
-
-### 10.1.1 请求头
-
-| 字段 | 值 |
-| --- | --- |
-| `op_code` | `0x01` |
-| `flags` | `0` |
-| `status_code` | `0` |
-| `request_id` | 非 `0` |
-| `session_id` | `0` |
-
-### 10.1.2 请求 body
+### 8.2 请求 body
 
 固定长度：
 
@@ -423,597 +228,230 @@ NetworkMedia3 -> DiskSession3 /
 16 bytes
 ```
 
-| 偏移 | 长度 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- | --- |
-| `0` | 16 | `disk_id` | ASCII[16] | 只允许 `0-9a-zA-Z` |
+| 偏移 | 长度 | 字段 |
+| --- | --- | --- |
+| `0` | 16 | `disk_id` |
 
-### 10.1.3 成功响应头
-
-| 字段 | 值 |
-| --- | --- |
-| `op_code` | `0x01` |
-| `flags` | `FLAG_RESPONSE` |
-| `status_code` | `0` |
-| `request_id` | 与请求相同 |
-| `session_id` | `0` |
-
-### 10.1.4 成功响应 body
-
-布局：
+### 8.3 成功响应 body
 
 | 偏移 | 长度 | 字段 | 类型 | 说明 |
 | --- | --- | --- | --- | --- |
-| `0` | 1 | `algo_version` | `u8` | 当前固定为 `1` |
-| `1` | 2 | `ttl_seconds` | `u16` | challenge 生存期 |
-| `3` | 16 | `salt_bytes` | `bytes[16]` | v1 固定 16 字节随机盐 |
+| `0` | 1 | `algo_version` | `u8` | 当前固定 `1` |
+| `1` | 2 | `ttl_seconds` | `u16` | challenge TTL |
+| `3` | 16 | `salt_bytes` | `bytes[16]` | 原始随机盐 |
 | `19` | 2 | `challenge_token_len` | `u16` | token 长度 |
 | `21` | `N` | `challenge_token` | `bytes[N]` | opaque token |
 
-约束：
+## 9. AuthFinish
 
-- `challenge_token_len >= 1`
-- `algo_version = 1`
-- `ttl_seconds >= 1`
-- `salt_bytes` 为原始随机字节，不传 hex
+### 9.1 作用
 
-### 10.1.5 gateway 行为约束
+- client 提交 `challenge_token + proof`
+- gateway 完成本地校验
+- 成功时返回显式 `auth_id`
 
-- 真盘与假盘都必须返回同样结构
-- 不允许在 `AuthStart` 阶段暴露“盘不存在”
-- 不允许在 `AuthStart` 阶段触发 `storer` 数据面
+### 9.2 请求 body
 
-## 10.2 AuthFinish
+| 偏移 | 长度 | 字段 | 说明 |
+| --- | --- | --- | --- |
+| `0` | 2 | `challenge_token_len` | token 长度 |
+| `2` | `N` | `challenge_token` | 来自 `AuthStart` |
+| `2 + N` | 64 | `proof` | `HMAC-SHA512` 原始 64 字节摘要 |
 
-作用：
+### 9.3 成功响应 body
 
-- client 提交基于 `claim_code` 和 `salt_bytes` 计算出的 `proof`
-- gateway 完成认证判定
-- 属于认证层
+| 偏移 | 长度 | 字段 | 类型 |
+| --- | --- | --- | --- |
+| `0` | 8 | `auth_id` | `u64` |
 
-### 10.2.1 请求头
+### 9.4 约束
 
-| 字段 | 值 |
-| --- | --- |
-| `op_code` | `0x02` |
-| `flags` | `0` |
-| `status_code` | `0` |
-| `request_id` | 非 `0` |
-| `session_id` | `0` |
+- `auth_id` 只对当前 connection 有效
+- `auth_id` 绑定单个 `disk_id`
+- `auth_id` 有过期时间
+- 认证失败不关闭 connection
+- auth 过程进行中，不允许该 connection 再发第二个 `AuthStart`
+- auth 过程进行中，不允许该 connection 同时发 `SessionOpen`
 
-### 10.2.2 请求 body
+## 10. SessionOpen
 
-布局：
+### 10.1 作用
 
-| 偏移 | 长度 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- | --- |
-| `0` | 2 | `challenge_token_len` | `u16` | token 长度 |
-| `2` | `N` | `challenge_token` | `bytes[N]` | 来自 `AuthStartResponse` |
-| `2 + N` | 64 | `proof` | `bytes[64]` | `HMAC-SHA512(key = auth_verifier, msg = salt_bytes)` |
+- 使用 `auth_id` 打开真实远端会话
+- 是进入真实会话的唯一入口
 
-约束：
+### 10.2 请求 body
 
-- `challenge_token_len >= 1`
-- `proof` 固定 `64` 字节原始摘要
+| 偏移 | 长度 | 字段 | 类型 |
+| --- | --- | --- | --- |
+| `0` | 8 | `auth_id` | `u64` |
 
-### 10.2.3 成功响应头
+### 10.3 成功响应
 
-| 字段 | 值 |
-| --- | --- |
-| `op_code` | `0x02` |
-| `flags` | `FLAG_RESPONSE` |
-| `status_code` | `0` |
-| `request_id` | 与请求相同 |
-| `session_id` | `0` |
-
-### 10.2.4 成功响应 body
-
-成功时 body 为空。
-
-### 10.2.5 失败响应
-
-失败时：
-
-- `status_code` 取下列之一：
-  - `ERR_AUTH_FAILED`
-  - `ERR_AUTH_EXPIRED`
-  - `ERR_AUTH_CHALLENGE_INVALID`
+- 头部 `session_id` 为新分配会话 ID
 - body 为空
 
-### 10.2.6 gateway 行为约束
+### 10.4 约束
 
-- 所有认证失败统一随机延迟 `2..5s`
-- 延迟只加在 `AuthFinish` 失败路径
-- 失败后清理当前未认证上下文
-- 不允许通过错误码区分真盘与假盘
+- `SessionOpen` 成功后，`auth_id` 被消费
+- 若因 `busy` 失败，`auth_id` 仍可在未过期前继续重试
+- `SessionOpen` 不返回 metadata
+- 一个 connection 在前一个 `SessionOpen` 完成前，不允许并发发第二个 `SessionOpen`
+- `SessionOpen` 过程进行中，不允许该 connection 同时进入 auth 过程
 
-### 10.2.7 认证层硬约束
+## 11. SessionDescribe
 
-- `AuthFinish` 成功后不得直接创建 `DiskSession`
-- `AuthFinish` 成功后只表示当前 connection 已对目标 `disk_id` 完成认证
-- 后续是否能真正拿到会话，必须进入 `SessionOpen`
+### 11.1 作用
 
-## 10.3 SessionOpen
+- 在 session 已建立后查询盘元数据
 
-作用：
+### 11.2 请求
 
-- 在当前 `gateway` 连接上为某个已认证盘打开一个数据面会话
-- 属于会话建立层
-- 是认证资格进入真实会话的唯一入口
+- 头部 `session_id` 必须为有效非 `0`
+- body 为空
 
-### 10.3.1 请求头
-
-| 字段 | 值 |
-| --- | --- |
-| `op_code` | `0x03` |
-| `flags` | `0` |
-| `status_code` | `0` |
-| `request_id` | 非 `0` |
-| `session_id` | `0` |
-
-### 10.3.2 请求 body
-
-固定长度：
-
-```text
-16 bytes
-```
+### 11.3 成功响应 body
 
 | 偏移 | 长度 | 字段 | 类型 | 说明 |
 | --- | --- | --- | --- | --- |
-| `0` | 16 | `disk_id` | ASCII[16] | 目标盘 ID |
+| `0` | 8 | `disk_size_bytes` | `u64` | 容量 |
+| `8` | 4 | `max_io_bytes` | `u32` | 单次 I/O 上限 |
+| `12` | 2 | `session_flags` | `u16` | bit0 为只读 |
+| `14` | 2 | `reserved` | `u16` | 固定 `0` |
 
-### 10.3.3 成功响应头
+### 11.4 约束
 
-| 字段 | 值 |
-| --- | --- |
-| `op_code` | `0x03` |
-| `flags` | `FLAG_RESPONSE` |
-| `status_code` | `0` |
-| `request_id` | 与请求相同 |
-| `session_id` | 新分配的非 `0` 会话 ID |
+- `SessionDescribe` 是 session-scoped，不是 disk-scoped
+- 未开 session 不能单独查 metadata
 
-### 10.3.4 成功响应 body
+## 12. ReadAt
 
-布局：
+### 12.1 请求 body
 
-| 偏移 | 长度 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- | --- |
-| `0` | 8 | `disk_size_bytes` | `u64` | 远端盘容量 |
-| `8` | 4 | `max_io_bytes` | `u32` | 单次最大 I/O 大小 |
-| `12` | 4 | `session_ttl_seconds` | `u32` | 会话 TTL |
-| `16` | 2 | `session_flags` | `u16` | 见下表 |
-| `18` | 2 | `reserved` | `u16` | 固定 `0` |
+| 偏移 | 长度 | 字段 | 类型 |
+| --- | --- | --- | --- |
+| `0` | 8 | `offset` | `u64` |
+| `8` | 4 | `length` | `u32` |
 
-`session_flags` 取值：
+### 12.2 成功响应 body
 
-| bit | 名称 | 含义 |
+| 偏移 | 长度 | 字段 |
 | --- | --- | --- |
-| `0` | `SESSION_FLAG_READ_ONLY` | `1` 表示只读 |
+| `0` | `N` | `data` |
 
-其他 bit：
+## 13. WriteAt
 
-- v1 必须为 `0`
+### 13.1 请求 body
 
-### 10.3.5 `max_io_bytes` 硬约束
+| 偏移 | 长度 | 字段 | 类型 |
+| --- | --- | --- | --- |
+| `0` | 8 | `offset` | `u64` |
+| `8` | 4 | `length` | `u32` |
+| `12` | `N` | `data` | `bytes[N]` |
 
-传输层 payload 最大为 `65536` 字节。
-
-#### `WriteAt` 请求最大数据长度
-
-`WriteAt` body 结构为：
-
-```text
-offset(u64) + length(u32) + data[length]
-```
-
-固定开销：
-
-- 通用头：`24`
-- `offset`：`8`
-- `length`：`4`
-
-总开销：
-
-```text
-36 bytes
-```
-
-因此：
-
-```text
-max_write_payload = 65536 - 36 = 65500
-```
-
-#### `ReadAt` 响应最大数据长度
-
-`ReadAt` 成功响应 body 只有数据段：
-
-```text
-data[length]
-```
-
-固定开销：
-
-- 通用头：`24`
-
-因此：
-
-```text
-max_read_payload = 65536 - 24 = 65512
-```
-
-综合收敛：
-
-```text
-v1 absolute_max_io_bytes = 65500
-```
-
-所以：
-
-- `1 <= max_io_bytes <= 65500`
-- 建议 `gateway/storer` 实际下发值不超过 `60 KiB`
-
-### 10.3.6 语义约束
-
-- `SessionOpen` 的前提是当前 connection 已对目标 `disk_id` 完成认证
-- `SessionOpen` 的成功与否由 `storer` 打开策略决定
-- 同一连接上，`SessionOpen` 可针对多个不同盘执行
-- 第一版单盘只允许一个活跃打开会话
-- 已有其他 client 持有该盘活跃会话时，新的 `SessionOpen` 必须返回 `ERR_SESSION_BUSY`
-- `SessionOpen` 成功后才允许构造 `DiskSession`
-- `NetworkMedia` 构造必须使用本响应返回的 `session_id`
-
-## 10.4 ReadAt
-
-作用：
-
-- 从远端盘读取指定区间数据
-- 属于数据面层
-
-### 10.4.1 请求头
-
-| 字段 | 值 |
-| --- | --- |
-| `op_code` | `0x10` |
-| `flags` | `0` |
-| `status_code` | `0` |
-| `request_id` | 非 `0` |
-| `session_id` | 非 `0` |
-
-### 10.4.2 请求 body
-
-固定长度：
-
-```text
-12 bytes
-```
-
-| 偏移 | 长度 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- | --- |
-| `0` | 8 | `offset` | `u64` | 起始偏移 |
-| `8` | 4 | `length` | `u32` | 读取长度 |
-
-约束：
-
-- `1 <= length <= max_io_bytes`
-- `offset + length <= disk_size_bytes`
-
-### 10.4.3 成功响应头
-
-| 字段 | 值 |
-| --- | --- |
-| `op_code` | `0x10` |
-| `flags` | `FLAG_RESPONSE` |
-| `status_code` | `0` |
-| `request_id` | 与请求相同 |
-| `session_id` | 与请求相同 |
-
-### 10.4.4 成功响应 body
-
-成功响应 body 为原始数据段：
-
-```text
-data[length]
-```
-
-约束：
-
-- body 长度必须与请求 `length` 完全相等
-- 不允许成功响应短读
-- 若无法返回完整数据，必须返回 `ERR_IO_FAILED`
-
-## 10.5 WriteAt
-
-作用：
-
-- 向远端盘写入指定区间数据
-- 属于数据面层
-
-### 10.5.1 请求头
-
-| 字段 | 值 |
-| --- | --- |
-| `op_code` | `0x11` |
-| `flags` | `0` |
-| `status_code` | `0` |
-| `request_id` | 非 `0` |
-| `session_id` | 非 `0` |
-
-### 10.5.2 请求 body
-
-布局：
-
-| 偏移 | 长度 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- | --- |
-| `0` | 8 | `offset` | `u64` | 起始偏移 |
-| `8` | 4 | `length` | `u32` | 写入长度 |
-| `12` | `N` | `data` | `bytes[N]` | 写入数据 |
-
-约束：
-
-- `N` 必须等于 `length`
-- `1 <= length <= max_io_bytes`
-- `offset + length <= disk_size_bytes`
-
-### 10.5.3 成功响应头
-
-| 字段 | 值 |
-| --- | --- |
-| `op_code` | `0x11` |
-| `flags` | `FLAG_RESPONSE` |
-| `status_code` | `0` |
-| `request_id` | 与请求相同 |
-| `session_id` | 与请求相同 |
-
-### 10.5.4 成功响应 body
+### 13.2 成功响应 body
 
 成功时 body 为空。
 
-### 10.5.5 语义约束
+## 14. ConnHeartbeat
 
-- 成功响应表示远端已经接受本次写入，并承担一致性责任
-- 不允许把“仅进入本地缓存”当作成功
-- 只读盘写入必须返回 `ERR_IO_READ_ONLY`
+### 14.1 作用
 
-## 10.6 Ping
+- 维持 client-gateway connection 存活
+- 检测连接是否可达
 
-作用：
+### 14.2 请求与响应
 
-- 保活 `session_id`
-- 检测连接与会话仍有效
-- 属于数据面层
+- body 为空
+- 不带 `session_id`
 
-### 10.6.1 请求头
+### 14.3 约束
 
-| 字段 | 值 |
-| --- | --- |
-| `op_code` | `0x12` |
-| `flags` | `0` |
-| `status_code` | `0` |
-| `request_id` | 非 `0` |
-| `session_id` | 非 `0` |
+- `ConnHeartbeat` 属于 connection，不属于某个 session
+- connection heartbeat 超时等价于 connection 死亡
 
-### 10.6.2 请求 body
+## 15. Close
 
-固定长度：
+### 15.1 作用
 
-```text
-8 bytes
-```
+- 主动关闭指定 `session_id`
 
-| 偏移 | 长度 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- | --- |
-| `0` | 8 | `nonce` | `u64` | client 自定义 nonce |
+### 15.2 请求与响应
 
-### 10.6.3 成功响应 body
+- body 为空
+- 头部带目标 `session_id`
 
-固定长度：
+### 15.3 约束
 
-```text
-8 bytes
-```
+- `Close` 只关闭目标 session
+- 不直接关闭整条 connection
+- 重复关闭已不存在 session 返回 `ERR_SESSION_UNAVAILABLE`
 
-| 偏移 | 长度 | 字段 | 类型 | 说明 |
-| --- | --- | --- | --- | --- |
-| `0` | 8 | `nonce` | `u64` | 原样回显请求值 |
+## 16. SessionCloseNotice
 
-## 10.7 Close
+### 16.1 作用
 
-作用：
+- gateway 异步通知 client：某个 session 已被动关闭
 
-- 关闭指定 `session_id`
-- 属于数据面层
+### 16.2 触发场景
 
-### 10.7.1 请求头
+- storer route 断线
+- storer 主动结束 session
+- gateway 接管故障传播并关闭 session
 
-| 字段 | 值 |
-| --- | --- |
-| `op_code` | `0x13` |
-| `flags` | `0` |
-| `status_code` | `0` |
-| `request_id` | 非 `0` |
-| `session_id` | 非 `0` |
+### 16.3 notice body
 
-### 10.7.2 请求 body
+当前 body 为空。  
+关闭原因由头部 `status_code` 表示，或后续独立扩展。
 
-请求 body 为空。
+## 17. 严格状态机
 
-### 10.7.3 成功响应 body
+### 17.1 bootstrap 前的非法业务字节
 
-成功时 body 为空。
+直接断连接。
 
-### 10.7.4 语义约束
+### 17.2 业务对象前置条件不满足
 
-- `Close` 只关闭目标 `session_id`
-- 不关闭整条 TCP 连接
-- `Close` 设计为幂等清理操作
-- 若会话已经不存在或已过期，允许直接返回成功
-- `Close` 对已被回收的会话可视为幂等；client 不要求区分“原本存在”还是“已经不可用”
+返回业务错误，不直接断连接。
 
-## 11. 时序图
+例如：
 
-## 11.1 认证与开会话
+- 无效 `auth_id`
+- 过期 `auth_id`
+- 无效 `session_id`
+- auth 过程与 `SessionOpen` 过程互斥冲突
+- 同 connection 上出现第二个并发 auth 过程
+- 同 connection 上出现第二个并发 `SessionOpen` 过程
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant G as Gateway
-    participant S as Storer
+### 17.3 协议结构错误
 
-    C->>G: AuthStart(disk_id)
-    G-->>C: AuthStartResponse(challenge_token, salt_bytes)
-    C->>G: AuthFinish(challenge_token, proof)
-    G-->>C: OK
-    C->>G: SessionOpen(disk_id)
-    G->>S: Open routed storer session
-    S-->>G: session ready + metadata
-    G-->>C: SessionOpenResponse(session_id, disk_size_bytes, max_io_bytes, flags)
-```
+直接按协议错误处理，并终止 connection。
 
-## 11.2 读请求
+例如：
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant G as Gateway
-    participant S as Storer
+- header 非法
+- 非 notice 包错误使用 `FLAG_NOTICE`
+- response 冒充 request
 
-    C->>G: ReadAt(session_id, offset, length)
-    G->>S: ReadAt(mapped storer session, offset, length)
-    S-->>G: data[length]
-    G-->>C: data[length]
-```
+## 18. 连接失效口径
 
-## 11.3 写请求
+connection 死亡后：
 
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant G as Gateway
-    participant S as Storer
+- 该 connection 下 pending request 全部失败
+- 该 connection 下全部 `auth_id` 失效
+- 该 connection 下全部 session 失效
 
-    C->>G: WriteAt(session_id, offset, length, data)
-    G->>S: WriteAt(mapped storer session, offset, length, data)
-    S-->>G: OK
-    G-->>C: OK
-```
+文档层当前不强制规定 `NetworkMedia` 必须立即卸载，但它必须把这些 session 视为失效对象。
 
-## 12. 并发与生命周期规则
+## 19. 第一版最小验收
 
-### 12.1 单连接多会话
+当前正式验收口径固定为：
 
-第一版允许：
-
-- 一个 `GatewayConnection`
-- 并发承载多个 `DiskSession`
-- 多个 `NetworkMedia` 通过各自的 `DiskSession` 并发复用同一条 `GatewayConnection`
-
-实现要求：
-
-- `GatewayConnection` 必须作为 connection 复用核心存在
-- 使用 `request_id` 做响应配对
-- 响应允许乱序返回
-- 不允许假设“同一会话请求一定串行返回”
-
-### 12.2 连接断开
-
-一条 `GatewayConnection` 断开时：
-
-- 该连接下全部 `DiskSession` 一起失效
-- 失效后的读写必须直接失败
-- 第一版不自动重连
-- 第一版不自动重建会话
-
-### 12.3 session TTL
-
-- `session_ttl_seconds` 由 `SessionOpenResponse` 下发
-- 网关和存储器可在 TTL 到期后回收会话
-- client 若长期空闲，应在 TTL 到期前发送 `Ping`
-
-## 13. NetworkMedia 实现要求
-
-第一版 `NetworkMedia` 需要遵守：
-
-- 保存：
-  - 已打开的 `DiskSession`
-  - `disk_size_bytes`
-  - `read_only`
-  - `max_io_bytes`
-- `read_locked()` 按 `max_io_bytes` 主动拆分大请求
-- `write_locked()` 按 `max_io_bytes` 主动拆分大请求
-- 不做本地写缓存
-- 不做自动重试
-- 不做断线自动补连
-
-职责边界：
-
-- `NetworkMedia` 不关心认证过程
-- `NetworkMedia` 不负责创建连接对象
-- `NetworkMedia` 不负责 transport
-- `NetworkMedia` 不负责 `request_id` 分配
-- `NetworkMedia` 不负责 `SessionOpen`
-- `NetworkMedia` 只把盘操作构造成业务协议包并发给一个已经完成的 `DiskSession`
-
-与当前 `BackendRust::Media` 对齐：
-
-- `read_locked()` 返回成功时，必须已拿到完整数据
-- `write_locked()` 返回成功时，远端必须已经接受本次写入
-
-## 14. Gateway 实现要求
-
-### 14.1 认证阶段
-
-- 无论真假盘，`AuthStart` 都返回统一结构
-- `AuthFinish` 失败统一随机延迟 `2..5s`
-- `AuthStart` 与假盘不触发 `storer` 数据面
-- 认证成功只记录资格，不创建 `DiskSession`
-
-### 14.2 会话建立阶段
-
-- `SessionOpen` 是认证资格进入真实会话的唯一入口
-- `gateway` 必须把会话打开请求交给 `storer`
-- 是否允许打开、是否只读、是否共享、是否排它，由 `storer` 决定
-
-### 14.3 转发阶段
-
-- `gateway` 不缓存盘数据
-- `gateway` 不篡改 `request_id`
-- `gateway` 不篡改 `session_id` 对 client 的可见值
-- `gateway` 只做会话查找、请求转发、响应回传
-
-## 15. Storer 实现要求
-
-- `storer` 是块读写和多登录策略的唯一决策点
-- `storer` 决定同一 `disk_id` 多登录后的共享、排它和操作权
-- `storer` 必须保证：
-  - 成功读返回完整数据
-  - 成功写表示写入已被接受
-  - 越界、只读、I/O 错误都有明确失败返回
-
-## 16. 第一版不做
-
-本文档明确不覆盖：
-
-- `client -> storer` 直连
-- 传输层多帧重组
-- 压缩
-- TLS 强制要求
-- 自动重连
-- 多 TCP 连接池
-- 写缓存确认链
-- 增量重传
-- 多副本
-- 分片
-- 元数据协调
-
-## 17. 最小验收清单
-
-实现完成后，至少应满足：
-
-1. `claim_code` 能成功完成认证
-2. 假盘与错码在外部观察上都走同样认证流程
-3. `SessionOpen` 能返回有效 `session_id`
-4. 一个 `GatewayConnection` 上能并发承载多个 `DiskSession`
-5. `ReadAt / WriteAt` 能完成真实远端盘读写
-6. 大于 `max_io_bytes` 的请求能被 client 正确拆分
-7. 连接断开后，全部 `DiskSession` 一起失效
+1. `Hello -> optional TLS -> transport` 分层成立
+2. client 可通过 `AuthStart / AuthFinish` 获得 `auth_id`
+3. client 可通过 `SessionOpen(auth_id)` 获得有效 `session_id`
+4. client 可通过 `SessionDescribe(session_id)` 获得 metadata
+5. `NetworkMedia` 可基于 `session_id` 完成真实 `ReadAt / WriteAt`
+6. 一个 `GatewayConnection` 可并发承载多个 `DiskSession`
+7. route 故障时 gateway 能向 client 下发 `SessionCloseNotice`
+8. 单 connection 上 auth 过程和 `SessionOpen` 过程满足“各自唯一且互斥”的约束

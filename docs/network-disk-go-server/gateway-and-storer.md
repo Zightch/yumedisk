@@ -1,39 +1,31 @@
 # Gateway-and-Storer 业务层协议
 
-## 1. 当前定位
+## 1. 文档定位
 
-`gateway-and-storer` 当前不重新定义一整套新的数据面业务协议。
+本文档定义 `gateway <-> storer` 的正式边界。
 
-当前只拆成两部分：
+当前正式口径只拆成两部分：
 
 1. 注册阶段
-2. 数据面复用规则
+2. route connection 上的会话与数据面复用
 
-其中：
-
-- 注册阶段单独定义
-- 注册成功后，`gateway <-> storer` 复用现有 `SessionOpen / ReadAt / WriteAt / Ping / Close` 业务语义
-
-这意味着：
-
-- `AuthStart / AuthFinish` 只存在于 `client <-> gateway`
-- `gateway <-> storer` 不再有 client 认证业务层
+当前不把 client 的认证流程下发给 storer。
 
 ## 2. 角色与连接方向
 
-### `whole`
+### 2.1 whole
 
 - 持有本地存储
-- 启动内嵌 `gateway`
+- 内嵌 gateway
 - 对 client 监听
-- 不走 `gateway-and-storer` 注册协议
+- 不走本注册协议
 
-### `storer`
+### 2.2 storer
 
 - 持有本地存储
 - 不对 client 监听
 - 主动长连 `gateway`
-- 先注册，再进入数据面复用阶段
+- 注册成功后承接 route connection 上的会话和数据面
 
 连接方向固定为：
 
@@ -41,198 +33,172 @@
 storer ----主动长连----> gateway
 ```
 
-第一版不做：
-
-- gateway 主动反连 storer
-- 多条 storer 控制连接
-- storer 多盘批量注册
-
-## 2.1 当前实际运行方式
-
-当前真实部署入口：
-
-- `cmd/gateway`
-  - 独立进程
-  - 监听：
-    - `client.listen_addr`
-    - `storer.listen_addr`
-- `cmd/storer`
-  - 独立进程
-  - `role = storer` 时主动连接 `gateway.storer.listen_addr`
-
-配置读取规则固定为：
-
-- 两个可执行文件都读取“可执行文件同目录 `config.toml`”
-- `gateway_token` 只用于 `storer <-> gateway` 注册信任
-
 ## 3. 注册阶段
 
 ### 3.1 注册目的
 
-注册阶段只解决三件事：
+注册阶段只解决：
 
-1. 让 gateway 知道这个 storer 是可信的
-2. 让 gateway 知道这个 storer 提供哪个 `disk_id`
-3. 让 gateway 预缓存 `auth_verifier` 与基础盘元数据
+1. 让 gateway 知道这个 storer 是否可信
+2. 让 gateway 知道这个 storer 承载哪个 `disk_id`
+3. 让 gateway 预缓存认证材料与基础元数据
 
-### 3.2 注册请求最小字段
+### 3.2 注册字段
 
 `storer` 向 `gateway` 提交：
 
 - `gateway_token`
 - `disk_id`
-- `auth_verifier = SHA512(claim_code_bytes)`
+- `auth_verifier`
 - `disk_size_bytes`
 - `read_only`
 - `max_io_bytes`
-- `session_ttl_seconds`
 
 其中：
 
-- `claim_code` 本体不上传给 `gateway`
-- `gateway_token` 是基础设施控制面凭据，不复用 `claim_code`
+- `auth_verifier = SHA512(claim_code_bytes)`
+- `claim_code` 原文不上送
+- `gateway_token` 只用于基础设施控制面信任
 
-### 3.3 注册成功后 gateway 本地缓存
+### 3.3 route 缓存
 
-`gateway` 至少缓存：
+注册成功后，gateway 至少缓存：
 
 - `disk_id`
 - `auth_verifier`
-- `storer_connection`
+- `route_connection`
 - `disk_size_bytes`
 - `read_only`
 - `max_io_bytes`
-- `session_ttl_seconds`
 
-要求：
+### 3.4 disk_id 唯一性
 
-- 路由表是 connection-scoped
-- `storer_connection` 断开时立即撤销该盘路由
-- 同时撤销该 storer 名下全部会话映射
+同一时刻，一个 `disk_id` 只能对应一个活跃 route。
 
-## 4. 数据面复用规则
+如果不同 route connection 尝试注册相同 `disk_id`：
 
-注册成功后，`gateway <-> storer` 不重新定义新的 `SessionOpen / ReadAt / WriteAt / Ping / Close` 业务命令。
+- 直接拒绝后到者
+- 不允许隐式覆盖已有 route
 
-复用规则：
+## 4. route connection
 
-- 复用同一套 `op_code`
-- 复用同一套 body 布局
-- 复用同一套 status 语义
+注册成功后，`gateway <-> storer` 的长连即成为 route connection。
 
-当前不采用：
+该连接负责：
 
-- 裸字节 blind forward
-- client request 原样不改直接转发给 storer
+- `SessionOpen`
+- `SessionDescribe`
+- `ReadAt`
+- `WriteAt`
+- `Close`
+- route heartbeat
 
-## 5. Gateway 必须改写的字段
+## 5. 不下发 client 认证
 
-虽然业务语义复用，但 `gateway` 仍然必须本地维护映射并改写以下字段。
+当前正式边界固定如下：
 
-### 5.1 `request_id`
+- `AuthStart / AuthFinish / auth_id` 只存在于 `client <-> gateway`
+- `gateway` 不把 client challenge/proof 转发给 storer
+- storer 不生成 `auth_id`
 
-原因：
+storer 只看到：
 
-- 多个 client 会并发复用同一条 `gateway <-> storer` 连接
-- 不同 client 的 `request_id` 可能冲突
+- 这是 gateway 发来的合法 `SessionOpen / SessionDescribe / ReadAt / WriteAt / Close`
 
-因此：
+## 6. SessionOpen 复用口径
 
-- `gateway` 向 storer 侧发送请求时必须分配自己的 `request_id`
-- 响应回来后再还原到对应 client 请求
+### 6.1 client 侧输入
 
-### 5.2 `session_id`
-
-原因：
-
-- client 面向的是 gateway 的统一会话命名空间
-- storer 内部只认识自己的 `storer_session_id`
-
-因此：
-
-- `gateway` 对 client 暴露 `gateway_session_id`
-- `gateway` 内部维护：
+client 侧正式输入是：
 
 ```text
-gateway_session_id -> (storer_connection, storer_session_id)
+SessionOpen(auth_id)
 ```
 
-- `storer_session_id` 不直接作为 client 侧长期正式会话 ID
+### 6.2 gateway 侧还原
 
-## 6. SessionOpen 透传口径
+gateway 用 `auth_id` 还原：
 
-当 client 在 `gateway` 侧已经完成认证后：
+- `disk_id`
+- route connection
 
-1. client 发送 `SessionOpen(disk_id)`
-2. gateway 根据 `disk_id` 找到目标 `storer_connection`
-3. gateway 向 storer 发送复用语义的 `SessionOpen(disk_id)`
-4. storer 决定：
-   - 成功
-   - busy
-   - unavailable
-   - read_only
-5. 成功时 storer 返回：
-   - `storer_session_id`
-   - `disk_size_bytes`
-   - `read_only`
-   - `max_io_bytes`
-   - `session_ttl_seconds`
-6. gateway 分配 `gateway_session_id`
-7. gateway 建立映射并回给 client
+### 6.3 storer 侧输入
 
-当前约束：
+gateway 向 storer 发起的是 storer-facing `SessionOpen`。
 
-- 单盘独占策略仍由 storer 决定
-- gateway 只路由和映射，不替 storer 判定独占
+storer 不需要知道 client 的 `auth_id`，只需要知道：
 
-## 7. ReadAt / WriteAt / Ping / Close 透传口径
+- 要为该 route 上的某个 `disk_id` 打开真实会话
 
-`SessionOpen` 成功后：
+### 6.4 成功返回
+
+成功时 storer 返回：
+
+- `storer_session_id`
+
+metadata 不应再强绑定在 `SessionOpen` 响应里。
+
+## 7. SessionDescribe 复用口径
+
+会话打开后，client 侧通过 `SessionDescribe(session_id)` 取 metadata。
+
+gateway 转发逻辑：
+
+1. client 发 `gateway_session_id`
+2. gateway 查表得到 `(route_connection, storer_session_id)`
+3. gateway 向 storer 发 `SessionDescribe(storer_session_id)`
+4. storer 返回 metadata
+5. gateway 原样回给 client
+
+## 8. ReadAt / WriteAt / Close 复用口径
+
+`SessionDescribe` 之后，client 可进入数据面。
+
+转发逻辑：
 
 1. client 对 `gateway_session_id` 发请求
-2. gateway 查表拿到 `(storer_connection, storer_session_id)`
-3. gateway 用 storer 侧的 `session_id` 转发
+2. gateway 查表得到 `(route_connection, storer_session_id)`
+3. gateway 改写 `request_id` 和 `session_id`
 4. storer 返回结果
-5. gateway 恢复到 client 侧的 `request_id`
-6. gateway 把语义一致的响应回给 client
+5. gateway 恢复 client 侧 `request_id`
+6. gateway 回给 client
 
 要求：
 
 - `gateway` 不缓存盘数据
-- `gateway` 不改变成功/失败语义
-- `gateway` 只负责路由、映射、转发、回传
+- `gateway` 不改成功/失败语义
+- `gateway` 只负责映射、转发、回传
 
-## 8. 会话与认证边界
+## 9. route heartbeat
 
-当前边界固定如下：
+`gateway <-> storer` 维持 route connection 级心跳。
 
-- `AuthStart / AuthFinish`：只在 `client <-> gateway`
-- 认证成功：只表示当前 client 连接获得开会话资格
-- `SessionOpen`：才是真实会话创建入口
-- `SessionOpen` busy 失败：client 可以保留同一连接，稍后继续重试
+当前方向固定为：
 
-这意味着：
+- gateway 主动喂狗
+- storer 超时未收到喂狗则退出
 
-- 不向 client 暴露单独的 `auth_id`
-- 不向 storer 传 client 的认证流程
-- 认证资格绑定在 gateway 看到的 client connection 上
+这是 route connection 级能力，不属于某个 session。
 
-## 9. 当前实现状态
+## 10. route 故障传播
 
-当前已经完成：
+当 route connection 断线或 heartbeat 超时后，gateway 必须立即：
 
-1. 配置角色：`whole | storer`
-2. `storer` 长连 `gateway` 并注册
-3. `gateway` 的 storer-facing listener
-4. 盘路由表
-5. `SessionOpen` 转发
-6. `ReadAt / WriteAt / Ping / Close` 转发
-7. 掉线清理盘路由和会话映射
+1. 撤销该 route
+2. 撤销该 route 关联的未消费 `auth_id`
+3. 找出该 route 名下全部活跃 session
+4. 将这些 session 收束为 closed
+5. 对仍在线的 client connection 发送 `SessionCloseNotice`
+6. 清理本地映射
 
-当前已经完成真实联调验证：
+不允许保留悬空 route、悬空授权或悬空 session。
 
-1. `storer` 独立启动后主动注册到 `gateway`
-2. client 直连 `gateway` 完成 `AuthStart / AuthFinish`
-3. `SessionOpen` 能透传到目标 `storer`
-4. 第二个 client 在盘已打开时收到 `disk-busy`
-5. 已认证但 busy 的 client 可保留原连接，等待后再次 `open`
+## 11. 当前正式约束
+
+1. storer 主动连接 gateway。
+2. `gateway_token` 只用于 storer 注册信任。
+3. 同一时刻同一 `disk_id` 只允许一个活跃 route。
+4. client 认证不下发到 storer。
+5. `auth_id` 只存在于 client-gateway 边界。
+6. storer 只处理真实会话和数据面。
+7. route 断线时 gateway 必须主动接管关闭相关 client session。

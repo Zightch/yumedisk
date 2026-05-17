@@ -2,247 +2,201 @@
 
 ## 1. 文档定位
 
-本文档只定义 `network-disk-go-server` 的底层传输层协议。
+本文档只定义 transport 层，不定义 bootstrap、TLS、认证、会话和数据面业务语义。
 
-职责范围：
+职责边界固定如下：
 
-- TCP 字节流拆帧
-- 单帧长度编码
-- 完整 payload 交付
+- `bootstrap`
+  - `TCP`
+  - `Hello`
+  - 可选 `TLS`
+- `transport`
+  - framed payload
+- `business protocol`
+  - 认证
+  - 会话
+  - metadata
+  - 数据面
 
-明确不负责：
+## 2. 分层顺序
 
-- 认证
-- 路由
-- 会话
-- 命令语义
-- 偏移和长度字段
-- 错误码
-- 请求响应配对
-
-这些内容全部属于上层业务协议，不在本文档中定义。
-
-## 2. 分层原则
-
-所有连接统一走 `TCP`。
-
-协议固定分两层：
-
-- 传输层：只负责拆帧
-- 业务层：完整承载在传输层 payload 中
-
-传输层不承载任何业务语义。
-
-## 3. 传输层对象的位置
-
-传输层对象的本质是：
+当前正式顺序固定为：
 
 ```text
-transport runtime = framed TCP connection
+TCP
+  -> Hello
+  -> optional TLS
+  -> transport
+  -> business protocol
+```
+
+因此：
+
+- `Hello` 不属于 transport
+- TLS 握手不属于 transport
+- transport 只在 bootstrap 完成后才启动
+
+## 3. transport 的本质
+
+transport runtime 的本质是：
+
+```text
+framed duplex byte stream
 ```
 
 也就是：
 
-- 下层持有一个真实 `TCP` 连接对象
-- 上层暴露“完整 payload 收发”能力
+- 下层是一条已经完成 bootstrap 的双工字节流
+- 上层得到完整 payload 的收发能力
 
-### 3.1 在 client 侧的位置
+transport 不理解任何业务语义。
+
+## 4. client 侧位置
 
 当前 client 侧结构应理解为：
 
 ```text
-client[
-  N * NetworkMedia(storer session)
-    <- 并发抢 ->
-  Q * GatewayConnection(
-        transport object(
-          TCP object
-        )
-      )
-]
+NetworkMedia
+  -> DiskSession
+    -> GatewayConnection
+      -> transport runtime
+        -> stream(TCP or TLS-over-TCP)
 ```
 
 含义：
 
-- `NetworkMedia` 不直接持有裸 `TCP`
-- `NetworkMedia` 通过 `DiskSession` 复用某个 `GatewayConnection`
-- `GatewayConnection` 内部持有传输层对象
-- 一个传输层对象对应一条真实 `TCP` 连接
-- 多个 `NetworkMedia` 可以并发抢同一个 `GatewayConnection`
-- 并发抢的本质是：多个业务请求并发复用同一条 transport/TCP
+- `NetworkMedia` 不直接持有 transport
+- `DiskSession` 不直接持有裸 TCP
+- `GatewayConnection` 内部持有 transport runtime
+- 多个 session 并发复用同一条 `GatewayConnection`
 
-### 3.2 在 server 侧的位置
+## 5. server 侧位置
 
-当前传输层对象在服务端内部有两种真实挂载位置。
-
-#### 独立 `gateway` 形态
+### 5.1 gateway
 
 ```text
-gateway
-  -> client listener
-    -> accepted client TCP
-      -> transport object
-      -> client-and-gateway business handler
+client listener
+  -> accepted stream
+  -> bootstrap
+  -> transport runtime
+  -> client-and-gateway business handler
 
-gateway
-  -> storer listener
-    -> accepted storer TCP
-      -> transport object
-      -> storer-facing register/response runtime
+storer listener
+  -> accepted stream
+  -> transport runtime
+  -> gateway-and-storer handler
 ```
 
-含义：
+说明：
 
-- client-facing 与 storer-facing 都各自有独立 transport runtime
-- client-facing 上面挂 `client-and-gateway` 业务协议处理器
-- storer-facing 上面挂注册接收和 request/response 配对逻辑
-- 传输层是可复用底座，不是协议边界本身
+- client-facing 入口需要 bootstrap
+- storer-facing 当前也可以直接走 transport；后续若要补 bootstrap，应整体一致定义
 
-#### `whole` 形态
+### 5.2 whole
 
 ```text
-storer(embedded gateway)
+whole
   -> client listener
-    -> accepted client TCP
-      -> transport object
-      -> client-and-gateway business handler
-      -> local storer core
+  -> bootstrap
+  -> transport runtime
+  -> client-and-gateway business handler
+  -> local storer core
 ```
 
-含义：
+`whole` 只是部署形态不同，不改变 transport 语义。
 
-- `whole` 只是把 gateway 直接装配在本地 storer core 之上
-- 协议和 transport 语义不变，只是部署形态不同
+## 6. 帧格式
 
-## 4. 帧格式
-
-传输层帧定义：
+transport 帧定义保持：
 
 ```text
 frame = u16be payload_size_m1 + payload[payload_size_m1 + 1]
 ```
 
-说明：
+其中：
 
-- `payload_size_m1` 为 2 字节无符号整数，按大端编码
-- payload 实际长度为 `payload_size_m1 + 1`
-- 取值 `0x0000` 表示 payload 实际长度为 `1`
-- 取值 `0xFFFF` 表示 payload 实际长度为 `65536`
+- 长度头 2 字节，大端
+- payload 实际长度范围 `1..65536`
+- 不存在空包
 
-因此传输层数据区长度恒为：
+## 7. 字节序
 
-```text
-1..65536 bytes
-```
+transport 长度头固定使用 `big-endian`。
 
-不存在空包。
+## 8. transport 的唯一职责
 
-## 5. 字节序
+transport 只做三件事：
 
-传输层长度头固定使用 `big-endian`。
+1. 读取 2 字节长度头
+2. 读取完整 payload
+3. 把完整 payload 交给上层业务层
 
-## 6. 传输层职责边界
+transport 明确不做：
 
-传输层只做三件事：
-
-1. 从 TCP 字节流中读取 2 字节长度头
-2. 计算本帧 payload 实际长度
-3. 继续读取完整 payload，并把整帧交给上层业务层
-
-传输层明确不做：
-
-- 鉴权
-- 盘路由
+- 认证
+- route
+- 会话
+- 心跳决策
+- 错误码解释
+- 多帧业务重组
 - 压缩
 - 加密
-- 校验和
-- 多帧重组
-- continuation
-- 业务分片
 
-## 7. 解析口径
+## 9. 并发承载
 
-单帧解析步骤：
+transport 必须支撑一条连接上的全双工并发收发。
 
-1. 读取 2 字节 `payload_size_m1`
-2. 计算 `payload_size = payload_size_m1 + 1`
-3. 再读取 `payload_size` 字节
-4. 将完整 payload 交给上层业务层
+它必须满足：
 
-如果连接在长度头或 payload 未收完整前断开，则视为连接异常并直接终止当前连接。
+1. 上层可连续写入多个 payload
+2. 上层可连续接收多个 payload
+3. 响应允许乱序返回
+4. 不要求锁步 request-response
 
-## 8. 并发承载职责
+transport 只承载并发，不做并发业务决策。
 
-传输层虽然不理解业务，但它必须承担并发承载能力。
+## 10. 包大小上限
 
-这里的“承载并发”含义不是做业务配对，而是保证下层字节流与完整帧交付能够支撑上层并发。
+当前单帧 payload 最大 `65536` 字节。
 
-传输层必须满足：
+这个上限的直接意义：
 
-1. 一条连接支持持续全双工收发
-2. 不要求请求发一个回一个的锁步模型
-3. 允许上层连续写入多个完整 payload
-4. 允许上层连续收到多个完整 payload
-5. 不因“这帧属于哪个请求”而介入业务判断
+- buffer 上界明确
+- 大块 I/O 必须由业务层主动切片
+- 避免单帧无限膨胀
 
-也就是说：
+因此业务层必须自己处理：
 
-- 业务层负责：
-  - 请求编号
-  - 响应配对
-  - 会话路由
-  - 并发调度策略
-- 传输层负责：
-  - 把并发压力承载在稳定的 framed TCP 通道上
-  - 不破坏 payload 边界
-  - 不把连接收发退化成串行锁步
+- `max_io_bytes`
+- 大读写拆片
+- 多请求合并结果
 
-对当前模型的直接作用：
+## 11. bootstrap 与 transport 的错误边界
 
-- client 侧多个 `NetworkMedia` 抢同一条 `GatewayConnection` 时，竞争首先落在 transport/TCP 承载面
-- gateway 侧多个已接入连接并发收发时，每条连接各自由对应 transport runtime 承载
-- 传输层是并发承载底座，但不是并发决策层
+以下情况属于 bootstrap 错误，不进入 transport：
 
-## 9. 包粒度与缓冲区
+- 未完成 `Hello` 就发送业务帧
+- server 要求 TLS，但 client 未切 TLS 就开始发 transport 帧
+- TLS 握手阶段混入业务字节
 
-当前上限：
+以下情况属于 transport 错误：
 
-- 单帧 payload 最大 `65536` 字节
+- 长度头损坏
+- payload 未收完整即连接断开
 
-这个上限的意义：
+这两类错误都应直接导致 connection 终止。
 
-- 颗粒明确
-- 缓冲区上限明确
-- 便于两端做固定 buffer 复用
-- 不需要额外引入更复杂的传输层分片协议
+## 12. 对上层协议的要求
 
-第一版工程建议：
-
-- 每个连接至少准备可容纳 `65538` 字节的收包缓冲区
-  - `2` 字节长度头
-  - `65536` 字节 payload
-- 收发缓冲区可通过池复用
-
-这个上限同时服务于并发承载：
-
-- 避免单个超大 payload 长时间占住连接
-- 让同一条连接上的业务请求更容易交错推进
-- 让内存占用上界保持明确
-
-## 10. 对上层业务协议的要求
-
-传输层只提供“单帧 payload 交付”能力。
+transport 只提供“完整 payload 收发”。
 
 因此上层业务协议必须自行处理：
 
 - 业务头
 - 消息类型
 - 请求响应配对
-- 错误语义
-- 是否允许并发
-- 大块 I/O 的主动拆分
-
-当前正式业务层协议文档：
-
-- [client-and-gateway.md](client-and-gateway.md)
-- [gateway-and-storer.md](gateway-and-storer.md)
+- notice 分发
+- `auth_id`
+- `session_id`
+- metadata
+- 数据面错误语义
