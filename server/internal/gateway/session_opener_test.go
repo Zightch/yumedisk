@@ -229,7 +229,8 @@ func newSessionTestHandlerWithRaw(t *testing.T, readOnly bool) (*Handler, *Conne
 	t.Cleanup(func() { _ = storage.Close() })
 
 	sessions := session.NewService(session.NewManager(), storage, 30*time.Second, 60*1024)
-	handler, err := NewHandler(material.DiskID, material.AuthVerifier, sessions)
+	backend := newTestGatewayBackend(material, sessions)
+	handler, err := NewHandler(backend, backend)
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
 	}

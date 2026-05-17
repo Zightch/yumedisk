@@ -251,7 +251,7 @@
 
 ## 推荐实现顺序
 
-1. B1 + B2 重建 gateway 边界和路由层
+1. B2 新增路由/注册层
 2. B3 + B4 建立 session 映射与 storer-facing 边界
 3. C1 + C2 收紧 storer / whole 结构
 4. D1 + D2 + D3 接通协议主路径
@@ -260,4 +260,13 @@
 
 ## 当前下一步
 
-下一步建议直接开始 `B1 + B2. 重建 gateway 边界和路由层`。
+下一步直接开始 `B2. 新增路由/注册层`：
+
+- 提供 `disk_id -> storer route` 的唯一真实来源
+- 保存：
+  - `disk_id`
+  - `auth_verifier`
+  - `storer_connection`
+  - 连接状态
+- 向 `client-facing gateway` 暴露只读查询入口
+- 避免在多个 handler 内各自缓存路由状态

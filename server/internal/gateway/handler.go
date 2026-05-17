@@ -1,11 +1,11 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 
 	"yumedisk/server/internal/proto"
-	"yumedisk/server/internal/session"
 )
 
 type Handler struct {
@@ -25,14 +25,21 @@ type ConnectionHandler struct {
 	state  *ConnectionState
 }
 
-func NewHandler(realDiskID string, authVerifier [64]byte, sessions *session.Service) (*Handler, error) {
-	authenticator, err := newAuthenticator(realDiskID, authVerifier)
+func NewHandler(auths AuthVerifierSource, sessions SessionDataPlane) (*Handler, error) {
+	if auths == nil {
+		return nil, errors.New("gateway handler requires auth verifier source")
+	}
+	if sessions == nil {
+		return nil, errors.New("gateway handler requires session data plane")
+	}
+
+	authenticator, err := newAuthenticator(auths)
 	if err != nil {
 		return nil, err
 	}
 	return &Handler{
 		authenticator: authenticator,
-		sessionOpener: newSessionOpener(realDiskID, sessions),
+		sessionOpener: newSessionOpener(sessions),
 	}, nil
 }
 
@@ -82,6 +89,10 @@ func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte,
 
 func (h *ConnectionHandler) HandlePayload(payload []byte) ([]byte, error) {
 	return h.parent.HandlePayload(h.state, payload)
+}
+
+func (h *Handler) CloseConnection(connectionID uint64) {
+	h.sessionOpener.closeConnection(connectionID)
 }
 
 func (s *ConnectionState) markAuthenticated(diskID string) {

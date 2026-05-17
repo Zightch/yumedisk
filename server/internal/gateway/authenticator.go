@@ -17,23 +17,21 @@ const (
 )
 
 type authenticator struct {
-	realDiskID   string
-	authVerifier [64]byte
+	auths        AuthVerifierSource
 	tokenCodec   *auth.TokenCodec
 	challengeTTL time.Duration
 	sleep        func(time.Duration)
 	randomDelay  func() time.Duration
 }
 
-func newAuthenticator(realDiskID string, authVerifier [64]byte) (*authenticator, error) {
+func newAuthenticator(auths AuthVerifierSource) (*authenticator, error) {
 	tokenCodec, err := auth.NewRandomTokenCodec(32)
 	if err != nil {
 		return nil, err
 	}
 
 	a := &authenticator{
-		realDiskID:   realDiskID,
-		authVerifier: authVerifier,
+		auths:        auths,
 		tokenCodec:   tokenCodec,
 		challengeTTL: defaultChallengeTTL,
 		sleep:        time.Sleep,
@@ -84,12 +82,13 @@ func (a *authenticator) handleAuthFinish(state *ConnectionState, header proto.He
 		return proto.BuildErrorResponse(header, proto.StatusAuthChallengeInvalid), nil
 	}
 
-	if challenge.DiskID != a.realDiskID {
+	authVerifier, ok := a.auths.LookupAuthVerifier(challenge.DiskID)
+	if !ok {
 		a.sleep(a.randomDelay())
 		return proto.BuildErrorResponse(header, proto.StatusAuthFailed), nil
 	}
 
-	expected := auth.ComputeProof(a.authVerifier, challenge.Salt[:])
+	expected := auth.ComputeProof(authVerifier, challenge.Salt[:])
 	if proof != expected {
 		a.sleep(a.randomDelay())
 		return proto.BuildErrorResponse(header, proto.StatusAuthFailed), nil

@@ -6,14 +6,12 @@ import (
 )
 
 type sessionOpener struct {
-	realDiskID string
-	sessions   *session.Service
+	sessions SessionDataPlane
 }
 
-func newSessionOpener(realDiskID string, sessions *session.Service) *sessionOpener {
+func newSessionOpener(sessions SessionDataPlane) *sessionOpener {
 	return &sessionOpener{
-		realDiskID: realDiskID,
-		sessions:   sessions,
+		sessions: sessions,
 	}
 }
 
@@ -26,7 +24,7 @@ func (o *sessionOpener) handleSessionOpen(state *ConnectionState, header proto.H
 	if err != nil {
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
-	if diskID != o.realDiskID || !state.isAuthenticated(diskID) {
+	if !state.isAuthenticated(diskID) {
 		return proto.BuildErrorResponse(header, proto.StatusAuthRequired), nil
 	}
 
@@ -108,6 +106,10 @@ func (o *sessionOpener) handleWrite(header proto.Header, body []byte) ([]byte, e
 		return o.mapSessionError(header, err), nil
 	}
 	return proto.BuildSuccessResponse(header, nil), nil
+}
+
+func (o *sessionOpener) closeConnection(connectionID uint64) {
+	o.sessions.CloseConnection(connectionID)
 }
 
 func (o *sessionOpener) mapSessionError(header proto.Header, err error) []byte {

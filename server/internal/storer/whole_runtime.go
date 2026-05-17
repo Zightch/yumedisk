@@ -28,7 +28,8 @@ func NewWholeRuntime(cfg config.StorerConfig, core *Core) (*WholeRuntime, error)
 		return nil, errors.New("whole runtime requires non-nil core")
 	}
 
-	gatewayHandler, err := gateway.NewHandler(core.DiskID(), core.AuthVerifier(), core.SessionService())
+	backend := newLocalGatewayBackend(core)
+	gatewayHandler, err := gateway.NewHandler(backend, backend)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +78,7 @@ func (r *WholeRuntime) Run(ctx context.Context) error {
 }
 
 func (r *WholeRuntime) serveAcceptedConnection(ctx context.Context, state *gateway.ConnectionState, conn net.Conn) {
-	defer r.core.SessionService().CloseConnection(state.ID)
+	defer r.gateway.CloseConnection(state.ID)
 	defer conn.Close()
 
 	log.Printf("connection %d accepted from %s", state.ID, conn.RemoteAddr())

@@ -1,11 +1,11 @@
 package gateway
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
-	"os"
-	"path/filepath"
 	"yumedisk/server/internal/auth"
 	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/session"
@@ -151,7 +151,8 @@ func newAuthHandler(t *testing.T, material auth.Material) (*Handler, error) {
 	t.Cleanup(func() { _ = storage.Close() })
 
 	sessions := session.NewService(session.NewManager(), storage, 30*time.Second, 60*1024)
-	handler, err := NewHandler(material.DiskID, material.AuthVerifier, sessions)
+	backend := newTestGatewayBackend(material, sessions)
+	handler, err := NewHandler(backend, backend)
 	if err != nil {
 		return nil, err
 	}
