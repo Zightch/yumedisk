@@ -30,7 +30,10 @@ func (o *sessionOpener) handleSessionOpen(state *ConnectionState, header proto.H
 		return proto.BuildErrorResponse(header, proto.StatusAuthRequired), nil
 	}
 
-	desc := o.sessions.Open(state.ID, diskID)
+	desc, err := o.sessions.Open(state.ID, diskID)
+	if err != nil {
+		return o.mapSessionError(header, err), nil
+	}
 	bodyOut := proto.BuildSessionOpenResponseBody(desc.DiskSize, desc.MaxIOBytes, o.sessions.TTLSeconds(), desc.ReadOnly)
 	respHeader := proto.Header{
 		ProtocolVersion: header.ProtocolVersion,
@@ -57,7 +60,7 @@ func (o *sessionOpener) handlePing(header proto.Header, body []byte) ([]byte, er
 
 	_, ok := o.sessions.Ping(header.SessionID)
 	if !ok {
-		return proto.BuildErrorResponse(header, proto.StatusSessionNotFound), nil
+		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
 	return proto.BuildSuccessResponse(header, proto.BuildPingResponseBody(nonce)), nil
 }
@@ -109,12 +112,10 @@ func (o *sessionOpener) handleWrite(header proto.Header, body []byte) ([]byte, e
 
 func (o *sessionOpener) mapSessionError(header proto.Header, err error) []byte {
 	switch err {
-	case session.ErrSessionNotFound:
-		return proto.BuildErrorResponse(header, proto.StatusSessionNotFound)
-	case session.ErrSessionExpired:
-		return proto.BuildErrorResponse(header, proto.StatusSessionExpired)
-	case session.ErrSessionClosed:
-		return proto.BuildErrorResponse(header, proto.StatusSessionClosed)
+	case session.ErrSessionUnavailable:
+		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable)
+	case session.ErrSessionBusy:
+		return proto.BuildErrorResponse(header, proto.StatusSessionBusy)
 	case session.ErrReadOnly:
 		return proto.BuildErrorResponse(header, proto.StatusIOReadOnly)
 	case session.ErrIOLimit:

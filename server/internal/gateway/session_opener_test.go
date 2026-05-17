@@ -69,7 +69,7 @@ func TestSessionOpenPingAndClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse ping-after-close response header: %v", err)
 	}
-	if pingAfterCloseHeader.StatusCode != proto.StatusSessionNotFound {
+	if pingAfterCloseHeader.StatusCode != proto.StatusSessionUnavailable {
 		t.Fatalf("unexpected ping-after-close status: %d", pingAfterCloseHeader.StatusCode)
 	}
 }
@@ -170,6 +170,32 @@ func TestWriteReadOnlyAndOutOfRangeErrors(t *testing.T) {
 	}
 	if tooLargeHeader.StatusCode != proto.StatusIOLarge {
 		t.Fatalf("unexpected too-large status: %d", tooLargeHeader.StatusCode)
+	}
+}
+
+func TestSessionOpenRejectsSecondClientWhileDiskIsAlreadyOpened(t *testing.T) {
+	t.Parallel()
+
+	handler, stateOne, material := newSessionTestHandler(t)
+	stateOne.markAuthenticated(material.DiskID)
+	firstSessionID := openSessionForTest(t, handler, stateOne, material.DiskID)
+	if firstSessionID == 0 {
+		t.Fatal("expected non-zero first session id")
+	}
+
+	stateTwo := handler.NewConnectionState(101)
+	stateTwo.markAuthenticated(material.DiskID)
+	openReq := buildRequest(proto.OpSessionOpen, 120, 0, []byte(material.DiskID))
+	openResp, err := handler.HandlePayload(stateTwo, openReq)
+	if err != nil {
+		t.Fatalf("open session on second client: %v", err)
+	}
+	openHeader, err := proto.ParseHeader(openResp)
+	if err != nil {
+		t.Fatalf("parse second open response: %v", err)
+	}
+	if openHeader.StatusCode != proto.StatusSessionBusy {
+		t.Fatalf("unexpected second open status: %d", openHeader.StatusCode)
 	}
 }
 

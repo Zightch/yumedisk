@@ -126,8 +126,8 @@ func TestServerMinimalClosure(t *testing.T) {
 	binary.BigEndian.PutUint64(pingBody, 123)
 	pingResp := mustRoundTrip(t, conn2, buildRequest(proto.OpPing, requestID, sessionID, pingBody))
 	pingHeader := mustParseHeader(t, pingResp)
-	if pingHeader.StatusCode != proto.StatusSessionNotFound {
-		t.Fatalf("expected session not found after disconnect, got %d", pingHeader.StatusCode)
+	if pingHeader.StatusCode != proto.StatusSessionUnavailable {
+		t.Fatalf("expected session unavailable after disconnect, got %d", pingHeader.StatusCode)
 	}
 
 	cancel()
@@ -139,6 +139,116 @@ func TestServerMinimalClosure(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("server did not stop in time")
 	}
+}
+
+func TestServerRejectsSecondSessionOpenWhileDiskIsAlreadyOpened(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	rawPath := filepath.Join(tempDir, "disk.raw")
+	if err := os.WriteFile(rawPath, make([]byte, 4096), 0o644); err != nil {
+		t.Fatalf("write raw file: %v", err)
+	}
+
+	claimCode, err := auth.GenerateClaimCode(64)
+	if err != nil {
+		t.Fatalf("generate claim code: %v", err)
+	}
+	material, err := auth.ParseClaimCode(claimCode)
+	if err != nil {
+		t.Fatalf("parse claim code: %v", err)
+	}
+
+	cfg := config.Config{
+		ListenAddr:      reserveLocalAddr(t),
+		StorageFilePath: rawPath,
+		ClaimCode:       claimCode,
+	}
+
+	service, err := NewService(cfg)
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- service.Run(ctx)
+	}()
+	waitForTCP(t, cfg.ListenAddr)
+
+	connOne, err := net.Dial("tcp", cfg.ListenAddr)
+	if err != nil {
+		t.Fatalf("dial first client: %v", err)
+	}
+	defer connOne.Close()
+
+	authenticateAndOpenSession(t, connOne, material)
+
+	connTwo, err := net.Dial("tcp", cfg.ListenAddr)
+	if err != nil {
+		t.Fatalf("dial second client: %v", err)
+	}
+	defer connTwo.Close()
+
+	requestID := authenticateConnection(t, connTwo, material)
+	requestID++
+	openResp := mustRoundTrip(t, connTwo, buildRequest(proto.OpSessionOpen, requestID, 0, []byte(material.DiskID)))
+	openHeader := mustParseHeader(t, openResp)
+	if openHeader.StatusCode != proto.StatusSessionBusy {
+		t.Fatalf("expected session busy, got %d", openHeader.StatusCode)
+	}
+
+	cancel()
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("server run exited with error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not stop in time")
+	}
+}
+
+func authenticateAndOpenSession(t *testing.T, conn net.Conn, material auth.Material) uint64 {
+	t.Helper()
+
+	requestID := authenticateConnection(t, conn, material)
+	requestID++
+	openResp := mustRoundTrip(t, conn, buildRequest(proto.OpSessionOpen, requestID, 0, []byte(material.DiskID)))
+	openHeader := mustParseHeader(t, openResp)
+	if openHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("session open status: %d", openHeader.StatusCode)
+	}
+	return openHeader.SessionID
+}
+
+func authenticateConnection(t *testing.T, conn net.Conn, material auth.Material) uint64 {
+	t.Helper()
+
+	requestID := uint64(1)
+	startResp := mustRoundTrip(t, conn, buildRequest(proto.OpAuthStart, requestID, 0, []byte(material.DiskID)))
+	startHeader := mustParseHeader(t, startResp)
+	if startHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("auth start status: %d", startHeader.StatusCode)
+	}
+	startBody, err := proto.ParseAuthStartResponseBody(startResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse auth start response: %v", err)
+	}
+
+	requestID++
+	proof := auth.ComputeProof(material.AuthVerifier, startBody.Salt[:])
+	finishBody := proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof)
+	finishResp := mustRoundTrip(t, conn, buildRequest(proto.OpAuthFinish, requestID, 0, finishBody))
+	finishHeader := mustParseHeader(t, finishResp)
+	if finishHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("auth finish status: %d", finishHeader.StatusCode)
+	}
+	return requestID
 }
 
 func waitForTCP(t *testing.T, addr string) {

@@ -40,6 +40,29 @@ func (m *Manager) Open(desc Descriptor) Descriptor {
 	return desc
 }
 
+func (m *Manager) OpenExclusive(desc Descriptor, now time.Time) (Descriptor, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id, existing := range m.items {
+		if existing.DiskID != desc.DiskID {
+			continue
+		}
+		if now.After(existing.ExpiresAt) {
+			delete(m.items, id)
+			continue
+		}
+		return Descriptor{}, false
+	}
+
+	desc.ID = m.nextID.Add(1)
+	if desc.ID == 0 {
+		desc.ID = m.nextID.Add(1)
+	}
+	m.items[desc.ID] = desc
+	return desc, true
+}
+
 func (m *Manager) Get(id uint64) (Descriptor, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

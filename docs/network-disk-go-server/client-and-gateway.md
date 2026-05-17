@@ -377,9 +377,8 @@ NetworkMedia3 -> DiskSession3 /
 
 | `status_code` | 名称 | 说明 |
 | --- | --- | --- |
-| `0x1201` | `ERR_SESSION_NOT_FOUND` | `session_id` 不存在 |
-| `0x1202` | `ERR_SESSION_EXPIRED` | `session_id` 已过期 |
-| `0x1203` | `ERR_SESSION_CLOSED` | `session_id` 已关闭 |
+| `0x1201` | `ERR_SESSION_UNAVAILABLE` | `session_id` 不可用；统一覆盖不存在、已过期、已被回收 |
+| `0x1202` | `ERR_SESSION_BUSY` | 目标盘当前已有活跃打开会话，拒绝新的 `SessionOpen` |
 
 ### 9.5 I/O 层错误
 
@@ -659,7 +658,8 @@ v1 absolute_max_io_bytes = 65500
 - `SessionOpen` 的前提是当前 connection 已对目标 `disk_id` 完成认证
 - `SessionOpen` 的成功与否由 `storer` 打开策略决定
 - 同一连接上，`SessionOpen` 可针对多个不同盘执行
-- 同一盘重复 `SessionOpen` 默认创建新的独立会话
+- 第一版单盘只允许一个活跃打开会话
+- 已有其他 client 持有该盘活跃会话时，新的 `SessionOpen` 必须返回 `ERR_SESSION_BUSY`
 - `SessionOpen` 成功后才允许构造 `DiskSession`
 - `NetworkMedia` 构造必须使用本响应返回的 `session_id`
 
@@ -848,6 +848,7 @@ data[length]
 - 不关闭整条 TCP 连接
 - `Close` 设计为幂等清理操作
 - 若会话已经不存在或已过期，允许直接返回成功
+- `Close` 对已被回收的会话可视为幂等；client 不要求区分“原本存在”还是“已经不可用”
 
 ## 11. 时序图
 

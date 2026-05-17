@@ -500,11 +500,7 @@ fn validate_single_io(
 
 fn map_data_plane_error(error: ProtocolClientError) -> NetworkClientError {
     match error {
-        ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrSessionExpired) => {
-            NetworkClientError::SessionUnavailable
-        }
-        ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrSessionClosed)
-        | ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrSessionNotFound) => {
+        ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrSessionUnavailable) => {
             NetworkClientError::SessionUnavailable
         }
         ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrIoOutOfRange) => {

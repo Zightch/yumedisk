@@ -7,6 +7,7 @@ use super::protocol_client::ProtocolClientError;
 pub enum NetworkClientError {
     InvalidArgument(&'static str),
     UnauthorizedDisk { disk_id: String },
+    DiskBusy { disk_id: String },
     InvalidIo(&'static str),
     IoFailed,
     SessionUnavailable,
@@ -26,6 +27,7 @@ impl fmt::Display for NetworkClientError {
             Self::UnauthorizedDisk { disk_id } => {
                 write!(formatter, "unauthorized-disk: {}", disk_id)
             }
+            Self::DiskBusy { disk_id } => write!(formatter, "disk-busy: {}", disk_id),
             Self::InvalidIo(reason) => write!(formatter, "invalid-io: {}", reason),
             Self::IoFailed => formatter.write_str("io-failed"),
             Self::SessionUnavailable => formatter.write_str("session-unavailable"),

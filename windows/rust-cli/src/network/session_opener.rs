@@ -58,6 +58,11 @@ fn map_session_open_error<'a>(
                 disk_id: disk_id.to_string(),
             }
         }
+        ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrSessionBusy) => {
+            NetworkClientError::DiskBusy {
+                disk_id: disk_id.to_string(),
+            }
+        }
         other => NetworkClientError::Protocol(other),
     }
 }
@@ -143,5 +148,48 @@ mod tests {
             .open("A1b2C3d4E5f6G7h8")
             .expect_err("open should fail");
         assert_eq!(error.to_string(), "unauthorized-disk: A1b2C3d4E5f6G7h8");
+    }
+
+    #[test]
+    fn session_open_maps_busy_status_to_disk_busy() {
+        let disk_id = "A1b2C3d4E5f6G7h8";
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
+        let address = listener.local_addr().expect("local addr should succeed");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            let mut buffer = vec![0u8; MAX_FRAME_PAYLOAD_BYTES];
+
+            let request = read_frame_into(&mut stream, &mut buffer)
+                .expect("read session open should succeed")
+                .to_vec();
+            let header =
+                crate::network::parse_request_header(&request).expect("parse session open");
+            assert_eq!(header.op_code, ClientOperationCode::SessionOpen);
+
+            let response = ProtocolHeader {
+                protocol_version: PROTOCOL_VERSION,
+                header_len: HEADER_SIZE as u8,
+                op_code: ClientOperationCode::SessionOpen,
+                flags: FLAG_RESPONSE,
+                status_code: ProtocolStatusCode::ErrSessionBusy,
+                reserved: 0,
+                request_id: header.request_id,
+                session_id: 0,
+            }
+            .encode(&[]);
+            write_frame(&mut stream, &response).expect("write session open busy response");
+        });
+
+        let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
+        connection.connect().expect("connect should succeed");
+        connection.mark_authorized(disk_id);
+        let opener = SessionOpener::new(connection.clone());
+
+        let error = opener.open(disk_id).expect_err("open should fail");
+        assert_eq!(error.to_string(), "disk-busy: A1b2C3d4E5f6G7h8");
+
+        connection.close().expect("close should succeed");
+        server.join().expect("server should join");
     }
 }

@@ -76,6 +76,7 @@ client <-> storer
 - 认证成功 != 会话已建立
 - 认证成功只授予“申请打开该盘会话”的资格
 - 只有 `SessionOpen` 成功后，才能创建 `DiskSession`
+- 第一版 `SessionOpen` 采用单盘独占策略；已有活跃会话时返回 busy
 
 ## 当前明确不做
 

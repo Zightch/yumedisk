@@ -209,6 +209,7 @@ client 本地配置只保存网络盘重建所需最小信息：
 - 两个连接如果都持有正确领盘码，都可以通过认证
 - 认证成功后只是获得“申请打开该盘会话”的资格
 - 能不能真的打开、是否只读、是否共享、是否排它，由 `storer` 在 `SessionOpen` 阶段决定
+- 第一版先固定为单盘独占打开：同一时刻只允许一个 client 持有该盘活跃会话
 
 ## 6. 第一版最小会话模型
 
@@ -246,6 +247,7 @@ DiskSession {
 - `client` 后续所有数据面请求只带 `session_id`
 - `NetworkMedia` 构造时必须拿到 `disk_size_bytes`、`read_only`、`max_io_bytes`
 - `DiskSession` 只表示已打开会话，不表示仅已认证状态
+- 第一版同一 `disk_id` 同时只允许一个活跃 `DiskSession`
 
 ## 7. 第一版实现顺序
 

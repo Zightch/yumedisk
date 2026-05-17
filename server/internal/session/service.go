@@ -9,13 +9,12 @@ import (
 )
 
 var (
-	ErrSessionNotFound = errors.New("session not found")
-	ErrSessionClosed   = errors.New("session closed")
-	ErrSessionExpired  = errors.New("session expired")
-	ErrIOLimit         = errors.New("io limit exceeded")
-	ErrOutOfRange      = errors.New("io out of range")
-	ErrReadOnly        = errors.New("session is read only")
-	ErrIOFailed        = errors.New("io failed")
+	ErrSessionUnavailable = errors.New("session unavailable")
+	ErrSessionBusy        = errors.New("session busy")
+	ErrIOLimit            = errors.New("io limit exceeded")
+	ErrOutOfRange         = errors.New("io out of range")
+	ErrReadOnly           = errors.New("session is read only")
+	ErrIOFailed           = errors.New("io failed")
 )
 
 type Service struct {
@@ -34,15 +33,20 @@ func NewService(manager *Manager, storage *filestorage.Backend, defaultTTL time.
 	}
 }
 
-func (s *Service) Open(connectionID uint64, diskID string) Descriptor {
-	return s.manager.Open(Descriptor{
+func (s *Service) Open(connectionID uint64, diskID string) (Descriptor, error) {
+	now := time.Now()
+	desc, ok := s.manager.OpenExclusive(Descriptor{
 		DiskID:     diskID,
 		DiskSize:   s.storage.Size(),
 		ReadOnly:   s.storage.ReadOnly(),
 		MaxIOBytes: s.defaultMaxIO,
-		ExpiresAt:  time.Now().Add(s.defaultTTL),
+		ExpiresAt:  now.Add(s.defaultTTL),
 		Connection: connectionID,
-	})
+	}, now)
+	if !ok {
+		return Descriptor{}, ErrSessionBusy
+	}
+	return desc, nil
 }
 
 func (s *Service) Ping(sessionID uint64) (Descriptor, bool) {
@@ -112,11 +116,11 @@ func (s *Service) Write(sessionID uint64, offset uint64, data []byte) error {
 func (s *Service) validate(sessionID uint64) (Descriptor, error) {
 	desc, ok := s.manager.Get(sessionID)
 	if !ok {
-		return Descriptor{}, ErrSessionNotFound
+		return Descriptor{}, ErrSessionUnavailable
 	}
 	if time.Now().After(desc.ExpiresAt) {
 		s.manager.Close(sessionID)
-		return Descriptor{}, ErrSessionExpired
+		return Descriptor{}, ErrSessionUnavailable
 	}
 	return desc, nil
 }

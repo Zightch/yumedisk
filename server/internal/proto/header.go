@@ -32,9 +32,8 @@ const (
 	StatusAuthExpired          = 0x1102
 	StatusAuthChallengeInvalid = 0x1103
 	StatusAuthRequired         = 0x1104
-	StatusSessionNotFound      = 0x1201
-	StatusSessionExpired       = 0x1202
-	StatusSessionClosed        = 0x1203
+	StatusSessionUnavailable   = 0x1201
+	StatusSessionBusy          = 0x1202
 	StatusIOOutOfRange         = 0x1301
 	StatusIOLarge              = 0x1302
 	StatusIOReadOnly           = 0x1303

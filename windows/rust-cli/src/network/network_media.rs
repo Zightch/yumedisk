@@ -125,6 +125,7 @@ fn map_network_error_to_backend_error(error: NetworkClientError) -> BackendError
         | NetworkClientError::InvalidIo(_)
         | NetworkClientError::IoFailed => BackendError::InvalidParameter,
         NetworkClientError::SessionUnavailable
+        | NetworkClientError::DiskBusy { .. }
         | NetworkClientError::UnauthorizedDisk { .. }
         | NetworkClientError::AlreadyConnected
         | NetworkClientError::PendingRequestConflict { .. }
