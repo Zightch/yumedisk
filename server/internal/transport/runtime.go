@@ -28,6 +28,7 @@ type Runtime struct {
 	conn    net.Conn
 	handler Handler
 
+	mu      sync.RWMutex
 	writeMu sync.Mutex
 }
 
@@ -42,7 +43,11 @@ func (r *Runtime) Run() error {
 	buffer := make([]byte, MaxPayloadSize)
 
 	for {
-		payload, err := ReadFrameInto(r.conn, buffer)
+		conn := r.currentConn()
+		if conn == nil {
+			return nil
+		}
+		payload, err := ReadFrameInto(conn, buffer)
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				return nil
@@ -68,22 +73,32 @@ func (r *Runtime) Run() error {
 }
 
 func (r *Runtime) Close() error {
-	if r.conn == nil {
+	r.mu.Lock()
+	conn := r.conn
+	r.conn = nil
+	r.mu.Unlock()
+	if conn == nil {
 		return nil
 	}
-	err := r.conn.Close()
-	r.conn = nil
-	return err
+	return conn.Close()
 }
 
 func (r *Runtime) WritePayload(payload []byte) error {
 	r.writeMu.Lock()
 	defer r.writeMu.Unlock()
 
-	if r.conn == nil {
+	conn := r.currentConn()
+	if conn == nil {
 		return ErrConnectionClosed
 	}
-	return WriteFrame(r.conn, payload)
+	return WriteFrame(conn, payload)
+}
+
+func (r *Runtime) currentConn() net.Conn {
+	r.mu.RLock()
+	conn := r.conn
+	r.mu.RUnlock()
+	return conn
 }
 
 func ReadFrameInto(r io.Reader, buffer []byte) ([]byte, error) {

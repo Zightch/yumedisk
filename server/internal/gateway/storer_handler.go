@@ -1,6 +1,9 @@
 package gateway
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 type StorerHandler struct {
 	routes *StorerRouteRegistry
@@ -13,6 +16,9 @@ func NewStorerHandler(routes *StorerRouteRegistry) (*StorerHandler, error) {
 	return &StorerHandler{routes: routes}, nil
 }
 
-func (h *StorerHandler) HandlePayload([]byte) ([]byte, error) {
-	return nil, fmt.Errorf("storer-facing gateway protocol not implemented yet")
+func (h *StorerHandler) ServeConnection(conn *storerConnection, gatewayToken string) error {
+	if conn == nil {
+		return fmt.Errorf("storer handler requires connection")
+	}
+	return conn.serve(context.Background(), h.routes, gatewayToken)
 }

@@ -41,7 +41,7 @@ func (o *sessionOpener) handleSessionOpen(state *ConnectionState, header proto.H
 		return o.mapSessionError(header, err), nil
 	}
 	gatewaySessionID := o.registry.Open(state.ID, routeEntry.ConnectionID, desc.ID)
-	bodyOut := proto.BuildSessionOpenResponseBody(desc.DiskSize, desc.MaxIOBytes, o.sessions.TTLSeconds(), desc.ReadOnly)
+	bodyOut := proto.BuildSessionOpenResponseBody(desc.DiskSize, desc.MaxIOBytes, desc.TTLSeconds, desc.ReadOnly)
 	respHeader := proto.Header{
 		ProtocolVersion: header.ProtocolVersion,
 		HeaderLen:       header.HeaderLen,
@@ -70,7 +70,7 @@ func (o *sessionOpener) handlePing(header proto.Header, body []byte) ([]byte, er
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
 
-	_, ok = o.sessions.Ping(mapped.UpstreamSession)
+	_, ok = o.sessions.Ping(mapped.RouteConnection, mapped.UpstreamSession)
 	if !ok {
 		o.registry.Close(header.SessionID)
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
@@ -88,7 +88,7 @@ func (o *sessionOpener) handleClose(header proto.Header, body []byte) ([]byte, e
 
 	mapped, ok := o.registry.Close(header.SessionID)
 	if ok {
-		o.sessions.Close(mapped.UpstreamSession)
+		o.sessions.Close(mapped.RouteConnection, mapped.UpstreamSession)
 	}
 	return proto.BuildSuccessResponse(header, nil), nil
 }
@@ -108,7 +108,7 @@ func (o *sessionOpener) handleRead(header proto.Header, body []byte) ([]byte, er
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
 
-	data, err := o.sessions.Read(mapped.UpstreamSession, offset, length)
+	data, err := o.sessions.Read(mapped.RouteConnection, mapped.UpstreamSession, offset, length)
 	if err != nil {
 		if err == session.ErrSessionUnavailable {
 			o.registry.Close(header.SessionID)
@@ -133,7 +133,7 @@ func (o *sessionOpener) handleWrite(header proto.Header, body []byte) ([]byte, e
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
 
-	if err := o.sessions.Write(mapped.UpstreamSession, offset, data); err != nil {
+	if err := o.sessions.Write(mapped.RouteConnection, mapped.UpstreamSession, offset, data); err != nil {
 		if err == session.ErrSessionUnavailable {
 			o.registry.Close(header.SessionID)
 		}
@@ -144,9 +144,13 @@ func (o *sessionOpener) handleWrite(header proto.Header, body []byte) ([]byte, e
 
 func (o *sessionOpener) closeConnection(connectionID uint64) {
 	for _, mapped := range o.registry.CloseConnection(connectionID) {
-		o.sessions.Close(mapped.UpstreamSession)
+		o.sessions.Close(mapped.RouteConnection, mapped.UpstreamSession)
 	}
 	o.sessions.CloseConnection(connectionID)
+}
+
+func (o *sessionOpener) closeRouteConnection(routeConnectionID uint64) {
+	o.registry.CloseRouteConnection(routeConnectionID)
 }
 
 func (o *sessionOpener) mapSessionError(header proto.Header, err error) []byte {

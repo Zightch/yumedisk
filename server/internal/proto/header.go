@@ -15,6 +15,7 @@ const (
 	OpAuthStart   = 0x01
 	OpAuthFinish  = 0x02
 	OpSessionOpen = 0x03
+	OpStorerRegister = 0x20
 	OpReadAt      = 0x10
 	OpWriteAt     = 0x11
 	OpPing        = 0x12

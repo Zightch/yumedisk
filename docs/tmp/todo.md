@@ -251,21 +251,20 @@
 
 ## 推荐实现顺序
 
-1. D1 接通 gateway-and-storer 注册阶段
-2. D2 接通 SessionOpen 透传链
-3. D3 接通 ReadAt / WriteAt / Ping / Close
-4. E1 + E2 启动入口与联调
-5. F1 + F2 文档收口
+1. E1 + E2 启动入口与联调
+2. F1 + F2 文档收口
 
 ## 当前下一步
 
-下一步直接开始 `D1. 接通 gateway-and-storer 注册阶段`：
+下一步直接开始 `E1 + E2. 启动入口与联调`：
 
-- storer 向 gateway 提交：
-  - `gateway_token`
-  - `disk_id`
-  - `auth_verifier`
-- gateway 建立真实注册表
-- 注册成功后，再进入后续数据面复用阶段
-- 必须避免：
-  - 让 client-facing handler 感知注册细节
+- 明确两个可执行文件的最终启动方式：
+  - `cmd/storer`
+  - `cmd/gateway`
+- 保持 `windows/rust-cli/src/bin/network-auth-open.rs` 继续可直连真实 gateway
+- 优先覆盖联调场景：
+  - auth
+  - open
+  - busy
+  - close
+  - reopen

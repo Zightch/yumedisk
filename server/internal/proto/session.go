@@ -37,6 +37,18 @@ func BuildSessionOpenResponseBody(diskSize uint64, maxIOBytes uint32, ttlSeconds
 	return body
 }
 
+func ParseSessionOpenResponseBody(body []byte) (diskSize uint64, maxIOBytes uint32, ttlSeconds uint32, readOnly bool, err error) {
+	if len(body) != SessionOpenResponseSize {
+		return 0, 0, 0, false, ErrSessionBody
+	}
+	diskSize = binary.BigEndian.Uint64(body[0:8])
+	maxIOBytes = binary.BigEndian.Uint32(body[8:12])
+	ttlSeconds = binary.BigEndian.Uint32(body[12:16])
+	flags := binary.BigEndian.Uint16(body[16:18])
+	readOnly = flags&SessionFlagReadOnly != 0
+	return diskSize, maxIOBytes, ttlSeconds, readOnly, nil
+}
+
 func ParsePingRequestBody(body []byte) (uint64, error) {
 	if len(body) != PingBodySize {
 		return 0, ErrSessionBody

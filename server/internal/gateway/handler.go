@@ -95,6 +95,12 @@ func (h *Handler) CloseConnection(connectionID uint64) {
 	h.sessionOpener.closeConnection(connectionID)
 }
 
+func (h *Handler) CloseRouteConnection(routeConnectionID uint64) {
+	h.sessionOpener.closeRouteConnection(routeConnectionID)
+}
+
+var _ routeDisconnectHandler = (*Handler)(nil)
+
 func (s *ConnectionState) markAuthenticated(diskID string) {
 	s.mu.Lock()
 	s.authenticatedDisk[diskID] = struct{}{}

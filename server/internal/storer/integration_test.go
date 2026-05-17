@@ -286,13 +286,35 @@ func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
 	}
 	defer conn.Close()
 
-	authResp := mustRoundTrip(t, conn, buildRequest(proto.OpAuthStart, 1, 0, []byte(material.DiskID)))
+	registerReq := proto.BuildStorerRegisterRequestBody(proto.StorerRegisterRequest{
+		GatewayToken:      "gateway-token",
+		DiskID:            material.DiskID,
+		AuthVerifier:      material.AuthVerifier,
+		DiskSizeBytes:     4096,
+		MaxIOBytes:        60 * 1024,
+		SessionTTLSeconds: 30,
+	})
+	registerPayload := make([]byte, proto.HeaderSize+len(registerReq))
+	proto.EncodeHeader(proto.Header{
+		ProtocolVersion: proto.ProtocolVersion,
+		HeaderLen:       proto.HeaderSize,
+		OpCode:          proto.OpStorerRegister,
+		RequestID:       1,
+	}, registerPayload)
+	copy(registerPayload[proto.HeaderSize:], registerReq)
+	registerResp := mustRoundTrip(t, conn, registerPayload)
+	registerHeader := mustParseHeader(t, registerResp)
+	if registerHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("register status: %d", registerHeader.StatusCode)
+	}
+
+	authResp := mustRoundTrip(t, conn, buildRequest(proto.OpAuthStart, 2, 0, []byte(material.DiskID)))
 	authHeader := mustParseHeader(t, authResp)
 	if authHeader.StatusCode != proto.StatusUnsupportedOp {
 		t.Fatalf("expected auth op to be unsupported, got %d", authHeader.StatusCode)
 	}
 
-	openResp := mustRoundTrip(t, conn, buildRequest(proto.OpSessionOpen, 2, 0, []byte(material.DiskID)))
+	openResp := mustRoundTrip(t, conn, buildRequest(proto.OpSessionOpen, 3, 0, []byte(material.DiskID)))
 	openHeader := mustParseHeader(t, openResp)
 	if openHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("session open status: %d", openHeader.StatusCode)
@@ -303,13 +325,13 @@ func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
 	}
 
 	writePayload := append(proto.BuildReadWriteBody(16, 4), []byte("DATA")...)
-	writeResp := mustRoundTrip(t, conn, buildRequest(proto.OpWriteAt, 3, sessionID, writePayload))
+	writeResp := mustRoundTrip(t, conn, buildRequest(proto.OpWriteAt, 4, sessionID, writePayload))
 	writeHeader := mustParseHeader(t, writeResp)
 	if writeHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("write status: %d", writeHeader.StatusCode)
 	}
 
-	readResp := mustRoundTrip(t, conn, buildRequest(proto.OpReadAt, 4, sessionID, proto.BuildReadBody(16, 4)))
+	readResp := mustRoundTrip(t, conn, buildRequest(proto.OpReadAt, 5, sessionID, proto.BuildReadBody(16, 4)))
 	readHeader := mustParseHeader(t, readResp)
 	if readHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("read status: %d", readHeader.StatusCode)

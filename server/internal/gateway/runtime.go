@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 
 	"yumedisk/server/internal/config"
-	"yumedisk/server/internal/session"
 	"yumedisk/server/internal/transport"
 )
 
@@ -24,7 +23,7 @@ type Runtime struct {
 
 func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
 	routes := NewStorerRouteRegistry()
-	clientHandler, err := NewHandler(routes, newUnavailableDataPlane())
+	clientHandler, err := NewHandler(routes, routes)
 	if err != nil {
 		return nil, err
 	}
@@ -32,6 +31,7 @@ func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	routes.SetDisconnectHandler(clientHandler)
 
 	return &Runtime{
 		cfg:           cfg,
@@ -164,49 +164,19 @@ func (r *Runtime) serveStorerConnection(ctx context.Context, connectionID uint64
 
 	log.Printf("gateway storer connection %d accepted from %s", connectionID, conn.RemoteAddr())
 
-	runtime := transport.NewRuntime(conn, r.storerHandler)
+	storerConn := r.routes.AttachConnection(connectionID, conn)
 	done := make(chan error, 1)
 	go func() {
-		done <- runtime.Run()
+		done <- storerConn.serve(ctx, r.routes, r.cfg.Storer.GatewayToken)
 	}()
 
 	select {
 	case <-ctx.Done():
-		_ = runtime.Close()
+		_ = conn.Close()
 		<-done
 	case err := <-done:
 		if err != nil && !errors.Is(err, net.ErrClosed) {
 			log.Printf("gateway storer connection %d runtime: %v", connectionID, err)
 		}
 	}
-}
-
-type unavailableDataPlane struct{}
-
-func newUnavailableDataPlane() *unavailableDataPlane {
-	return &unavailableDataPlane{}
-}
-
-func (p *unavailableDataPlane) Open(uint64, string) (session.Descriptor, error) {
-	return session.Descriptor{}, session.ErrSessionUnavailable
-}
-
-func (p *unavailableDataPlane) Ping(uint64) (session.Descriptor, bool) {
-	return session.Descriptor{}, false
-}
-
-func (p *unavailableDataPlane) Close(uint64) {}
-
-func (p *unavailableDataPlane) CloseConnection(uint64) {}
-
-func (p *unavailableDataPlane) Read(uint64, uint64, uint32) ([]byte, error) {
-	return nil, session.ErrSessionUnavailable
-}
-
-func (p *unavailableDataPlane) Write(uint64, uint64, []byte) error {
-	return session.ErrSessionUnavailable
-}
-
-func (p *unavailableDataPlane) TTLSeconds() uint32 {
-	return 0
 }

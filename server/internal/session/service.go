@@ -40,6 +40,7 @@ func (s *Service) Open(connectionID uint64, diskID string) (Descriptor, error) {
 		DiskSize:   s.storage.Size(),
 		ReadOnly:   s.storage.ReadOnly(),
 		MaxIOBytes: s.defaultMaxIO,
+		TTLSeconds: s.TTLSeconds(),
 		ExpiresAt:  now.Add(s.defaultTTL),
 		Connection: connectionID,
 	}, now)

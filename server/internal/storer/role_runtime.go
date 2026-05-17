@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"yumedisk/server/internal/config"
+	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/transport"
 )
 
@@ -75,6 +76,39 @@ func (r *StorerRuntime) runGatewayConnection(ctx context.Context, connectionID u
 	defer conn.Close()
 
 	log.Printf("storer connected to gateway %s as connection %d", r.cfg.Storer.GatewayAddr, connectionID)
+
+	registerReq := proto.BuildStorerRegisterRequestBody(proto.StorerRegisterRequest{
+		GatewayToken:      r.cfg.Storer.GatewayToken,
+		DiskID:            r.core.DiskID(),
+		AuthVerifier:      r.core.AuthVerifier(),
+		DiskSizeBytes:     r.core.DiskSize(),
+		ReadOnly:          r.core.ReadOnly(),
+		MaxIOBytes:        r.core.SessionService().MaxIOBytes(),
+		SessionTTLSeconds: r.core.SessionService().TTLSeconds(),
+	})
+	registerPayload := make([]byte, proto.HeaderSize+len(registerReq))
+	proto.EncodeHeader(proto.Header{
+		ProtocolVersion: proto.ProtocolVersion,
+		HeaderLen:       proto.HeaderSize,
+		OpCode:          proto.OpStorerRegister,
+		RequestID:       1,
+	}, registerPayload)
+	copy(registerPayload[proto.HeaderSize:], registerReq)
+	if err := transport.WriteFrame(conn, registerPayload); err != nil {
+		return fmt.Errorf("write register request: %w", err)
+	}
+	buffer := make([]byte, transport.MaxPayloadSize)
+	registerResp, err := transport.ReadFrameInto(conn, buffer)
+	if err != nil {
+		return fmt.Errorf("read register response: %w", err)
+	}
+	registerHeader, err := proto.ParseHeader(registerResp)
+	if err != nil {
+		return fmt.Errorf("parse register response: %w", err)
+	}
+	if registerHeader.StatusCode != proto.StatusOK {
+		return fmt.Errorf("register rejected: status=%d", registerHeader.StatusCode)
+	}
 
 	runtime := transport.NewRuntime(conn, handler)
 	done := make(chan error, 1)

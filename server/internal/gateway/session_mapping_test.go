@@ -204,12 +204,12 @@ func (p *mappingDataPlane) Open(uint64, string) (session.Descriptor, error) {
 	return p.openDesc, p.openErr
 }
 
-func (p *mappingDataPlane) Ping(sessionID uint64) (session.Descriptor, bool) {
+func (p *mappingDataPlane) Ping(routeConnectionID uint64, sessionID uint64) (session.Descriptor, bool) {
 	p.lastPingSessionID = sessionID
 	return p.openDesc, p.pingOK
 }
 
-func (p *mappingDataPlane) Close(sessionID uint64) {
+func (p *mappingDataPlane) Close(routeConnectionID uint64, sessionID uint64) {
 	p.lastCloseSessionID = sessionID
 }
 
@@ -217,16 +217,12 @@ func (p *mappingDataPlane) CloseConnection(connectionID uint64) {
 	p.lastCloseConnectionID = connectionID
 }
 
-func (p *mappingDataPlane) Read(sessionID uint64, offset uint64, length uint32) ([]byte, error) {
+func (p *mappingDataPlane) Read(routeConnectionID uint64, sessionID uint64, offset uint64, length uint32) ([]byte, error) {
 	p.lastReadSessionID = sessionID
 	return p.readOut, p.readErr
 }
 
-func (p *mappingDataPlane) Write(sessionID uint64, offset uint64, data []byte) error {
+func (p *mappingDataPlane) Write(routeConnectionID uint64, sessionID uint64, offset uint64, data []byte) error {
 	p.lastWriteSessionID = sessionID
 	return p.writeErr
-}
-
-func (p *mappingDataPlane) TTLSeconds() uint32 {
-	return 30
 }

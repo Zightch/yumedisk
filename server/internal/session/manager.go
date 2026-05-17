@@ -12,6 +12,7 @@ type Descriptor struct {
 	DiskSize   uint64
 	ReadOnly   bool
 	MaxIOBytes uint32
+	TTLSeconds uint32
 	ExpiresAt  time.Time
 	Connection uint64
 }
