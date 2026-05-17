@@ -34,6 +34,8 @@ func (h *dataPlaneHandler) HandlePayload(payload []byte) ([]byte, error) {
 	switch header.OpCode {
 	case proto.OpSessionOpen:
 		return h.handleSessionOpen(header, body)
+	case proto.OpLinkHeartbeat:
+		return h.handleLinkHeartbeat(header, body)
 	case proto.OpPing:
 		return h.handlePing(header, body)
 	case proto.OpClose:
@@ -76,6 +78,17 @@ func (h *dataPlaneHandler) handleSessionOpen(header proto.Header, body []byte) (
 		SessionID:       desc.ID,
 	}
 	return proto.BuildResponse(respHeader, proto.StatusOK, bodyOut), nil
+}
+
+func (h *dataPlaneHandler) handleLinkHeartbeat(header proto.Header, body []byte) ([]byte, error) {
+	if header.SessionID != 0 {
+		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
+	}
+	nonce, err := proto.ParsePingRequestBody(body)
+	if err != nil {
+		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
+	}
+	return proto.BuildSuccessResponse(header, proto.BuildPingResponseBody(nonce)), nil
 }
 
 func (h *dataPlaneHandler) handlePing(header proto.Header, body []byte) ([]byte, error) {

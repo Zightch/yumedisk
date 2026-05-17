@@ -10,10 +10,19 @@ const (
 	SessionOpenResponseSize = 20
 	SessionFlagReadOnly     = 1 << 0
 	PingBodySize            = 8
+	SessionCloseNoticeSize  = 2
 	ReadWriteHeaderSize     = 12
 )
 
 var ErrSessionBody = errors.New("session body invalid")
+
+const (
+	SessionCloseReasonStorerLinkLost    = uint16(1)
+	SessionCloseReasonGatewayShutdown   = uint16(2)
+	SessionCloseReasonUpstreamHeartbeat = uint16(3)
+	SessionCloseReasonNormalClose       = uint16(5)
+	SessionCloseReasonProtocolError     = uint16(6)
+)
 
 func ParseSessionOpenRequestBody(body []byte) (string, error) {
 	if len(body) != SessionOpenRequestSize {
@@ -60,6 +69,19 @@ func BuildPingResponseBody(nonce uint64) []byte {
 	body := make([]byte, PingBodySize)
 	binary.BigEndian.PutUint64(body, nonce)
 	return body
+}
+
+func BuildSessionCloseNoticeBody(reason uint16) []byte {
+	body := make([]byte, SessionCloseNoticeSize)
+	binary.BigEndian.PutUint16(body[0:2], reason)
+	return body
+}
+
+func ParseSessionCloseNoticeBody(body []byte) (uint16, error) {
+	if len(body) != SessionCloseNoticeSize {
+		return 0, ErrSessionBody
+	}
+	return binary.BigEndian.Uint16(body[0:2]), nil
 }
 
 func ParseReadWriteBody(body []byte) (offset uint64, length uint32, data []byte, err error) {

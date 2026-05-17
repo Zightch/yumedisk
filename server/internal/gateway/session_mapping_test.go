@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"testing"
-	"sync"
 
 	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/route"
@@ -202,9 +201,6 @@ func TestGatewayRouteDisconnectClosesClientConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
 	}
-	collector := &clientDisconnectCollector{}
-	handler.SetClientDisconnectHandler(collector)
-
 	state := handler.NewConnectionState(77)
 	state.markAuthenticated(diskID)
 	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, []byte(diskID)))
@@ -219,12 +215,12 @@ func TestGatewayRouteDisconnectClosesClientConnection(t *testing.T) {
 		t.Fatalf("unexpected open status: %d", openHeader.StatusCode)
 	}
 
-	handler.CloseRouteConnection(routes.entry.ConnectionID)
-
-	collector.mu.Lock()
-	defer collector.mu.Unlock()
-	if len(collector.ids) != 1 || collector.ids[0] != state.ID {
-		t.Fatalf("unexpected client disconnect ids: %#v", collector.ids)
+	closed := handler.CloseRouteConnection(routes.entry.ConnectionID)
+	if len(closed) != 1 {
+		t.Fatalf("unexpected closed sessions count: %d", len(closed))
+	}
+	if closed[0].ClientConnection != state.ID {
+		t.Fatalf("unexpected client connection id: %d", closed[0].ClientConnection)
 	}
 }
 
@@ -251,17 +247,6 @@ type mappingDataPlane struct {
 	lastWriteSessionID    uint64
 	lastCloseSessionID    uint64
 	lastCloseConnectionID uint64
-}
-
-type clientDisconnectCollector struct {
-	mu  sync.Mutex
-	ids []uint64
-}
-
-func (c *clientDisconnectCollector) CloseClientConnection(connectionID uint64) {
-	c.mu.Lock()
-	c.ids = append(c.ids, connectionID)
-	c.mu.Unlock()
 }
 
 func (p *mappingDataPlane) Open(uint64, string) (session.Descriptor, error) {

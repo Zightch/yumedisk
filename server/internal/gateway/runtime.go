@@ -8,8 +8,10 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"yumedisk/server/internal/config"
+	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/transport"
 )
 
@@ -21,8 +23,19 @@ type Runtime struct {
 	nextConn      atomic.Uint64
 
 	clientConnMu sync.RWMutex
-	clientConns  map[uint64]net.Conn
+	clientConns  map[uint64]*clientConnection
 }
+
+type clientConnection struct {
+	conn  net.Conn
+	state *ConnectionState
+	write sync.Mutex
+}
+
+const (
+	storerHeartbeatInterval = 5 * time.Second
+	storerHeartbeatTimeout  = 15 * time.Second
+)
 
 func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
 	routes := NewStorerRouteRegistry()
@@ -34,15 +47,14 @@ func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
-	routes.SetDisconnectHandler(clientHandler)
 	runtime := &Runtime{
 		cfg:           cfg,
 		clientHandler: clientHandler,
 		storerHandler: storerHandler,
 		routes:        routes,
-		clientConns:   make(map[uint64]net.Conn),
+		clientConns:   make(map[uint64]*clientConnection),
 	}
-	clientHandler.SetClientDisconnectHandler(runtime)
+	routes.SetDisconnectHandler(runtime)
 	return runtime, nil
 }
 
@@ -142,7 +154,10 @@ func (r *Runtime) serveStorerListener(ctx context.Context, listener net.Listener
 
 func (r *Runtime) serveClientConnection(ctx context.Context, state *ConnectionState, conn net.Conn) {
 	r.clientConnMu.Lock()
-	r.clientConns[state.ID] = conn
+	r.clientConns[state.ID] = &clientConnection{
+		conn:  conn,
+		state: state,
+	}
 	r.clientConnMu.Unlock()
 	defer r.clientHandler.CloseConnection(state.ID)
 	defer func() {
@@ -178,6 +193,7 @@ func (r *Runtime) serveStorerConnection(ctx context.Context, connectionID uint64
 	log.Printf("gateway storer connection %d accepted from %s", connectionID, conn.RemoteAddr())
 
 	storerConn := r.routes.AttachConnection(connectionID, conn)
+	storerConn.startHeartbeat(storerHeartbeatInterval, storerHeartbeatTimeout)
 	done := make(chan error, 1)
 	go func() {
 		done <- storerConn.serve(ctx, r.routes, r.cfg.Storer.GatewayToken)
@@ -194,11 +210,36 @@ func (r *Runtime) serveStorerConnection(ctx context.Context, connectionID uint64
 	}
 }
 
-func (r *Runtime) CloseClientConnection(connectionID uint64) {
+func (r *Runtime) notifyClientSessionClosed(session gatewaySession, reason uint16) {
 	r.clientConnMu.RLock()
-	conn := r.clientConns[connectionID]
+	client := r.clientConns[session.ClientConnection]
 	r.clientConnMu.RUnlock()
-	if conn != nil {
-		_ = conn.Close()
+	if client == nil {
+		return
+	}
+
+	payload := make([]byte, proto.HeaderSize+proto.SessionCloseNoticeSize)
+	proto.EncodeHeader(proto.Header{
+		ProtocolVersion: proto.ProtocolVersion,
+		HeaderLen:       proto.HeaderSize,
+		OpCode:          proto.OpSessionCloseNotice,
+		RequestID:       1,
+		SessionID:       session.ID,
+	}, payload)
+	copy(payload[proto.HeaderSize:], proto.BuildSessionCloseNoticeBody(reason))
+
+	client.write.Lock()
+	err := transport.WriteFrame(client.conn, payload)
+	client.write.Unlock()
+	if err != nil {
+		_ = client.conn.Close()
+		return
+	}
+	client.state.clearSession(session.ID)
+}
+
+func (r *Runtime) CloseRouteConnection(routeConnectionID uint64) {
+	for _, session := range r.clientHandler.CloseRouteConnection(routeConnectionID) {
+		r.notifyClientSessionClosed(session, proto.SessionCloseReasonStorerLinkLost)
 	}
 }

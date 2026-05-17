@@ -13,6 +13,7 @@ pub const AUTH_CHALLENGE_TOKEN_MIN_BYTES: usize = 1;
 pub const AUTH_ALGO_VERSION_V1: u8 = 1;
 pub const SESSION_OPEN_RESPONSE_BYTES: usize = 20;
 pub const PING_BODY_BYTES: usize = 8;
+pub const SESSION_CLOSE_NOTICE_BYTES: usize = 2;
 pub const READ_WRITE_FIXED_BODY_BYTES: usize = 12;
 pub const SESSION_FLAG_READ_ONLY: u16 = 1 << 0;
 pub const ABSOLUTE_MAX_IO_BYTES: u32 = 65_500;
@@ -23,10 +24,12 @@ pub enum ClientOperationCode {
     AuthStart = 0x01,
     AuthFinish = 0x02,
     SessionOpen = 0x03,
+    SessionCloseNotice = 0x04,
     ReadAt = 0x10,
     WriteAt = 0x11,
     Ping = 0x12,
     Close = 0x13,
+    LinkHeartbeat = 0x21,
 }
 
 impl ClientOperationCode {
@@ -35,10 +38,12 @@ impl ClientOperationCode {
             0x01 => Ok(Self::AuthStart),
             0x02 => Ok(Self::AuthFinish),
             0x03 => Ok(Self::SessionOpen),
+            0x04 => Ok(Self::SessionCloseNotice),
             0x10 => Ok(Self::ReadAt),
             0x11 => Ok(Self::WriteAt),
             0x12 => Ok(Self::Ping),
             0x13 => Ok(Self::Close),
+            0x21 => Ok(Self::LinkHeartbeat),
             actual => Err(ProtocolClientError::UnexpectedOpCode {
                 expected: None,
                 actual,
@@ -233,6 +238,12 @@ pub struct PingResponse {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CloseRequest {
     pub session_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionCloseNotice {
+    pub session_id: u64,
+    pub reason_code: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -566,6 +577,42 @@ impl CloseRequest {
             return Err(ProtocolClientError::InvalidBody("close_response_body"));
         }
         Ok(())
+    }
+}
+
+impl SessionCloseNotice {
+    pub fn decode_notice(payload: &[u8]) -> Result<Self, ProtocolClientError> {
+        let header = parse_header(payload)?;
+        if header.flags != 0 {
+            return Err(ProtocolClientError::UnexpectedFlags {
+                expected: 0,
+                actual: header.flags,
+            });
+        }
+        if header.reserved != 0 {
+            return Err(ProtocolClientError::ReservedNonZero(header.reserved));
+        }
+        if header.op_code != ClientOperationCode::SessionCloseNotice {
+            return Err(ProtocolClientError::UnexpectedOpCode {
+                expected: Some(ClientOperationCode::SessionCloseNotice),
+                actual: header.op_code as u8,
+            });
+        }
+        if header.status_code != ProtocolStatusCode::Ok {
+            return Err(ProtocolClientError::InvalidBody("notice_status_code"));
+        }
+        if header.request_id == 0 || header.session_id == 0 {
+            return Err(ProtocolClientError::InvalidBody("session_close_notice_header"));
+        }
+        let body = &payload[HEADER_SIZE..];
+        if body.len() != SESSION_CLOSE_NOTICE_BYTES {
+            return Err(ProtocolClientError::InvalidBody("session_close_notice_len"));
+        }
+        let reason_code = u16::from_be_bytes(body.try_into().expect("slice length fixed"));
+        Ok(Self {
+            session_id: header.session_id,
+            reason_code,
+        })
     }
 }
 

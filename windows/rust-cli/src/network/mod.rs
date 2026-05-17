@@ -30,6 +30,7 @@ pub use protocol_client::ProtocolHeader;
 pub use protocol_client::ProtocolStatusCode;
 pub use protocol_client::ReadAtRequest;
 pub use protocol_client::ReadAtResponse;
+pub use protocol_client::SessionCloseNotice;
 pub use protocol_client::SessionOpenRequest;
 pub use protocol_client::SessionOpenResponse;
 pub use protocol_client::WriteAtRequest;

@@ -210,6 +210,10 @@ type storerConnection struct {
 
 	pendingMu sync.Mutex
 	pending   map[uint64]chan []byte
+
+	lastSeenUnixNano atomic.Int64
+	heartbeatStop    chan struct{}
+	heartbeatOnce    sync.Once
 }
 
 func newStorerConnection(id uint64, conn net.Conn) *storerConnection {
@@ -217,6 +221,7 @@ func newStorerConnection(id uint64, conn net.Conn) *storerConnection {
 		id:      id,
 		conn:    conn,
 		pending: make(map[uint64]chan []byte),
+		heartbeatStop: make(chan struct{}),
 	}
 }
 
@@ -253,6 +258,8 @@ func (c *storerConnection) roundTrip(payload []byte) ([]byte, error) {
 func (c *storerConnection) serve(ctx context.Context, registry *StorerRouteRegistry, gatewayToken string) error {
 	buffer := make([]byte, transport.MaxPayloadSize)
 	registered := false
+	c.markSeen()
+	defer c.stopHeartbeat()
 
 	for {
 		payload, err := transport.ReadFrameInto(c.conn, buffer)
@@ -267,6 +274,7 @@ func (c *storerConnection) serve(ctx context.Context, registry *StorerRouteRegis
 		if err != nil {
 			return err
 		}
+		c.markSeen()
 		if header.Flags&proto.FlagResponse == 0 {
 			if header.OpCode != proto.OpStorerRegister {
 				resp := proto.BuildErrorResponse(header, proto.StatusInvalidRequest)
@@ -333,6 +341,7 @@ func (c *storerConnection) serve(ctx context.Context, registry *StorerRouteRegis
 }
 
 func (c *storerConnection) closePending() {
+	c.stopHeartbeat()
 	c.pendingMu.Lock()
 	for id, ch := range c.pending {
 		delete(c.pending, id)
@@ -347,6 +356,55 @@ func (c *storerConnection) nextNonZeroRequestID() uint64 {
 		id = c.nextRequestID.Add(1)
 	}
 	return id
+}
+
+func (c *storerConnection) markSeen() {
+	c.lastSeenUnixNano.Store(time.Now().UnixNano())
+}
+
+func (c *storerConnection) startHeartbeat(interval time.Duration, timeout time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		var nonce uint64
+		for {
+			select {
+			case <-ticker.C:
+				lastSeen := time.Unix(0, c.lastSeenUnixNano.Load())
+				if !lastSeen.IsZero() && time.Since(lastSeen) >= timeout {
+					_ = c.conn.Close()
+					return
+				}
+				if !lastSeen.IsZero() && time.Since(lastSeen) < interval {
+					continue
+				}
+				nonce++
+				if nonce == 0 {
+					nonce++
+				}
+				payload := make([]byte, proto.HeaderSize+proto.PingBodySize)
+				proto.EncodeHeader(proto.Header{
+					ProtocolVersion: proto.ProtocolVersion,
+					HeaderLen:       proto.HeaderSize,
+					OpCode:          proto.OpLinkHeartbeat,
+					RequestID:       1,
+				}, payload)
+				copy(payload[proto.HeaderSize:], proto.BuildPingResponseBody(nonce))
+				if _, err := c.roundTrip(payload); err != nil {
+					_ = c.conn.Close()
+					return
+				}
+			case <-c.heartbeatStop:
+				return
+			}
+		}
+	}()
+}
+
+func (c *storerConnection) stopHeartbeat() {
+	c.heartbeatOnce.Do(func() {
+		close(c.heartbeatStop)
+	})
 }
 
 func mapResponseStatus(status uint16) error {

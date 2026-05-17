@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -17,6 +18,7 @@ use crate::network::DiskSession;
 use crate::network::GatewayConnection;
 use crate::network::NetworkClientError;
 use crate::network::NetworkMedia;
+use crate::network::SessionCloseNotice;
 use crate::network::SessionOpener;
 use crate::network::TransportEndpoint;
 
@@ -50,6 +52,7 @@ struct MountedNetworkDisk {
 pub struct CliHost {
     context: BackendContext,
     mounted_network_disks: Arc<Mutex<BTreeMap<u32, MountedNetworkDisk>>>,
+    pending_closed_sessions: Arc<Mutex<BTreeSet<u64>>>,
 }
 
 impl CliHost {
@@ -65,10 +68,12 @@ impl CliHost {
         }
 
         let mounted_network_disks = Arc::new(Mutex::new(BTreeMap::new()));
+        let pending_closed_sessions = Arc::new(Mutex::new(BTreeSet::new()));
 
         Ok(Self {
             context,
             mounted_network_disks,
+            pending_closed_sessions,
         })
     }
 
@@ -78,6 +83,10 @@ impl CliHost {
         self.mounted_network_disks
             .lock()
             .expect("mounted_network_disks poisoned")
+            .clear();
+        self.pending_closed_sessions
+            .lock()
+            .expect("pending_closed_sessions poisoned")
             .clear();
     }
 
@@ -213,6 +222,14 @@ impl CliHost {
             return Err(error_text);
         }
 
+        let pending_closed_sessions = Arc::clone(&self.pending_closed_sessions);
+        connection.set_session_notice_handler(Some(Arc::new(move |notice: SessionCloseNotice| {
+            pending_closed_sessions
+                .lock()
+                .expect("pending_closed_sessions poisoned")
+                .insert(notice.session_id);
+        })));
+
         self.mounted_network_disks
             .lock()
             .expect("mounted_network_disks poisoned")
@@ -244,6 +261,7 @@ impl CliHost {
             .get(&target_id)
             .cloned()
         {
+            mounted.session.connection().set_session_notice_handler(None);
             match mounted.session.close() {
                 Ok(()) => {}
                 Err(NetworkClientError::SessionUnavailable) => {}
@@ -310,14 +328,24 @@ impl CliHost {
     }
 
     pub fn reap_dead_network_disks(&mut self) -> AppResult<Vec<u32>> {
-        let target_ids = self
+        let pending_sessions = self
+            .pending_closed_sessions
+            .lock()
+            .expect("pending_closed_sessions poisoned")
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
+        let removals = self
             .mounted_network_disks
             .lock()
             .expect("mounted_network_disks poisoned")
             .iter()
             .filter_map(|(target_id, mounted)| {
-                if mounted.session.is_terminal() || !mounted.session.is_connection_alive() {
-                    Some(*target_id)
+                if pending_sessions.contains(&mounted.session.session_id())
+                    || mounted.session.is_terminal()
+                    || !mounted.session.is_connection_alive()
+                {
+                    Some((*target_id, mounted.session.session_id()))
                 } else {
                     None
                 }
@@ -325,9 +353,16 @@ impl CliHost {
             .collect::<Vec<_>>();
 
         let mut removed = Vec::new();
-        for target_id in target_ids {
-            self.remove_disk(target_id)?;
-            removed.push(target_id);
+        for (target_id, _) in &removals {
+            self.remove_disk(*target_id)?;
+            removed.push(*target_id);
+        }
+        let mut pending = self
+            .pending_closed_sessions
+            .lock()
+            .expect("pending_closed_sessions poisoned");
+        for (_, session_id) in removals {
+            pending.remove(&session_id);
         }
         Ok(removed)
     }

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
@@ -10,20 +11,33 @@ use std::thread;
 
 use super::error::NetworkClientError;
 use super::protocol_client::ClientOperationCode;
+use super::protocol_client::SessionCloseNotice;
 use super::protocol_client::parse_header;
 use super::protocol_client::parse_request_header;
 use super::transport_client::TransportClient;
 use super::transport_client::TransportEndpoint;
 use super::transport_client::TransportError;
 
-#[derive(Debug)]
 pub struct GatewayConnection {
     endpoint: TransportEndpoint,
     transport: TransportClient,
     next_request_id: AtomicU64,
     pending_requests: Mutex<HashMap<u64, PendingRequest>>,
+    session_notice_handler: Mutex<Option<Arc<dyn Fn(SessionCloseNotice) + Send + Sync>>>,
     phase: Mutex<ConnectionPhase>,
     receive_loop_started: AtomicBool,
+}
+
+impl fmt::Debug for GatewayConnection {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GatewayConnection")
+            .field("endpoint", &self.endpoint)
+            .field("pending_request_count", &self.pending_request_count())
+            .field("phase", &self.phase_name())
+            .field("is_connected", &self.is_connected())
+            .finish()
+    }
 }
 
 #[derive(Debug)]
@@ -65,6 +79,7 @@ impl GatewayConnection {
             endpoint,
             next_request_id: AtomicU64::new(1),
             pending_requests: Mutex::new(HashMap::new()),
+            session_notice_handler: Mutex::new(None),
             phase: Mutex::new(ConnectionPhase::Idle),
             receive_loop_started: AtomicBool::new(false),
         })
@@ -93,6 +108,16 @@ impl GatewayConnection {
         self.fail_all_pending(NetworkClientError::SessionUnavailable);
         self.reset_phase();
         Ok(())
+    }
+
+    pub fn set_session_notice_handler(
+        &self,
+        handler: Option<Arc<dyn Fn(SessionCloseNotice) + Send + Sync>>,
+    ) {
+        *self
+            .session_notice_handler
+            .lock()
+            .expect("session_notice_handler poisoned") = handler;
     }
 
     pub fn allocate_request_id(&self) -> u64 {
@@ -323,6 +348,20 @@ impl GatewayConnection {
 
     fn dispatch_response(&self, payload: Vec<u8>) -> Result<(), NetworkClientError> {
         let header = parse_header(&payload).map_err(NetworkClientError::Protocol)?;
+        if header.op_code == ClientOperationCode::SessionCloseNotice {
+            let notice =
+                SessionCloseNotice::decode_notice(&payload).map_err(NetworkClientError::Protocol)?;
+            self.clear_session(notice.session_id);
+            if let Some(handler) = self
+                .session_notice_handler
+                .lock()
+                .expect("session_notice_handler poisoned")
+                .as_ref()
+            {
+                handler(notice);
+            }
+            return Ok(());
+        }
         if !header.is_response() {
             return Err(NetworkClientError::Protocol(
                 super::protocol_client::ProtocolClientError::UnexpectedFlags {

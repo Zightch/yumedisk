@@ -44,7 +44,7 @@ impl TransportEndpoint {
 #[derive(Debug)]
 pub struct TransportClient {
     endpoint: TransportEndpoint,
-    state: Mutex<TransportState>,
+    state: Arc<Mutex<TransportState>>,
 }
 
 #[derive(Debug)]
@@ -112,7 +112,7 @@ impl TransportClient {
     pub fn new(endpoint: TransportEndpoint) -> Self {
         Self {
             endpoint,
-            state: Mutex::new(TransportState::Disconnected),
+            state: Arc::new(Mutex::new(TransportState::Disconnected)),
         }
     }
 
@@ -160,7 +160,10 @@ impl TransportClient {
         connected
             .outgoing_tx
             .send(WriterCommand::Payload(payload))
-            .map_err(|_| TransportError::ConnectionClosed)
+            .map_err(|_| {
+                self.mark_disconnected();
+                TransportError::ConnectionClosed
+            })
     }
 
     pub fn recv_payload(&self) -> Result<Vec<u8>, TransportError> {
@@ -170,9 +173,17 @@ impl TransportClient {
             .lock()
             .expect("transport incoming receiver poisoned");
 
-        receiver
-            .recv()
-            .unwrap_or(Err(TransportError::ConnectionClosed))
+        match receiver.recv() {
+            Ok(Ok(payload)) => Ok(payload),
+            Ok(Err(error)) => {
+                self.mark_disconnected();
+                Err(error)
+            }
+            Err(_) => {
+                self.mark_disconnected();
+                Err(TransportError::ConnectionClosed)
+            }
+        }
     }
 
     pub fn close(&self) -> Result<(), TransportError> {
@@ -197,6 +208,11 @@ impl TransportClient {
             TransportState::Disconnected => Err(TransportError::NotConnected),
             TransportState::Connected(connected) => Ok(Arc::clone(connected)),
         }
+    }
+
+    fn mark_disconnected(&self) {
+        let mut state = self.state.lock().expect("transport state poisoned");
+        *state = TransportState::Disconnected;
     }
 }
 
