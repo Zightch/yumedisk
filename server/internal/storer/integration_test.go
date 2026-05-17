@@ -48,18 +48,18 @@ func TestServerMinimalClosure(t *testing.T) {
 		},
 	}
 
-	service, err := NewService(cfg)
+	runtime, err := NewRoleRuntime(cfg)
 	if err != nil {
-		t.Fatalf("new service: %v", err)
+		t.Fatalf("new runtime: %v", err)
 	}
-	t.Cleanup(func() { _ = service.Close() })
+	t.Cleanup(func() { _ = runtime.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	serverDone := make(chan error, 1)
 	go func() {
-		serverDone <- service.Run(ctx)
+		serverDone <- runtime.Run(ctx)
 	}()
 	waitForTCP(t, cfg.Whole.ListenAddr)
 
@@ -179,18 +179,18 @@ func TestServerRejectsSecondSessionOpenWhileDiskIsAlreadyOpened(t *testing.T) {
 		},
 	}
 
-	service, err := NewService(cfg)
+	runtime, err := NewRoleRuntime(cfg)
 	if err != nil {
-		t.Fatalf("new service: %v", err)
+		t.Fatalf("new runtime: %v", err)
 	}
-	t.Cleanup(func() { _ = service.Close() })
+	t.Cleanup(func() { _ = runtime.Close() })
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	serverDone := make(chan error, 1)
 	go func() {
-		serverDone <- service.Run(ctx)
+		serverDone <- runtime.Run(ctx)
 	}()
 	waitForTCP(t, cfg.Whole.ListenAddr)
 

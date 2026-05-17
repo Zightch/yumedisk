@@ -64,22 +64,6 @@
 
 - 一个只负责“本地盘 + 本地 session 数据面”的 storer core
 
-#### A3. 定义运行形态装配层
-
-目标：
-
-- 在上层把角色拼起来，而不是让底层对象自己混合所有职责。
-
-收口要求：
-
-- `whole` = `storer` 可执行文件中的本地 storer core + embedded gateway
-- `storer` = `storer` 可执行文件中的本地 storer core + 向外注册
-- `gateway` = 独立 `gateway` 可执行文件
-
-必须避免：
-
-- 再做一个巨大的总 `Service` 把三种角色重新揉回一起
-
 ### B. 重建 gateway 结构
 
 #### B1. 拆 client-facing gateway
@@ -267,14 +251,13 @@
 
 ## 推荐实现顺序
 
-1. A3 定义角色装配层
-2. B1 + B2 重建 gateway 边界和路由层
-3. B3 + B4 建立 session 映射与 storer-facing 边界
-4. C1 + C2 收紧 storer / whole 结构
-5. D1 + D2 + D3 接通协议主路径
-6. E1 + E2 启动入口与联调
-7. F1 + F2 文档收口
+1. B1 + B2 重建 gateway 边界和路由层
+2. B3 + B4 建立 session 映射与 storer-facing 边界
+3. C1 + C2 收紧 storer / whole 结构
+4. D1 + D2 + D3 接通协议主路径
+5. E1 + E2 启动入口与联调
+6. F1 + F2 文档收口
 
 ## 当前下一步
 
-下一步建议直接开始 `A3. 定义运行形态装配层`。
+下一步建议直接开始 `B1 + B2. 重建 gateway 边界和路由层`。

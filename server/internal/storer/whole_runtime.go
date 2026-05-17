@@ -13,56 +13,41 @@ import (
 	"yumedisk/server/internal/transport"
 )
 
-type Service struct {
+type WholeRuntime struct {
 	cfg      config.StorerConfig
 	core     *Core
 	gateway  *gateway.Handler
 	nextConn atomic.Uint64
 }
 
-func NewService(cfg config.StorerConfig) (*Service, error) {
+func NewWholeRuntime(cfg config.StorerConfig, core *Core) (*WholeRuntime, error) {
 	if cfg.Role != config.StorerRoleWhole {
-		return nil, fmt.Errorf("embedded gateway service only supports role=%q", config.StorerRoleWhole)
+		return nil, fmt.Errorf("whole runtime requires role=%q", config.StorerRoleWhole)
 	}
-
-	core, err := NewCore(cfg)
-	if err != nil {
-		return nil, err
+	if core == nil {
+		return nil, errors.New("whole runtime requires non-nil core")
 	}
 
 	gatewayHandler, err := gateway.NewHandler(core.DiskID(), core.AuthVerifier(), core.SessionService())
 	if err != nil {
-		_ = core.Close()
 		return nil, err
 	}
 
-	return &Service{
+	return &WholeRuntime{
 		cfg:     cfg,
 		core:    core,
 		gateway: gatewayHandler,
 	}, nil
 }
 
-func (s *Service) Close() error {
-	return s.core.Close()
+func (r *WholeRuntime) ListenAddr() string {
+	return r.cfg.Whole.ListenAddr
 }
 
-func (s *Service) ListenAddr() string {
-	return s.cfg.Whole.ListenAddr
-}
-
-func (s *Service) DiskID() string {
-	return s.core.DiskID()
-}
-
-func (s *Service) StoragePath() string {
-	return s.core.StoragePath()
-}
-
-func (s *Service) Run(ctx context.Context) error {
-	listener, err := net.Listen("tcp", s.cfg.Whole.ListenAddr)
+func (r *WholeRuntime) Run(ctx context.Context) error {
+	listener, err := net.Listen("tcp", r.cfg.Whole.ListenAddr)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w", s.cfg.Whole.ListenAddr, err)
+		return fmt.Errorf("listen on %s: %w", r.cfg.Whole.ListenAddr, err)
 	}
 	defer listener.Close()
 
@@ -85,19 +70,19 @@ func (s *Service) Run(ctx context.Context) error {
 			return fmt.Errorf("accept connection: %w", err)
 		}
 
-		connectionID := s.nextConn.Add(1)
-		state := s.gateway.NewConnectionState(connectionID)
-		go s.serveAcceptedConnection(ctx, state, conn)
+		connectionID := r.nextConn.Add(1)
+		state := r.gateway.NewConnectionState(connectionID)
+		go r.serveAcceptedConnection(ctx, state, conn)
 	}
 }
 
-func (s *Service) serveAcceptedConnection(ctx context.Context, state *gateway.ConnectionState, conn net.Conn) {
-	defer s.core.SessionService().CloseConnection(state.ID)
+func (r *WholeRuntime) serveAcceptedConnection(ctx context.Context, state *gateway.ConnectionState, conn net.Conn) {
+	defer r.core.SessionService().CloseConnection(state.ID)
 	defer conn.Close()
 
 	log.Printf("connection %d accepted from %s", state.ID, conn.RemoteAddr())
 
-	runtime := transport.NewRuntime(conn, s.gateway.Bind(state))
+	runtime := transport.NewRuntime(conn, r.gateway.Bind(state))
 
 	done := make(chan error, 1)
 	go func() {

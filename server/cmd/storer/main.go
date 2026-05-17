@@ -24,26 +24,39 @@ func main() {
 		log.Printf("initialized storer config at %s", configPath)
 	}
 
-	if cfg.Role != config.StorerRoleWhole {
-		log.Fatalf("storer role runtime not implemented yet: role=%s", cfg.Role)
-	}
-
-	service, err := storer.NewService(cfg)
+	runtime, err := storer.NewRoleRuntime(cfg)
 	if err != nil {
-		log.Fatalf("create service: %v", err)
+		log.Fatalf("create runtime: %v", err)
 	}
+	defer func() {
+		if err := runtime.Close(); err != nil {
+			log.Printf("close runtime: %v", err)
+		}
+	}()
 
-	log.Printf(
-		"embedded gateway storer ready: addr=%s disk_id=%s backend=%s",
-		service.ListenAddr(),
-		service.DiskID(),
-		service.StoragePath(),
-	)
+	switch runtime.Role() {
+	case config.StorerRoleWhole:
+		log.Printf(
+			"whole runtime ready: addr=%s disk_id=%s backend=%s",
+			runtime.ListenAddr(),
+			runtime.DiskID(),
+			runtime.StoragePath(),
+		)
+	case config.StorerRoleStorer:
+		log.Printf(
+			"storer runtime ready: gateway_addr=%s disk_id=%s backend=%s",
+			runtime.GatewayAddr(),
+			runtime.DiskID(),
+			runtime.StoragePath(),
+		)
+	default:
+		log.Fatalf("unsupported runtime role: %s", runtime.Role())
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := service.Run(ctx); err != nil {
-		log.Fatalf("run service: %v", err)
+	if err := runtime.Run(ctx); err != nil {
+		log.Fatalf("run runtime: %v", err)
 	}
 }
