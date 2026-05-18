@@ -11,17 +11,17 @@ use backend_rust::ManagedDiskSnapshot;
 use backend_rust::Media;
 use backend_rust::YUMEDISK_MAX_TARGETS;
 use backend_rust::YUMEDISK_MAX_USABLE_TARGET_ID;
+use network_core::client::ConnectionAuthenticator;
+use network_core::client::DiskSession;
+use network_core::client::GatewayConnection;
+use network_core::client::NetworkClientError;
+use network_core::client::SessionCloseNotice;
+use network_core::client::SessionDescriber;
+use network_core::client::SessionOpener;
+use network_core::transport::TransportEndpoint;
 
+use crate::NetworkMedia;
 use crate::cli::local::DenseMem;
-use crate::network::ConnectionAuthenticator;
-use crate::network::DiskSession;
-use crate::network::GatewayConnection;
-use crate::network::NetworkClientError;
-use crate::network::NetworkMedia;
-use crate::network::SessionCloseNotice;
-use crate::network::SessionDescriber;
-use crate::network::SessionOpener;
-use crate::network::TransportEndpoint;
 
 pub type AppResult<T> = Result<T, String>;
 
@@ -580,15 +580,18 @@ fn close_session_for_cleanup(session: &DiskSession) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::close_session_for_cleanup;
     use super::MountedNetworkDisk;
     use super::NetworkMountRegistry;
     use super::NetworkMountResult;
+    use super::close_session_for_cleanup;
     use super::collect_cleanup_target_ids;
-    use crate::network::DiskSession;
-    use crate::network::GatewayConnection;
-    use crate::network::TransportEndpoint;
-    use crate::network::expect_client_hello;
+    use network_core::client::DiskSession;
+    use network_core::client::GatewayConnection;
+    use network_core::test_support::clear_session;
+    use network_core::test_support::expect_client_hello;
+    use network_core::test_support::is_session_active;
+    use network_core::test_support::stage_connection;
+    use network_core::transport::TransportEndpoint;
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
     use std::net::TcpListener;
@@ -609,17 +612,6 @@ mod tests {
         }
     }
 
-    fn staged_connection(endpoint: TransportEndpoint, session_id: u64) -> Arc<GatewayConnection> {
-        let connection = GatewayConnection::new(endpoint);
-        connection
-            .begin_session_open()
-            .expect("begin session open should succeed");
-        connection
-            .finish_session_open(session_id)
-            .expect("finish session open should succeed");
-        connection
-    }
-
     fn connected_mount(_target_id: u32, disk_id: &str, session_id: u64) -> ConnectedMountHarness {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
         let address = listener.local_addr().expect("local addr should succeed");
@@ -629,7 +621,7 @@ mod tests {
             thread::sleep(Duration::from_millis(200));
         });
 
-        let connection = staged_connection(TransportEndpoint::new(address.to_string()), session_id);
+        let connection = stage_connection(TransportEndpoint::new(address.to_string()), session_id);
         connection.connect().expect("connect should succeed");
         let session =
             DiskSession::new(connection.clone(), session_id).expect("session should build");
@@ -663,7 +655,7 @@ mod tests {
 
     #[test]
     fn collect_cleanup_target_ids_includes_connection_loss() {
-        let connection = staged_connection(TransportEndpoint::new("127.0.0.1:1"), 77);
+        let connection = stage_connection(TransportEndpoint::new("127.0.0.1:1"), 77);
         let session = DiskSession::new(connection, 77).expect("session should build");
         let mounted_network_disks = BTreeMap::from([(
             4,
@@ -686,7 +678,7 @@ mod tests {
     #[test]
     fn collect_cleanup_target_ids_includes_terminal_sessions() {
         let mount = connected_mount(5, "A1b2C3d4E5f6G7h8", 88);
-        mount.connection.clear_session(88);
+        clear_session(&mount.connection, 88);
         let _ = mount
             .mounted
             .session
@@ -734,13 +726,13 @@ mod tests {
 
     #[test]
     fn close_session_for_cleanup_marks_cleared_session_as_closed() {
-        let connection = staged_connection(TransportEndpoint::new("127.0.0.1:1"), 123);
+        let connection = stage_connection(TransportEndpoint::new("127.0.0.1:1"), 123);
         let session = DiskSession::new(connection.clone(), 123).expect("session should build");
 
-        connection.clear_session(123);
+        clear_session(&connection, 123);
 
         assert!(close_session_for_cleanup(&session));
         assert!(session.is_closed());
-        assert!(!connection.is_session_active(123));
+        assert!(!is_session_active(&connection, 123));
     }
 }

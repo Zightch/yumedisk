@@ -1,11 +1,10 @@
 use backend_rust::BackendError;
 use backend_rust::Media;
+use network_core::client::DiskSession;
+use network_core::client::NetworkClientError;
+use network_core::client::SessionMetadata;
 use std::fmt;
 use std::sync::Arc;
-
-use super::disk_session::DiskSession;
-use super::error::NetworkClientError;
-use super::session_describer::SessionMetadata;
 
 #[derive(Clone)]
 pub struct NetworkMedia {
@@ -186,43 +185,33 @@ fn is_terminal_media_error(error: &NetworkClientError) -> bool {
 mod tests {
     use super::NetworkMedia;
     use super::map_network_error_to_backend_error;
-    use crate::network::ClientOperationCode;
-    use crate::network::DiskSession;
-    use crate::network::FLAG_RESPONSE;
-    use crate::network::GatewayConnection;
-    use crate::network::HEADER_SIZE;
-    use crate::network::NetworkClientError;
-    use crate::network::PROTOCOL_VERSION;
-    use crate::network::ProtocolHeader;
-    use crate::network::ProtocolStatusCode;
-    use crate::network::SessionMetadata;
-    use crate::network::TransportEndpoint;
-    use crate::network::expect_client_hello;
-    use crate::network::transport_client::MAX_FRAME_PAYLOAD_BYTES;
-    use crate::network::transport_client::read_frame_into;
-    use crate::network::transport_client::write_frame;
     use backend_rust::BackendError;
     use backend_rust::Media;
+    use network_core::client::DiskSession;
+    use network_core::client::NetworkClientError;
+    use network_core::client::SessionMetadata;
+    use network_core::protocol::ClientOperationCode;
+    use network_core::protocol::FLAG_RESPONSE;
+    use network_core::protocol::HEADER_SIZE;
+    use network_core::protocol::PROTOCOL_VERSION;
+    use network_core::protocol::ProtocolHeader;
+    use network_core::protocol::ProtocolStatusCode;
+    use network_core::protocol::parse_request_header;
+    use network_core::test_support::expect_client_hello;
+    use network_core::test_support::stage_connection;
+    use network_core::transport::MAX_FRAME_PAYLOAD_BYTES;
+    use network_core::transport::TransportEndpoint;
+    use network_core::transport::read_frame_into;
+    use network_core::transport::write_frame;
     use std::net::TcpListener;
     use std::sync::Arc;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
 
-    fn staged_connection(endpoint: TransportEndpoint, session_id: u64) -> Arc<GatewayConnection> {
-        let connection = GatewayConnection::new(endpoint);
-        connection
-            .begin_session_open()
-            .expect("begin session open should succeed");
-        connection
-            .finish_session_open(session_id)
-            .expect("finish session open should succeed");
-        connection
-    }
-
     #[test]
     fn bind_requires_explicit_disk_id_and_metadata() {
-        let connection = staged_connection(TransportEndpoint::new("127.0.0.1:9000"), 7);
+        let connection = stage_connection(TransportEndpoint::new("127.0.0.1:9000"), 7);
         let session = DiskSession::new(connection, 7).expect("session should build");
 
         let error = NetworkMedia::bind(
@@ -251,7 +240,7 @@ mod tests {
             let first = read_frame_into(&mut stream, &mut buffer)
                 .expect("read first request should succeed")
                 .to_vec();
-            let first_header = crate::network::parse_request_header(&first).expect("parse first");
+            let first_header = parse_request_header(&first).expect("parse first");
             assert_eq!(first_header.op_code, ClientOperationCode::ReadAt);
             assert_eq!(&first[HEADER_SIZE..HEADER_SIZE + 8], &0u64.to_be_bytes());
             assert_eq!(
@@ -274,8 +263,7 @@ mod tests {
             let second = read_frame_into(&mut stream, &mut buffer)
                 .expect("read second request should succeed")
                 .to_vec();
-            let second_header =
-                crate::network::parse_request_header(&second).expect("parse second");
+            let second_header = parse_request_header(&second).expect("parse second");
             assert_eq!(second_header.op_code, ClientOperationCode::ReadAt);
             assert_eq!(&second[HEADER_SIZE..HEADER_SIZE + 8], &4u64.to_be_bytes());
             assert_eq!(
@@ -296,7 +284,7 @@ mod tests {
             write_frame(&mut stream, &second_response).expect("write second response");
         });
 
-        let connection = staged_connection(TransportEndpoint::new(address.to_string()), 77);
+        let connection = stage_connection(TransportEndpoint::new(address.to_string()), 77);
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(connection.clone(), 77).expect("session should build");
         let media = NetworkMedia::bind(
@@ -334,7 +322,7 @@ mod tests {
             let first = read_frame_into(&mut stream, &mut buffer)
                 .expect("read first request should succeed")
                 .to_vec();
-            let first_header = crate::network::parse_request_header(&first).expect("parse first");
+            let first_header = parse_request_header(&first).expect("parse first");
             assert_eq!(first_header.op_code, ClientOperationCode::WriteAt);
             assert_eq!(&first[HEADER_SIZE..HEADER_SIZE + 8], &0u64.to_be_bytes());
             assert_eq!(
@@ -358,8 +346,7 @@ mod tests {
             let second = read_frame_into(&mut stream, &mut buffer)
                 .expect("read second request should succeed")
                 .to_vec();
-            let second_header =
-                crate::network::parse_request_header(&second).expect("parse second");
+            let second_header = parse_request_header(&second).expect("parse second");
             assert_eq!(second_header.op_code, ClientOperationCode::WriteAt);
             assert_eq!(&second[HEADER_SIZE..HEADER_SIZE + 8], &4u64.to_be_bytes());
             assert_eq!(
@@ -381,7 +368,7 @@ mod tests {
             write_frame(&mut stream, &second_response).expect("write second response");
         });
 
-        let connection = staged_connection(TransportEndpoint::new(address.to_string()), 77);
+        let connection = stage_connection(TransportEndpoint::new(address.to_string()), 77);
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(connection.clone(), 77).expect("session should build");
         let media = NetworkMedia::bind(
@@ -437,7 +424,7 @@ mod tests {
             let request = read_frame_into(&mut stream, &mut buffer)
                 .expect("read request should succeed")
                 .to_vec();
-            let header = crate::network::parse_request_header(&request).expect("parse request");
+            let header = parse_request_header(&request).expect("parse request");
             assert_eq!(header.op_code, ClientOperationCode::ReadAt);
             let response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
@@ -454,7 +441,7 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         });
 
-        let connection = staged_connection(TransportEndpoint::new(address.to_string()), 77);
+        let connection = stage_connection(TransportEndpoint::new(address.to_string()), 77);
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(connection.clone(), 77).expect("session should build");
         let (invalidate_tx, invalidate_rx) = mpsc::channel();

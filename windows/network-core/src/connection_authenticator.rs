@@ -16,7 +16,10 @@ pub struct AuthGrant {
 }
 
 impl AuthGrant {
-    pub fn new(disk_id: impl Into<String>, auth_id: u64) -> Result<Self, NetworkClientError> {
+    pub(crate) fn new(
+        disk_id: impl Into<String>,
+        auth_id: u64,
+    ) -> Result<Self, NetworkClientError> {
         let disk_id = disk_id.into();
         if disk_id.is_empty() {
             return Err(NetworkClientError::InvalidArgument("disk_id"));
@@ -45,10 +48,6 @@ pub struct ConnectionAuthenticator {
 impl ConnectionAuthenticator {
     pub fn new(connection: Arc<GatewayConnection>) -> Self {
         Self { connection }
-    }
-
-    pub fn connection(&self) -> &Arc<GatewayConnection> {
-        &self.connection
     }
 
     pub fn authenticate(&self, claim_code: &str) -> Result<AuthGrant, NetworkClientError> {

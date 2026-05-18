@@ -1,2 +1,4 @@
 pub mod cli;
-pub mod network;
+mod network;
+
+pub use network::NetworkMedia;

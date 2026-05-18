@@ -2,14 +2,14 @@ use std::env;
 use std::io;
 use std::io::Write;
 
-use rust_cli::network::AuthGrant;
-use rust_cli::network::ConnectionAuthenticator;
-use rust_cli::network::DiskSession;
-use rust_cli::network::GatewayConnection;
-use rust_cli::network::SessionDescriber;
-use rust_cli::network::SessionMetadata;
-use rust_cli::network::SessionOpener;
-use rust_cli::network::TransportEndpoint;
+use network_core::client::AuthGrant;
+use network_core::client::ConnectionAuthenticator;
+use network_core::client::DiskSession;
+use network_core::client::GatewayConnection;
+use network_core::client::SessionDescriber;
+use network_core::client::SessionMetadata;
+use network_core::client::SessionOpener;
+use network_core::transport::TransportEndpoint;
 
 fn main() {
     if let Err(error) = run() {

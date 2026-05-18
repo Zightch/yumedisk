@@ -74,7 +74,7 @@ impl DiskSession {
             .is_some()
     }
 
-    pub fn mark_closed(&self) {
+    pub(crate) fn mark_closed(&self) {
         self.lifecycle.state.store(STATE_CLOSED, Ordering::Release);
         self.connection.clear_session(self.session_id);
     }

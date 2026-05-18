@@ -116,10 +116,7 @@ impl TransportClient {
         }
     }
 
-    pub fn endpoint(&self) -> &TransportEndpoint {
-        &self.endpoint
-    }
-
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn connect(&self) -> Result<(), TransportError> {
         let stream = self.open_stream()?;
         self.connect_with_stream(stream)

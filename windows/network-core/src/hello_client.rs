@@ -63,7 +63,7 @@ pub fn perform_client_hello(stream: &mut TcpStream) -> Result<HelloResponse, Hel
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn expect_client_hello(stream: &mut TcpStream) {
     let (version, message_type, status, body) =
         read_message(stream).expect("read client hello should succeed");

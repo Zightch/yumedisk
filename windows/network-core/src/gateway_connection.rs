@@ -11,11 +11,11 @@ use std::sync::mpsc::Receiver;
 use std::thread;
 use std::time::Duration;
 
-use super::ConnHeartbeatRequest;
-use super::ConnHeartbeatResponse;
 use super::error::NetworkClientError;
 use super::hello_client::perform_client_hello;
 use super::protocol_client::ClientOperationCode;
+use super::protocol_client::ConnHeartbeatRequest;
+use super::protocol_client::ConnHeartbeatResponse;
 use super::protocol_client::SessionCloseNotice;
 use super::protocol_client::parse_header;
 use super::protocol_client::parse_request_header;
@@ -67,8 +67,7 @@ struct PendingRequest {
 }
 
 #[derive(Debug)]
-pub struct GatewayResponseFuture {
-    request_id: u64,
+pub(crate) struct GatewayResponseFuture {
     response_rx: Receiver<Result<Vec<u8>, NetworkClientError>>,
 }
 
@@ -81,17 +80,13 @@ struct ConnectionLifecycle {
 }
 
 impl GatewayResponseFuture {
-    pub fn request_id(&self) -> u64 {
-        self.request_id
-    }
-
-    pub fn recv(self) -> Result<Vec<u8>, NetworkClientError> {
+    pub(crate) fn recv(self) -> Result<Vec<u8>, NetworkClientError> {
         self.response_rx
             .recv()
             .unwrap_or(Err(NetworkClientError::SessionUnavailable))
     }
 
-    pub fn recv_timeout(self, timeout: Duration) -> Result<Vec<u8>, NetworkClientError> {
+    pub(crate) fn recv_timeout(self, timeout: Duration) -> Result<Vec<u8>, NetworkClientError> {
         match self.response_rx.recv_timeout(timeout) {
             Ok(result) => result,
             Err(_) => Err(NetworkClientError::SessionUnavailable),
@@ -117,10 +112,6 @@ impl GatewayConnection {
 
     pub fn endpoint(&self) -> &TransportEndpoint {
         &self.endpoint
-    }
-
-    pub fn transport(&self) -> &TransportClient {
-        &self.transport
     }
 
     pub fn connect(self: &Arc<Self>) -> Result<(), NetworkClientError> {
@@ -162,7 +153,7 @@ impl GatewayConnection {
             .expect("disconnect_handler poisoned") = handler;
     }
 
-    pub fn allocate_request_id(&self) -> u64 {
+    pub(crate) fn allocate_request_id(&self) -> u64 {
         loop {
             let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
             if request_id != 0 {
@@ -171,7 +162,7 @@ impl GatewayConnection {
         }
     }
 
-    pub fn send_request(
+    pub(crate) fn send_request(
         &self,
         payload: Vec<u8>,
     ) -> Result<GatewayResponseFuture, NetworkClientError> {
@@ -203,24 +194,24 @@ impl GatewayConnection {
             return Err(error);
         }
 
-        Ok(GatewayResponseFuture {
-            request_id: header.request_id,
-            response_rx,
-        })
+        Ok(GatewayResponseFuture { response_rx })
     }
 
-    pub fn send_request_and_wait(&self, payload: Vec<u8>) -> Result<Vec<u8>, NetworkClientError> {
+    pub(crate) fn send_request_and_wait(
+        &self,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, NetworkClientError> {
         self.send_request(payload)?.recv()
     }
 
-    pub fn pending_request_count(&self) -> usize {
+    pub(crate) fn pending_request_count(&self) -> usize {
         self.pending_requests
             .lock()
             .expect("pending_requests poisoned")
             .len()
     }
 
-    pub fn begin_auth(&self) -> Result<(), NetworkClientError> {
+    pub(crate) fn begin_auth(&self) -> Result<(), NetworkClientError> {
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
         if lifecycle.auth_in_flight || lifecycle.open_in_flight {
             return Err(NetworkClientError::InvalidState("auth_start"));
@@ -230,12 +221,12 @@ impl GatewayConnection {
         Ok(())
     }
 
-    pub fn fail_auth(&self) {
+    pub(crate) fn fail_auth(&self) {
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
         lifecycle.auth_in_flight = false;
     }
 
-    pub fn finish_auth(&self) -> Result<(), NetworkClientError> {
+    pub(crate) fn finish_auth(&self) -> Result<(), NetworkClientError> {
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
         if !lifecycle.auth_in_flight || lifecycle.open_in_flight {
             return Err(NetworkClientError::InvalidState("auth_finish"));
@@ -245,7 +236,7 @@ impl GatewayConnection {
         Ok(())
     }
 
-    pub fn begin_session_open(&self) -> Result<(), NetworkClientError> {
+    pub(crate) fn begin_session_open(&self) -> Result<(), NetworkClientError> {
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
         if lifecycle.auth_in_flight || lifecycle.open_in_flight {
             return Err(NetworkClientError::InvalidState("session_open"));
@@ -255,7 +246,7 @@ impl GatewayConnection {
         Ok(())
     }
 
-    pub fn finish_session_open(&self, session_id: u64) -> Result<(), NetworkClientError> {
+    pub(crate) fn finish_session_open(&self, session_id: u64) -> Result<(), NetworkClientError> {
         if session_id == 0 {
             return Err(NetworkClientError::InvalidArgument("session_id"));
         }
@@ -270,7 +261,7 @@ impl GatewayConnection {
         Ok(())
     }
 
-    pub fn register_auth_grant(
+    pub(crate) fn register_auth_grant(
         &self,
         auth_id: u64,
         disk_id: String,
@@ -290,7 +281,7 @@ impl GatewayConnection {
         Ok(())
     }
 
-    pub fn consume_auth_grant(&self, auth_id: u64) -> bool {
+    pub(crate) fn consume_auth_grant(&self, auth_id: u64) -> bool {
         self.lifecycle
             .lock()
             .expect("lifecycle poisoned")
@@ -299,11 +290,11 @@ impl GatewayConnection {
             .is_some()
     }
 
-    pub fn discard_auth_grant(&self, auth_id: u64) -> bool {
+    pub(crate) fn discard_auth_grant(&self, auth_id: u64) -> bool {
         self.consume_auth_grant(auth_id)
     }
 
-    pub fn auth_grant_count(&self) -> usize {
+    pub(crate) fn auth_grant_count(&self) -> usize {
         self.lifecycle
             .lock()
             .expect("lifecycle poisoned")
@@ -319,12 +310,12 @@ impl GatewayConnection {
             && lifecycle.auth_grants.is_empty()
     }
 
-    pub fn fail_session_open(&self) {
+    pub(crate) fn fail_session_open(&self) {
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
         lifecycle.open_in_flight = false;
     }
 
-    pub fn is_session_active(&self, session_id: u64) -> bool {
+    pub(crate) fn is_session_active(&self, session_id: u64) -> bool {
         self.lifecycle
             .lock()
             .expect("lifecycle poisoned")
@@ -332,7 +323,7 @@ impl GatewayConnection {
             .contains(&session_id)
     }
 
-    pub fn clear_session(&self, session_id: u64) {
+    pub(crate) fn clear_session(&self, session_id: u64) {
         self.lifecycle
             .lock()
             .expect("lifecycle poisoned")

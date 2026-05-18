@@ -15,7 +15,7 @@ pub struct SessionMetadata {
 }
 
 impl SessionMetadata {
-    pub fn new(
+    pub(crate) fn new(
         disk_size_bytes: u64,
         max_io_bytes: u32,
         read_only: bool,
