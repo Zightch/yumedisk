@@ -2,6 +2,7 @@ use crate::appkernel;
 use crate::error::BackendError;
 use crate::media::Media;
 use crate::types::DiskConfig;
+use crate::types::SECTOR_ALIGNMENT_BYTES;
 use crate::types::SessionConfig;
 use crate::types::YUMEDISK_MAX_TARGETS;
 use crate::types::YUMEDISK_MAX_USABLE_TARGET_ID;
@@ -22,7 +23,7 @@ pub fn validate_disk_config(disk_config: &DiskConfig) -> Result<(), BackendError
     {
         return Err(BackendError::InvalidTargetId);
     }
-    if disk_config.sector_size == 0 {
+    if disk_config.sector_size == 0 || disk_config.sector_size % SECTOR_ALIGNMENT_BYTES != 0 {
         return Err(BackendError::InvalidSectorSize);
     }
     if disk_config.disk_size_bytes == 0
@@ -84,5 +85,38 @@ pub(crate) fn build_ak_disk_params(disk_config: &DiskConfig) -> appkernel::AkDis
         write_worker_count: disk_config.write_worker_count,
         ack_batch_max_ranges: disk_config.ack_batch_max_ranges,
         read_only: u32::from(disk_config.read_only),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_disk_config;
+    use crate::types::DiskConfig;
+
+    #[test]
+    fn default_disk_config_uses_new_queue_defaults() {
+        let config = DiskConfig {
+            disk_size_bytes: 1024 * 1024,
+            ..DiskConfig::default()
+        };
+
+        assert_eq!(config.sector_size, 512);
+        assert_eq!(config.queue_depth, 96);
+        assert_eq!(config.write_slot_bytes, 1024 * 1024);
+        assert_eq!(config.read_worker_count, 12);
+        assert_eq!(config.write_worker_count, 12);
+        assert_eq!(config.ack_batch_max_ranges, 96);
+        assert!(validate_disk_config(&config).is_ok());
+    }
+
+    #[test]
+    fn disk_config_rejects_sector_size_without_512_alignment() {
+        let config = DiskConfig {
+            disk_size_bytes: 3 * 1024,
+            sector_size: 513,
+            ..DiskConfig::default()
+        };
+
+        assert!(validate_disk_config(&config).is_err());
     }
 }

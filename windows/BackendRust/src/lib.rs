@@ -26,6 +26,7 @@ pub use types::DEFAULT_WRITE_WORKER_COUNT;
 pub use types::DebugSnapshot;
 pub use types::DiskConfig;
 pub use types::ManagedDiskSnapshot;
+pub use types::SECTOR_ALIGNMENT_BYTES;
 pub use types::SessionConfig;
 pub use types::YUMEDISK_MAX_TARGETS;
 pub use types::YUMEDISK_MAX_USABLE_TARGET_ID;

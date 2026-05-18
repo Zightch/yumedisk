@@ -7,6 +7,7 @@ use std::sync::Mutex;
 
 use backend_rust::BackendError;
 use backend_rust::Media;
+use backend_rust::SECTOR_ALIGNMENT_BYTES;
 
 #[derive(Debug)]
 pub enum RawFileMediaError {
@@ -15,7 +16,9 @@ pub enum RawFileMediaError {
         read_only: io::Error,
     },
     MetadataFailed(io::Error),
-    EmptyFile,
+    NoUsableCapacity {
+        actual_size_bytes: u64,
+    },
 }
 
 pub struct RawFileMedia {
@@ -39,13 +42,15 @@ impl RawFileMedia {
             },
         };
 
-        let size_bytes = file
+        let actual_size_bytes = file
             .metadata()
             .map_err(RawFileMediaError::MetadataFailed)?
             .len();
+        let size_bytes =
+            align_down_capacity_bytes(actual_size_bytes, u64::from(SECTOR_ALIGNMENT_BYTES));
 
         if size_bytes == 0 {
-            return Err(RawFileMediaError::EmptyFile);
+            return Err(RawFileMediaError::NoUsableCapacity { actual_size_bytes });
         }
 
         Ok(Self {
@@ -73,6 +78,7 @@ impl Media for RawFileMedia {
         if buffer.is_empty() {
             return Ok(());
         }
+        validate_range(self.size_bytes, offset, buffer.len())?;
 
         let file = self
             .file
@@ -85,6 +91,7 @@ impl Media for RawFileMedia {
         if data.is_empty() {
             return Ok(());
         }
+        validate_range(self.size_bytes, offset, data.len())?;
 
         if self.read_only {
             return Err(BackendError::InvalidParameter);
@@ -96,6 +103,24 @@ impl Media for RawFileMedia {
             .expect("raw file media mutex should not be poisoned");
         write_all_at(&file, offset, data).map_err(|_| BackendError::InvalidParameter)
     }
+}
+
+fn align_down_capacity_bytes(size_bytes: u64, alignment_bytes: u64) -> u64 {
+    if alignment_bytes == 0 {
+        return size_bytes;
+    }
+
+    size_bytes / alignment_bytes * alignment_bytes
+}
+
+fn validate_range(size_bytes: u64, offset: u64, length: usize) -> Result<(), BackendError> {
+    let end = offset
+        .checked_add(length as u64)
+        .ok_or(BackendError::InvalidParameter)?;
+    if end > size_bytes {
+        return Err(BackendError::InvalidParameter);
+    }
+    Ok(())
 }
 
 fn read_all_at(file: &File, mut offset: u64, mut buffer: &mut [u8]) -> io::Result<()> {
@@ -131,4 +156,65 @@ fn write_all_at(file: &File, mut offset: u64, mut data: &[u8]) -> io::Result<()>
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RawFileMedia;
+    use super::RawFileMediaError;
+    use std::fs;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
+
+    fn temp_file_path(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock before epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{}_{}_raw.bin", name, unique))
+    }
+
+    #[test]
+    fn open_aligns_capacity_down_to_512_boundary() {
+        let path = temp_file_path("raw_file_align_down");
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .expect("create temp raw file should succeed");
+        file.write_all(&vec![0u8; 1025])
+            .expect("write temp raw file should succeed");
+        drop(file);
+
+        let media = RawFileMedia::open(&path).expect("open raw file media should succeed");
+        assert_eq!(media.size_bytes(), 1024);
+
+        fs::remove_file(&path).expect("remove temp raw file should succeed");
+    }
+
+    #[test]
+    fn open_rejects_file_without_complete_512_block() {
+        let path = temp_file_path("raw_file_too_small");
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .expect("create temp raw file should succeed");
+        file.write_all(&vec![0u8; 511])
+            .expect("write temp raw file should succeed");
+        drop(file);
+
+        match RawFileMedia::open(&path) {
+            Err(RawFileMediaError::NoUsableCapacity { actual_size_bytes }) => {
+                assert_eq!(actual_size_bytes, 511);
+            }
+            Err(other) => panic!("unexpected error: {:?}", other),
+            Ok(_) => panic!("open raw file media should fail"),
+        }
+
+        fs::remove_file(&path).expect("remove temp raw file should succeed");
+    }
 }

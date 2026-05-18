@@ -960,13 +960,13 @@ void RunHost(void)
     media_ops.stage_write = HostStageWrite;
 
     disk_params.TargetId = 0;
-    disk_params.SectorSize = 4096;
+    disk_params.SectorSize = 512;
     disk_params.DiskSizeBytes = 64ull * 1024ull * 1024ull;
-    disk_params.QueueDepth = 32;
+    disk_params.QueueDepth = 96;
     disk_params.WriteSlotBytes = 1024u * 1024u;
-    disk_params.ReadWorkerCount = 4;
-    disk_params.WriteWorkerCount = 2;
-    disk_params.AckBatchMaxRanges = 64;
+    disk_params.ReadWorkerCount = 12;
+    disk_params.WriteWorkerCount = 12;
+    disk_params.AckBatchMaxRanges = 96;
     disk_params.ReadOnly = 0;
 
     if (AkCreateDisk(session, &disk_params, &media_ops, host_disk_ctx, &disk) != AK_STATUS_SUCCESS) {

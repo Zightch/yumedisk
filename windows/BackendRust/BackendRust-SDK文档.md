@@ -125,12 +125,12 @@ pub struct DiskConfig {
 | 字段 | 默认值 | 允许值 | 说明 |
 | --- | --- | --- | --- |
 | `target_id` | `255` | `0..=254` 或 `255` | `255` 表示自动分配首个空闲 target |
-| `sector_size` | `4096` | `> 0` | 逻辑扇区大小 |
+| `sector_size` | `512` | `> 0` 且按 `512` 对齐 | 逻辑扇区大小 |
 | `disk_size_bytes` | `0` | `> 0` 且能整除 `sector_size` | 盘总大小 |
-| `queue_depth` | `32` | `> 0` | 队列深度 |
+| `queue_depth` | `96` | `> 0` | 队列深度 |
 | `write_slot_bytes` | `1048576` | `> 0` | 单写槽字节数 |
-| `read_worker_count` | `4` | `> 0` | 读 worker 数 |
-| `write_worker_count` | `2` | `> 0` | 写 worker 数 |
+| `read_worker_count` | `12` | `> 0` | 读 worker 数 |
+| `write_worker_count` | `12` | `> 0` | 写 worker 数 |
 | `ack_batch_max_ranges` | `32` | `> 0` | 单次 ack 最多 range 数 |
 | `read_only` | `false` | `true/false` | 是否系统级只读 |
 

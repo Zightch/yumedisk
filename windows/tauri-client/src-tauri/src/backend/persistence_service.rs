@@ -267,10 +267,10 @@ fn map_raw_file_media_error(error: RawFileMediaError, file_path: &str) -> ApiErr
             "读取 RAW 文件信息失败",
             Some(format!("{} | {}", file_path, io_error)),
         ),
-        RawFileMediaError::EmptyFile => ApiError::new(
-            "raw-file-empty",
-            "RAW 文件大小必须大于 0",
-            Some(file_path.to_string()),
+        RawFileMediaError::NoUsableCapacity { actual_size_bytes } => ApiError::new(
+            "raw-file-no-usable-capacity",
+            "RAW 文件至少需要一个完整的 512 字节盘块",
+            Some(format!("{} | actualBytes={}", file_path, actual_size_bytes)),
         ),
     }
 }
