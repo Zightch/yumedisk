@@ -17,16 +17,20 @@ func NewManager() *Manager {
 	}
 }
 
-func (m *Manager) Open(record Record) Record {
+func (m *Manager) Open(record Record) (Record, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.items) > 0 {
+		return Record{}, ErrSessionBusy
+	}
+
 	record.ID = m.nextID.Add(1)
 	if record.ID == 0 {
 		record.ID = m.nextID.Add(1)
 	}
 
-	m.mu.Lock()
 	m.items[record.ID] = record
-	m.mu.Unlock()
-	return record
+	return record, nil
 }
 
 func (m *Manager) Get(id uint64) (Record, bool) {

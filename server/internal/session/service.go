@@ -10,6 +10,7 @@ import (
 
 var (
 	ErrSessionUnavailable = errors.New("session unavailable")
+	ErrSessionBusy        = errors.New("session busy")
 	ErrIOLimit            = errors.New("io limit exceeded")
 	ErrOutOfRange         = errors.New("io out of range")
 	ErrReadOnly           = errors.New("session is read only")
@@ -34,11 +35,14 @@ func NewService(manager *Manager, storage *filestorage.Backend, metadata Metadat
 
 func (s *Service) Open(connectionID uint64) (Record, error) {
 	now := time.Now()
-	record := s.manager.Open(Record{
+	record, err := s.manager.Open(Record{
 		Connection: connectionID,
 		Metadata:   s.metadata,
 		ExpiresAt:  now.Add(s.defaultTTL),
 	})
+	if err != nil {
+		return Record{}, err
+	}
 	return record, nil
 }
 

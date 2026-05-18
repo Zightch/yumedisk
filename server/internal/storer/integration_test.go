@@ -112,7 +112,7 @@ func TestWholeRuntimeMinimalClosure(t *testing.T) {
 	}
 }
 
-func TestWholeRuntimeSecondClientBusyAndAuthIDReusable(t *testing.T) {
+func TestWholeRuntimeSecondClientIsRejectedWhileSessionIsLive(t *testing.T) {
 	t.Parallel()
 
 	rawPath, material := newRuntimeDisk(t)
@@ -165,14 +165,11 @@ func TestWholeRuntimeSecondClientBusyAndAuthIDReusable(t *testing.T) {
 	authIDTwo := authenticateConnection(t, connTwo, material, &requestIDTwo)
 	openRespTwo := mustRoundTrip(t, connTwo, buildRequest(proto.OpSessionOpen, requestIDTwo, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
 	openHeaderTwo := mustParseHeader(t, openRespTwo)
-	if openHeaderTwo.StatusCode != proto.StatusOK {
-		t.Fatalf("expected second open success, got %d", openHeaderTwo.StatusCode)
+	if openHeaderTwo.StatusCode != proto.StatusSessionBusy {
+		t.Fatalf("expected second open busy, got %d", openHeaderTwo.StatusCode)
 	}
-	if openHeaderTwo.SessionID == 0 {
-		t.Fatal("expected non-zero second session id")
-	}
-	if openHeaderTwo.SessionID == openHeaderOne.SessionID {
-		t.Fatalf("expected distinct session ids, got %d", openHeaderTwo.SessionID)
+	if openHeaderTwo.SessionID != 0 {
+		t.Fatalf("expected zero second session id, got %d", openHeaderTwo.SessionID)
 	}
 
 	cancel()

@@ -82,7 +82,7 @@ func TestSessionOpenDescribeReadWriteAndClose(t *testing.T) {
 	}
 }
 
-func TestSessionOpenAllowsMultipleLiveSessions(t *testing.T) {
+func TestSessionOpenRejectsWhenSessionIsAlreadyLive(t *testing.T) {
 	t.Parallel()
 
 	handler, stateOne, material := newSessionTestHandler(t)
@@ -100,14 +100,11 @@ func TestSessionOpenAllowsMultipleLiveSessions(t *testing.T) {
 		t.Fatalf("open session on second client: %v", err)
 	}
 	secondOpenHeader := mustParseGatewayHeader(t, secondOpenResp)
-	if secondOpenHeader.StatusCode != proto.StatusOK {
+	if secondOpenHeader.StatusCode != proto.StatusSessionBusy {
 		t.Fatalf("unexpected second open status: %d", secondOpenHeader.StatusCode)
 	}
-	if secondOpenHeader.SessionID == 0 {
-		t.Fatal("expected non-zero second session id")
-	}
-	if secondOpenHeader.SessionID == firstSessionID {
-		t.Fatalf("expected distinct session ids, got %d", secondOpenHeader.SessionID)
+	if secondOpenHeader.SessionID != 0 {
+		t.Fatalf("expected zero second session id, got %d", secondOpenHeader.SessionID)
 	}
 }
 
