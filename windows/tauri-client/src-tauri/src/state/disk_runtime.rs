@@ -33,7 +33,7 @@ pub enum DiskMediaConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiskRuntimeSnapshot {
-    pub disk_id: String,
+    pub local_disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
     pub read_only: bool,
@@ -52,7 +52,7 @@ pub struct DiskRuntimeStore {
 }
 
 pub struct DiskRuntime {
-    pub(crate) disk_id: String,
+    pub(crate) local_disk_id: String,
     pub(crate) disk_name: String,
     pub(crate) auto_mount: bool,
     pub(crate) read_only: bool,
@@ -71,19 +71,19 @@ impl Default for DiskRuntimeStore {
 }
 
 impl DiskRuntimeStore {
-    pub fn allocate_disk_id(&mut self) -> String {
-        let disk_id = format!("disk-{}", self.next_disk_number);
+    pub fn allocate_local_disk_id(&mut self) -> String {
+        let local_disk_id = format!("disk-{}", self.next_disk_number);
         self.next_disk_number += 1;
-        disk_id
+        local_disk_id
     }
 
     pub fn insert_runtime(&mut self, runtime: DiskRuntime) {
-        self.bump_next_disk_number_from_disk_id(runtime.disk_id());
+        self.bump_next_disk_number_from_local_disk_id(runtime.local_disk_id());
         self.runtimes.push(runtime);
     }
 
     pub fn restore_removed_runtime(&mut self, removed: RemovedDiskRuntime) {
-        self.bump_next_disk_number_from_disk_id(removed.runtime.disk_id());
+        self.bump_next_disk_number_from_local_disk_id(removed.runtime.local_disk_id());
         let index = removed.index.min(self.runtimes.len());
         self.runtimes.insert(index, removed.runtime);
     }
@@ -92,29 +92,29 @@ impl DiskRuntimeStore {
         self.runtimes.iter().map(DiskRuntime::snapshot).collect()
     }
 
-    pub fn find_runtime_mut(&mut self, disk_id: &str) -> Option<&mut DiskRuntime> {
+    pub fn find_runtime_mut(&mut self, local_disk_id: &str) -> Option<&mut DiskRuntime> {
         self.runtimes
             .iter_mut()
-            .find(|runtime| runtime.disk_id() == disk_id)
+            .find(|runtime| runtime.local_disk_id() == local_disk_id)
     }
 
     pub fn runtimes_mut(&mut self) -> std::slice::IterMut<'_, DiskRuntime> {
         self.runtimes.iter_mut()
     }
 
-    pub fn remove_runtime(&mut self, disk_id: &str) -> Option<RemovedDiskRuntime> {
+    pub fn remove_runtime(&mut self, local_disk_id: &str) -> Option<RemovedDiskRuntime> {
         let index = self
             .runtimes
             .iter()
-            .position(|runtime| runtime.disk_id() == disk_id)?;
+            .position(|runtime| runtime.local_disk_id() == local_disk_id)?;
         Some(RemovedDiskRuntime {
             index,
             runtime: self.runtimes.remove(index),
         })
     }
 
-    fn bump_next_disk_number_from_disk_id(&mut self, disk_id: &str) {
-        let Some(number_text) = disk_id.strip_prefix("disk-") else {
+    fn bump_next_disk_number_from_local_disk_id(&mut self, local_disk_id: &str) {
+        let Some(number_text) = local_disk_id.strip_prefix("disk-") else {
             return;
         };
 
@@ -130,7 +130,7 @@ impl DiskRuntimeStore {
 
 impl DiskRuntime {
     pub fn new_memory(
-        disk_id: String,
+        local_disk_id: String,
         disk_name: String,
         auto_mount: bool,
         memory_kind: MemoryMediaKind,
@@ -138,7 +138,7 @@ impl DiskRuntime {
         media: Box<dyn Media>,
     ) -> Self {
         Self {
-            disk_id,
+            local_disk_id,
             disk_name,
             auto_mount,
             read_only: false,
@@ -152,7 +152,7 @@ impl DiskRuntime {
     }
 
     pub fn new_file(
-        disk_id: String,
+        local_disk_id: String,
         disk_name: String,
         auto_mount: bool,
         file_kind: FileMediaKind,
@@ -163,7 +163,7 @@ impl DiskRuntime {
         media: Option<Box<dyn Media>>,
     ) -> Self {
         Self {
-            disk_id,
+            local_disk_id,
             disk_name,
             auto_mount,
             read_only,
@@ -177,8 +177,8 @@ impl DiskRuntime {
         }
     }
 
-    pub fn disk_id(&self) -> &str {
-        &self.disk_id
+    pub fn local_disk_id(&self) -> &str {
+        &self.local_disk_id
     }
 
     pub fn disk_name(&self) -> &str {
@@ -281,7 +281,7 @@ impl DiskRuntime {
 
     pub fn snapshot(&self) -> DiskRuntimeSnapshot {
         DiskRuntimeSnapshot {
-            disk_id: self.disk_id().to_string(),
+            local_disk_id: self.local_disk_id().to_string(),
             disk_name: self.disk_name().to_string(),
             auto_mount: self.auto_mount(),
             read_only: self.read_only(),

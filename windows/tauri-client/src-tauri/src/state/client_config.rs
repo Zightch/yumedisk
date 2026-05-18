@@ -46,7 +46,7 @@ pub enum PersistedDiskMediaConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedDiskRecord {
-    pub disk_id: String,
+    pub local_disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
     pub media: PersistedDiskMediaConfig,
@@ -54,7 +54,7 @@ pub struct PersistedDiskRecord {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PersistedSessionConfig {
+pub struct PersistedAppSessionConfig {
     pub heartbeat_interval_ms: u32,
     pub initial_event_queue_capacity: u32,
 }
@@ -63,7 +63,7 @@ pub struct PersistedSessionConfig {
 #[serde(rename_all = "camelCase")]
 pub struct PersistedClientConfig {
     pub version: u32,
-    pub session_config: PersistedSessionConfig,
+    pub session_config: PersistedAppSessionConfig,
     pub disks: Vec<PersistedDiskRecord>,
 }
 
@@ -71,7 +71,7 @@ impl Default for PersistedClientConfig {
     fn default() -> Self {
         Self {
             version: CONFIG_VERSION,
-            session_config: PersistedSessionConfig {
+            session_config: PersistedAppSessionConfig {
                 heartbeat_interval_ms: backend_rust::SessionConfig::default().heartbeat_interval_ms,
                 initial_event_queue_capacity: backend_rust::SessionConfig::default()
                     .initial_event_queue_capacity,

@@ -18,7 +18,7 @@ export type HomeDiskMedia =
     };
 
 export interface HomeDiskListItem {
-  diskId: string;
+  localDiskId: string;
   diskName: string;
   autoMount: boolean;
   readOnly: boolean;
@@ -43,7 +43,7 @@ export interface CreateMemoryDiskRequest {
 }
 
 export interface CreateMemoryDiskResponse {
-  diskId: string;
+  localDiskId: string;
 }
 
 export interface CreateFileDiskRequest {
@@ -53,7 +53,7 @@ export interface CreateFileDiskRequest {
 }
 
 export interface CreateFileDiskResponse {
-  diskId: string;
+  localDiskId: string;
 }
 
 export interface CreateNewFileDiskRequest {
@@ -65,11 +65,11 @@ export interface CreateNewFileDiskRequest {
 }
 
 export interface CreateNewFileDiskResponse {
-  diskId: string;
+  localDiskId: string;
 }
 
 export interface MountDiskRequest {
-  diskId: string;
+  localDiskId: string;
 }
 
 export interface MountDiskResponse {
@@ -77,11 +77,11 @@ export interface MountDiskResponse {
 }
 
 export interface EjectDiskRequest {
-  diskId: string;
+  localDiskId: string;
 }
 
 export interface DeleteDiskRequest {
-  diskId: string;
+  localDiskId: string;
 }
 
 export interface DeleteDiskResponse {
@@ -98,7 +98,7 @@ export interface CommitDeletedDiskRequest {
 }
 
 export interface UpdateDiskRequest {
-  diskId: string;
+  localDiskId: string;
   diskName: string;
   autoMount: boolean;
 }

@@ -1,26 +1,26 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { Loading, Plus, Setting } from "@element-plus/icons-vue";
-import { formatSessionPhaseText } from "../../entities/session/presenter";
-import type { SessionPhase } from "../../entities/session/model";
+import { formatAppSessionPhaseText } from "../../entities/appSession/presenter";
+import type { AppSessionPhase } from "../../entities/appSession/model";
 
 const props = defineProps<{
-  sessionPhase: SessionPhase;
+  appSessionPhase: AppSessionPhase;
 }>();
 
 const emit = defineEmits<{
-  openSessionStatus: [];
+  openAppSessionStatus: [];
   openSettings: [];
   openMemoryCreate: [];
   openFileCreate: [];
 }>();
 
 const addPopoverVisible = ref(false);
-const isInitializing = computed(() => props.sessionPhase === "initializing");
-const isReady = computed(() => props.sessionPhase === "ready");
-const isFailed = computed(() => props.sessionPhase === "failed");
-const statusText = computed(() => formatSessionPhaseText(props.sessionPhase));
-const canCreateDisk = computed(() => props.sessionPhase === "ready");
+const isInitializing = computed(() => props.appSessionPhase === "initializing");
+const isReady = computed(() => props.appSessionPhase === "ready");
+const isFailed = computed(() => props.appSessionPhase === "failed");
+const statusText = computed(() => formatAppSessionPhaseText(props.appSessionPhase));
+const canCreateDisk = computed(() => props.appSessionPhase === "ready");
 
 function handleOpenMemoryCreate() {
   if (!canCreateDisk.value) {
@@ -67,7 +67,7 @@ function handleOpenFileCreate() {
           'is-ready': isReady,
           'is-failed': isFailed,
         }"
-        @click="emit('openSessionStatus')"
+        @click="emit('openAppSessionStatus')"
       >
         <span v-if="isInitializing" class="app-header__status-spinner">
           <el-icon>

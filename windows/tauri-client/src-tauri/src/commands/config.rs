@@ -6,7 +6,7 @@ use crate::state::client_state::ClientState;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionConfigDto {
+pub struct AppSessionConfigDto {
     pub heartbeat_interval_ms: u32,
     pub initial_event_queue_capacity: u32,
 }
@@ -28,15 +28,15 @@ pub struct DiskConfigDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendDefaultsDto {
-    pub session_config: SessionConfigDto,
+    pub session_config: AppSessionConfigDto,
     pub disk_config_template: DiskConfigDto,
     pub target_id_auto: u32,
     pub target_id_min: u32,
     pub target_id_max: u32,
 }
 
-fn map_session_config_dto(config: backend_rust::SessionConfig) -> SessionConfigDto {
-    SessionConfigDto {
+fn map_session_config_dto(config: backend_rust::SessionConfig) -> AppSessionConfigDto {
+    AppSessionConfigDto {
         heartbeat_interval_ms: config.heartbeat_interval_ms,
         initial_event_queue_capacity: config.initial_event_queue_capacity,
     }
@@ -70,7 +70,7 @@ pub fn query_backend_defaults() -> BackendDefaultsDto {
 }
 
 #[tauri::command]
-pub fn query_session_config(state: State<'_, ClientState>) -> SessionConfigDto {
-    let config = config_service::query_session_config(&state.backend);
+pub fn query_app_session_config(state: State<'_, ClientState>) -> AppSessionConfigDto {
+    let config = config_service::query_app_session_config(&state.backend);
     map_session_config_dto(config)
 }

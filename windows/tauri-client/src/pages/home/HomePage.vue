@@ -8,12 +8,12 @@ import EditDiskDialog from "../../features/editDisk/EditDiskDialog.vue";
 import { mapHomeDiskDisplayItems } from "../../features/homeBootstrap/homeDisplayMapper";
 import { useHomeBootstrap } from "../../features/homeBootstrap/useHomeBootstrap";
 import { useRemoveDiskFlow } from "../../features/removeDisk/useRemoveDiskFlow";
-import SessionStatusDialog from "../../features/sessionStatus/SessionStatusDialog.vue";
+import AppSessionStatusDialog from "../../features/appSessionStatus/AppSessionStatusDialog.vue";
 import { DEFAULT_THEME, applyTheme, type AppTheme } from "../../shared/theme/theme";
 import {
   ejectDisk,
 } from "../../shared/api/diskClient";
-import { getErrorMessage } from "../../shared/api/sessionClient";
+import { getErrorMessage } from "../../shared/api/appSessionClient";
 import AppHeader from "../../widgets/AppHeader/AppHeader.vue";
 import DiskListPanel from "../../widgets/DiskListPanel/DiskListPanel.vue";
 import SettingsPage from "../../widgets/SettingsPage/SettingsPage.vue";
@@ -21,7 +21,7 @@ const memoryCreateVisible = ref(false);
 const fileCreateVisible = ref(false);
 const editDiskVisible = ref(false);
 const settingsVisible = ref(false);
-const sessionStatusVisible = ref(false);
+const appSessionStatusVisible = ref(false);
 const editingDisk = ref<HomeDiskListItem | null>(null);
 const currentTheme = ref<AppTheme>({ ...DEFAULT_THEME });
 
@@ -34,14 +34,14 @@ const {
   handleRescanRuntimeDisks: runRescanRuntimeDisks,
   loadHomeDiskList,
   loading,
-  retryOpenSessionFlow,
+  retryOpenAppSessionFlow,
   runtimeDisks,
-  sessionPhase,
-  sessionStatusText,
+  appSessionPhase,
+  appSessionStatusText,
 } = useHomeBootstrap();
 
 const displayDisks = computed(() => mapHomeDiskDisplayItems(runtimeDisks.value, {
-  sessionPhase: sessionPhase.value,
+  appSessionPhase: appSessionPhase.value,
   diskDisplayPhase: diskDisplayPhase.value,
 }));
 const { removeDisk } = useRemoveDiskFlow({
@@ -61,8 +61,8 @@ function handleOpenSettings() {
   settingsVisible.value = true;
 }
 
-function handleOpenSessionStatus() {
-  sessionStatusVisible.value = true;
+function handleOpenAppSessionStatus() {
+  appSessionStatusVisible.value = true;
 }
 
 async function handleMemoryDiskCreated() {
@@ -73,8 +73,8 @@ async function handleFileDiskCreated() {
   await loadHomeDiskList();
 }
 
-function handleEditDisk(diskId: string) {
-  const disk = runtimeDisks.value.find((item) => item.diskId === diskId) ?? null;
+function handleEditDisk(localDiskId: string) {
+  const disk = runtimeDisks.value.find((item) => item.localDiskId === localDiskId) ?? null;
   if (disk === null) {
     ElMessage.error("磁盘不存在");
     return;
@@ -90,10 +90,10 @@ async function handleDiskUpdated() {
 }
 
 async function handleMountDisk(
-  diskId: string,
+  localDiskId: string,
   options: { silentSuccess?: boolean } = {},
 ) {
-  const { ok, errorText: message } = await runMountDisk(diskId, options);
+  const { ok, errorText: message } = await runMountDisk(localDiskId, options);
 
   if (ok) {
     if (!options.silentSuccess) {
@@ -107,11 +107,11 @@ async function handleMountDisk(
   }
 }
 
-async function handleEjectDisk(diskId: string) {
-  actionLoadingDiskId.value = diskId;
+async function handleEjectDisk(localDiskId: string) {
+  actionLoadingDiskId.value = localDiskId;
 
   try {
-    await ejectDisk({ diskId });
+    await ejectDisk({ localDiskId });
     ElMessage.success("磁盘已拔出");
     await loadHomeDiskList({ showLoading: false });
   } catch (error) {
@@ -121,8 +121,8 @@ async function handleEjectDisk(diskId: string) {
   }
 }
 
-async function handleDeleteDisk(diskId: string) {
-  const disk = runtimeDisks.value.find((item) => item.diskId === diskId) ?? null;
+async function handleDeleteDisk(localDiskId: string) {
+  const disk = runtimeDisks.value.find((item) => item.localDiskId === localDiskId) ?? null;
   if (disk === null) {
     ElMessage.error("磁盘不存在");
     return;
@@ -145,8 +145,8 @@ async function handleRescanRuntimeDisks() {
   }
 }
 
-async function handleRetrySession() {
-  await retryOpenSessionFlow();
+async function handleRetryAppSession() {
+  await retryOpenAppSessionFlow();
 }
 
 function handleThemeChanged(theme: AppTheme) {
@@ -159,8 +159,8 @@ function handleThemeChanged(theme: AppTheme) {
   <el-container class="app-shell home-page" direction="vertical">
     <el-header class="home-page__header" height="auto">
       <AppHeader
-        :session-phase="sessionPhase"
-        @open-session-status="handleOpenSessionStatus"
+        :app-session-phase="appSessionPhase"
+        @open-app-session-status="handleOpenAppSessionStatus"
         @open-settings="handleOpenSettings"
         @open-memory-create="handleOpenMemoryCreate"
         @open-file-create="handleOpenFileCreate"
@@ -188,11 +188,11 @@ function handleThemeChanged(theme: AppTheme) {
     :theme="currentTheme"
     @update:theme="handleThemeChanged"
   />
-  <SessionStatusDialog
-    v-model="sessionStatusVisible"
-    :session-phase="sessionPhase"
-    :session-status-text="sessionStatusText"
-    @retry="handleRetrySession"
+  <AppSessionStatusDialog
+    v-model="appSessionStatusVisible"
+    :app-session-phase="appSessionPhase"
+    :app-session-status-text="appSessionStatusText"
+    @retry="handleRetryAppSession"
   />
   <CreateMemoryDiskDialog
     v-model="memoryCreateVisible"

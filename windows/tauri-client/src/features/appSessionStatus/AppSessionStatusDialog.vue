@@ -8,15 +8,15 @@ import {
 } from "@element-plus/icons-vue";
 import { computed } from "vue";
 import {
-  formatSessionPhaseDescription,
-  formatSessionPhaseText,
-} from "../../entities/session/presenter";
-import type { SessionPhase } from "../../entities/session/model";
+  formatAppSessionPhaseDescription,
+  formatAppSessionPhaseText,
+} from "../../entities/appSession/presenter";
+import type { AppSessionPhase } from "../../entities/appSession/model";
 
 const props = defineProps<{
   modelValue: boolean;
-  sessionPhase: SessionPhase;
-  sessionStatusText: string | null;
+  appSessionPhase: AppSessionPhase;
+  appSessionStatusText: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -29,12 +29,12 @@ const dialogVisible = computed({
   set: (value: boolean) => emit("update:modelValue", value),
 });
 
-const isInitializing = computed(() => props.sessionPhase === "initializing");
-const isReady = computed(() => props.sessionPhase === "ready");
-const isFailed = computed(() => props.sessionPhase === "failed");
-const phaseText = computed(() => formatSessionPhaseText(props.sessionPhase));
+const isInitializing = computed(() => props.appSessionPhase === "initializing");
+const isReady = computed(() => props.appSessionPhase === "ready");
+const isFailed = computed(() => props.appSessionPhase === "failed");
+const phaseText = computed(() => formatAppSessionPhaseText(props.appSessionPhase));
 const descriptionText = computed(() =>
-  formatSessionPhaseDescription(props.sessionPhase, props.sessionStatusText),
+  formatAppSessionPhaseDescription(props.appSessionPhase, props.appSessionStatusText),
 );
 
 function handleClose(): void {

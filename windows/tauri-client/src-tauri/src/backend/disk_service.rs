@@ -24,7 +24,7 @@ use crate::state::disk_runtime::RemovedDiskRuntime;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HomeDiskListItemSnapshot {
-    pub disk_id: String,
+    pub local_disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
     pub read_only: bool,
@@ -88,7 +88,7 @@ pub struct CreateNewFileDiskRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateDiskRequest {
-    pub disk_id: String,
+    pub local_disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
 }
@@ -147,10 +147,10 @@ pub fn create_memory_disk(
 
     let memory_kind = resolve_memory_kind(request.requested_memory_kind, capacity_bytes);
     let media = create_memory_media(memory_kind, capacity_bytes)?;
-    let disk_id = runtime_store.allocate_disk_id();
+    let local_disk_id = runtime_store.allocate_local_disk_id();
 
     runtime_store.insert_runtime(DiskRuntime::new_memory(
-        disk_id.clone(),
+        local_disk_id.clone(),
         disk_name.to_string(),
         request.auto_mount,
         memory_kind,
@@ -158,7 +158,7 @@ pub fn create_memory_disk(
         media,
     ));
 
-    Ok(disk_id)
+    Ok(local_disk_id)
 }
 
 pub fn pick_raw_file_path() -> Option<String> {
@@ -189,11 +189,11 @@ pub fn create_file_disk(
         return Err(ApiError::new("invalid-file-path", "文件路径不能为空", None));
     }
 
-    let disk_id = runtime_store.allocate_disk_id();
+    let local_disk_id = runtime_store.allocate_local_disk_id();
 
     let runtime = match persistence_service::probe_raw_file_media(file_path) {
         Ok(probe) => DiskRuntime::new_file(
-            disk_id.clone(),
+            local_disk_id.clone(),
             disk_name.to_string(),
             request.auto_mount,
             FileMediaKind::RawFile,
@@ -204,7 +204,7 @@ pub fn create_file_disk(
             None,
         ),
         Err(_) => DiskRuntime::new_file(
-            disk_id.clone(),
+            local_disk_id.clone(),
             disk_name.to_string(),
             request.auto_mount,
             FileMediaKind::RawFile,
@@ -219,7 +219,7 @@ pub fn create_file_disk(
     };
 
     runtime_store.insert_runtime(runtime);
-    Ok(disk_id)
+    Ok(local_disk_id)
 }
 
 pub fn create_new_file_disk(
@@ -295,7 +295,7 @@ pub fn create_new_file_disk(
             auto_mount: request.auto_mount,
         },
     ) {
-        Ok(disk_id) => Ok(disk_id),
+        Ok(local_disk_id) => Ok(local_disk_id),
         Err(error) => {
             let _ = std::fs::remove_file(&file_path_buf);
             Err(error)
@@ -306,11 +306,17 @@ pub fn create_new_file_disk(
 pub fn mount_disk(
     backend: &BackendContext,
     runtime_store: &mut DiskRuntimeStore,
-    disk_id: &str,
+    local_disk_id: &str,
 ) -> Result<u32, ApiError> {
     let runtime = runtime_store
-        .find_runtime_mut(disk_id)
-        .ok_or_else(|| ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string())))?;
+        .find_runtime_mut(local_disk_id)
+        .ok_or_else(|| {
+            ApiError::new(
+                "disk-not-found",
+                "磁盘不存在",
+                Some(local_disk_id.to_string()),
+            )
+        })?;
 
     if let Some(target_id) = runtime.mounted_target_id() {
         return Err(ApiError::new(
@@ -333,7 +339,7 @@ pub fn mount_disk(
             ApiError::new(
                 "held-media-not-found",
                 "宿主未持有当前磁盘介质实例",
-                Some(disk_id.to_string()),
+                Some(local_disk_id.to_string()),
             )
         })?;
         let media = persistence_service::open_raw_file_media(file_path)
@@ -347,7 +353,7 @@ pub fn mount_disk(
         ApiError::new(
             "held-media-not-found",
             "宿主未持有当前磁盘介质实例",
-            Some(disk_id.to_string()),
+            Some(local_disk_id.to_string()),
         )
     })?;
 
@@ -370,17 +376,23 @@ pub fn mount_disk(
 pub fn eject_disk(
     backend: &BackendContext,
     runtime_store: &mut DiskRuntimeStore,
-    disk_id: &str,
+    local_disk_id: &str,
 ) -> Result<(), ApiError> {
     let runtime = runtime_store
-        .find_runtime_mut(disk_id)
-        .ok_or_else(|| ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string())))?;
+        .find_runtime_mut(local_disk_id)
+        .ok_or_else(|| {
+            ApiError::new(
+                "disk-not-found",
+                "磁盘不存在",
+                Some(local_disk_id.to_string()),
+            )
+        })?;
 
     let Some(target_id) = runtime.mounted_target_id() else {
         return Err(ApiError::new(
             "disk-not-mounted",
             "磁盘当前未挂载，不能拔出",
-            Some(disk_id.to_string()),
+            Some(local_disk_id.to_string()),
         ));
     };
 
@@ -398,9 +410,13 @@ pub fn eject_disk(
     drop(media);
     runtime.media = None;
 
-    let file_path = runtime
-        .file_path()
-        .ok_or_else(|| ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.to_string())))?;
+    let file_path = runtime.file_path().ok_or_else(|| {
+        ApiError::new(
+            "disk-not-found",
+            "磁盘不存在",
+            Some(local_disk_id.to_string()),
+        )
+    })?;
     match persistence_service::probe_raw_file_media(file_path) {
         Ok(probe) => {
             runtime.set_file_unmounted(probe.capacity_bytes, probe.read_only);
@@ -436,7 +452,7 @@ pub fn prepare_deleted_runtime(
             ApiError::new(
                 "disk-not-found",
                 "磁盘不存在",
-                Some(removed_runtime.runtime.disk_id().to_string()),
+                Some(removed_runtime.runtime.local_disk_id().to_string()),
             )
         })?;
         match persistence_service::probe_raw_file_media(file_path) {
@@ -466,12 +482,12 @@ pub fn update_disk(
     }
 
     let runtime = runtime_store
-        .find_runtime_mut(&request.disk_id)
+        .find_runtime_mut(&request.local_disk_id)
         .ok_or_else(|| {
             ApiError::new(
                 "disk-not-found",
                 "磁盘不存在",
-                Some(request.disk_id.to_string()),
+                Some(request.local_disk_id.to_string()),
             )
         })?;
 
@@ -595,7 +611,7 @@ fn map_home_disk_list_item_snapshot(
     let runtime_snapshot = target_id.and_then(|value| runtime_by_target.get(&value));
 
     HomeDiskListItemSnapshot {
-        disk_id: runtime.disk_id,
+        local_disk_id: runtime.local_disk_id,
         disk_name: runtime.disk_name,
         auto_mount: runtime.auto_mount,
         read_only: runtime.read_only,

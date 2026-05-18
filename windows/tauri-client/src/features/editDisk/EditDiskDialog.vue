@@ -3,7 +3,7 @@ import { ElMessage } from "element-plus";
 import { computed, reactive, ref, watch } from "vue";
 import type { HomeDiskListItem, UpdateDiskRequest } from "../../entities/disk/model";
 import { updateDisk } from "../../shared/api/diskClient";
-import { getErrorMessage } from "../../shared/api/sessionClient";
+import { getErrorMessage } from "../../shared/api/appSessionClient";
 
 interface EditDiskFormModel {
   diskName: string;
@@ -69,7 +69,7 @@ async function handleSubmit() {
   }
 
   const request: UpdateDiskRequest = {
-    diskId: props.disk.diskId,
+    localDiskId: props.disk.localDiskId,
     diskName: form.diskName.trim(),
     autoMount: form.autoMount,
   };

@@ -37,8 +37,8 @@ impl DiskCatalogState {
         self.next_deletion_number = 1;
     }
 
-    pub fn remove_runtime(&mut self, disk_id: &str) -> Option<RemovedDiskRuntime> {
-        self.runtime_store.remove_runtime(disk_id)
+    pub fn remove_runtime(&mut self, local_disk_id: &str) -> Option<RemovedDiskRuntime> {
+        self.runtime_store.remove_runtime(local_disk_id)
     }
 
     pub fn restore_removed_runtime(&mut self, removed_runtime: RemovedDiskRuntime) {

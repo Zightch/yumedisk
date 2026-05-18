@@ -65,14 +65,14 @@ fn build_restored_runtime_store(
     persisted_config: PersistedClientConfig,
 ) -> Result<DiskRuntimeStore, ApiError> {
     let mut runtime_store = DiskRuntimeStore::default();
-    let mut disk_ids = BTreeSet::new();
+    let mut local_disk_ids = BTreeSet::new();
 
     for persisted_disk in persisted_config.disks {
-        if !disk_ids.insert(persisted_disk.disk_id.clone()) {
+        if !local_disk_ids.insert(persisted_disk.local_disk_id.clone()) {
             return Err(ApiError::new(
                 "client-config-duplicate-disk-id",
                 "配置文件中存在重复磁盘标识",
-                Some(persisted_disk.disk_id),
+                Some(persisted_disk.local_disk_id),
             ));
         }
 
@@ -96,7 +96,7 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
             let media = create_memory_media(memory_kind, capacity_bytes)?;
 
             Ok(DiskRuntime::new_memory(
-                persisted_disk.disk_id,
+                persisted_disk.local_disk_id,
                 persisted_disk.disk_name,
                 persisted_disk.auto_mount,
                 memory_kind,
@@ -114,7 +114,7 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
 
             match probe_raw_file_media(&file_path) {
                 Ok(probe) => Ok(DiskRuntime::new_file(
-                    persisted_disk.disk_id,
+                    persisted_disk.local_disk_id,
                     persisted_disk.disk_name,
                     persisted_disk.auto_mount,
                     file_kind,
@@ -125,7 +125,7 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
                     None,
                 )),
                 Err(error) => Ok(DiskRuntime::new_file(
-                    persisted_disk.disk_id,
+                    persisted_disk.local_disk_id,
                     persisted_disk.disk_name,
                     persisted_disk.auto_mount,
                     file_kind,
@@ -146,8 +146,8 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
     }
 }
 
-fn map_session_config(session_config: SessionConfig) -> client_config::PersistedSessionConfig {
-    client_config::PersistedSessionConfig {
+fn map_session_config(session_config: SessionConfig) -> client_config::PersistedAppSessionConfig {
+    client_config::PersistedAppSessionConfig {
         heartbeat_interval_ms: session_config.heartbeat_interval_ms,
         initial_event_queue_capacity: session_config.initial_event_queue_capacity,
     }
@@ -157,7 +157,7 @@ fn map_persisted_disk_record(
     snapshot: crate::state::disk_runtime::DiskRuntimeSnapshot,
 ) -> PersistedDiskRecord {
     PersistedDiskRecord {
-        disk_id: snapshot.disk_id,
+        local_disk_id: snapshot.local_disk_id,
         disk_name: snapshot.disk_name,
         auto_mount: snapshot.auto_mount,
         media: match snapshot.media {

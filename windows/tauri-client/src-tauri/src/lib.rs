@@ -116,10 +116,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::app_info::query_component_versions,
-            commands::session::restore_client_state,
-            commands::session::open_session,
+            commands::app_session::restore_client_state,
+            commands::app_session::open_app_session,
             commands::config::query_backend_defaults,
-            commands::config::query_session_config,
+            commands::config::query_app_session_config,
             commands::disk::query_managed_disks,
             commands::disk::query_home_disk_list,
             commands::disk::rescan_runtime_disks,

@@ -80,7 +80,7 @@ pub struct CreateNewFileDiskRequestDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateMemoryDiskResponse {
-    pub disk_id: String,
+    pub local_disk_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -92,13 +92,13 @@ pub struct PickRawFilePathResponse {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateFileDiskResponse {
-    pub disk_id: String,
+    pub local_disk_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MountDiskRequestDto {
-    pub disk_id: String,
+    pub local_disk_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,13 +110,13 @@ pub struct MountDiskResponse {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EjectDiskRequestDto {
-    pub disk_id: String,
+    pub local_disk_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeleteDiskRequestDto {
-    pub disk_id: String,
+    pub local_disk_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -134,7 +134,7 @@ pub struct CommitDeletedDiskRequestDto {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateDiskRequestDto {
-    pub disk_id: String,
+    pub local_disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
 }
@@ -189,7 +189,7 @@ pub enum HomeDiskMediaDto {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HomeDiskListItemDto {
-    pub disk_id: String,
+    pub local_disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
     pub read_only: bool,
@@ -251,7 +251,7 @@ fn map_home_disk_list_item_dto(
     snapshot: disk_service::HomeDiskListItemSnapshot,
 ) -> HomeDiskListItemDto {
     HomeDiskListItemDto {
-        disk_id: snapshot.disk_id,
+        local_disk_id: snapshot.local_disk_id,
         disk_name: snapshot.disk_name,
         auto_mount: snapshot.auto_mount,
         read_only: snapshot.read_only,
@@ -353,13 +353,13 @@ pub fn create_memory_disk(
     state: State<'_, ClientState>,
     request: CreateMemoryDiskRequestDto,
 ) -> Result<CreateMemoryDiskResponse, ApiError> {
-    let disk_id = {
+    let local_disk_id = {
         let mut disk_catalog = state
             .disk_catalog
             .lock()
             .expect("disk catalog mutex should not be poisoned");
 
-        let disk_id = disk_service::create_memory_disk(
+        let local_disk_id = disk_service::create_memory_disk(
             disk_catalog.runtime_store_mut(),
             disk_service::CreateMemoryDiskRequest {
                 disk_name: request.disk_name,
@@ -373,13 +373,13 @@ pub fn create_memory_disk(
         if let Err(error) =
             persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())
         {
-            let _ = disk_catalog.remove_runtime(&disk_id);
+            let _ = disk_catalog.remove_runtime(&local_disk_id);
             return Err(error);
         }
-        disk_id
+        local_disk_id
     };
 
-    Ok(CreateMemoryDiskResponse { disk_id })
+    Ok(CreateMemoryDiskResponse { local_disk_id })
 }
 
 #[tauri::command]
@@ -401,13 +401,13 @@ pub fn create_file_disk(
     state: State<'_, ClientState>,
     request: CreateFileDiskRequestDto,
 ) -> Result<CreateFileDiskResponse, ApiError> {
-    let disk_id = {
+    let local_disk_id = {
         let mut disk_catalog = state
             .disk_catalog
             .lock()
             .expect("disk catalog mutex should not be poisoned");
 
-        let disk_id = disk_service::create_file_disk(
+        let local_disk_id = disk_service::create_file_disk(
             disk_catalog.runtime_store_mut(),
             disk_service::CreateFileDiskRequest {
                 disk_name: request.disk_name,
@@ -418,13 +418,13 @@ pub fn create_file_disk(
         if let Err(error) =
             persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())
         {
-            let _ = disk_catalog.remove_runtime(&disk_id);
+            let _ = disk_catalog.remove_runtime(&local_disk_id);
             return Err(error);
         }
-        disk_id
+        local_disk_id
     };
 
-    Ok(CreateFileDiskResponse { disk_id })
+    Ok(CreateFileDiskResponse { local_disk_id })
 }
 
 #[tauri::command]
@@ -432,13 +432,13 @@ pub fn create_new_file_disk(
     state: State<'_, ClientState>,
     request: CreateNewFileDiskRequestDto,
 ) -> Result<CreateFileDiskResponse, ApiError> {
-    let disk_id = {
+    let local_disk_id = {
         let mut disk_catalog = state
             .disk_catalog
             .lock()
             .expect("disk catalog mutex should not be poisoned");
 
-        let disk_id = disk_service::create_new_file_disk(
+        let local_disk_id = disk_service::create_new_file_disk(
             disk_catalog.runtime_store_mut(),
             disk_service::CreateNewFileDiskRequest {
                 disk_name: request.disk_name,
@@ -451,13 +451,13 @@ pub fn create_new_file_disk(
         if let Err(error) =
             persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())
         {
-            let _ = disk_catalog.remove_runtime(&disk_id);
+            let _ = disk_catalog.remove_runtime(&local_disk_id);
             return Err(error);
         }
-        disk_id
+        local_disk_id
     };
 
-    Ok(CreateFileDiskResponse { disk_id })
+    Ok(CreateFileDiskResponse { local_disk_id })
 }
 
 #[tauri::command]
@@ -474,7 +474,7 @@ pub fn mount_disk(
         disk_service::mount_disk(
             &state.backend,
             disk_catalog.runtime_store_mut(),
-            &request.disk_id,
+            &request.local_disk_id,
         )?
     };
 
@@ -494,7 +494,7 @@ pub fn eject_disk(
     disk_service::eject_disk(
         &state.backend,
         disk_catalog.runtime_store_mut(),
-        &request.disk_id,
+        &request.local_disk_id,
     )
 }
 
@@ -508,15 +508,16 @@ pub fn delete_disk(
         .lock()
         .expect("disk catalog mutex should not be poisoned");
 
-    let Some(mut removed_runtime) = disk_catalog.remove_runtime(&request.disk_id) else {
+    let Some(mut removed_runtime) = disk_catalog.remove_runtime(&request.local_disk_id) else {
         return Err(ApiError::new(
             "disk-not-found",
             "磁盘不存在",
-            Some(request.disk_id),
+            Some(request.local_disk_id),
         ));
     };
 
-    if let Err(error) = disk_service::prepare_deleted_runtime(&state.backend, &mut removed_runtime) {
+    if let Err(error) = disk_service::prepare_deleted_runtime(&state.backend, &mut removed_runtime)
+    {
         disk_catalog.restore_removed_runtime(removed_runtime);
         return Err(error);
     }
@@ -554,7 +555,11 @@ pub fn undo_delete_disk(
                 Some(request.deletion_id.clone()),
             )
         })?;
-    let disk_id = pending_deletion.removed_runtime.runtime.disk_id().to_string();
+    let local_disk_id = pending_deletion
+        .removed_runtime
+        .runtime
+        .local_disk_id()
+        .to_string();
     let deletion_id = pending_deletion.deletion_id.clone();
 
     disk_catalog.restore_removed_runtime(pending_deletion.removed_runtime);
@@ -562,8 +567,8 @@ pub fn undo_delete_disk(
     if let Err(error) =
         persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())
     {
-        let removed_runtime = disk_catalog.remove_runtime(&disk_id).ok_or_else(|| {
-            ApiError::new("disk-not-found", "磁盘不存在", Some(disk_id.clone()))
+        let removed_runtime = disk_catalog.remove_runtime(&local_disk_id).ok_or_else(|| {
+            ApiError::new("disk-not-found", "磁盘不存在", Some(local_disk_id.clone()))
         })?;
         disk_catalog.restore_pending_deletion(PendingDiskDeletion {
             deletion_id,
@@ -612,7 +617,7 @@ pub fn update_disk(
     let updated_state = disk_service::update_disk(
         disk_catalog.runtime_store_mut(),
         disk_service::UpdateDiskRequest {
-            disk_id: request.disk_id,
+            local_disk_id: request.local_disk_id,
             disk_name: request.disk_name,
             auto_mount: request.auto_mount,
         },
@@ -623,12 +628,12 @@ pub fn update_disk(
     {
         let runtime = disk_catalog
             .runtime_store_mut()
-            .find_runtime_mut(&updated_state.previous_snapshot.disk_id)
+            .find_runtime_mut(&updated_state.previous_snapshot.local_disk_id)
             .ok_or_else(|| {
                 ApiError::new(
                     "disk-not-found",
                     "磁盘不存在",
-                    Some(updated_state.previous_snapshot.disk_id.clone()),
+                    Some(updated_state.previous_snapshot.local_disk_id.clone()),
                 )
             })?;
         runtime.set_identity(

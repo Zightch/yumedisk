@@ -6,7 +6,7 @@ import type {
   MemoryCreateKind,
 } from "../../entities/disk/model";
 import { createMemoryDisk } from "../../shared/api/diskClient";
-import { getErrorMessage } from "../../shared/api/sessionClient";
+import { getErrorMessage } from "../../shared/api/appSessionClient";
 
 interface MemoryDiskFormModel {
   diskName: string;

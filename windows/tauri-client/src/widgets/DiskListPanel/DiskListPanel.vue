@@ -14,10 +14,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   rescan: [];
-  mount: [diskId: string];
-  eject: [diskId: string];
-  delete: [diskId: string];
-  edit: [diskId: string];
+  mount: [localDiskId: string];
+  eject: [localDiskId: string];
+  delete: [localDiskId: string];
+  edit: [localDiskId: string];
 }>();
 
 const diskCount = computed(() => props.disks.length);
@@ -56,9 +56,9 @@ const diskCount = computed(() => props.disks.length);
           <div v-else-if="disks.length > 0" class="list-panel__content">
             <DiskCard
               v-for="disk in disks"
-              :key="disk.diskId"
+              :key="disk.localDiskId"
               :disk="disk"
-              :action-loading="actionLoadingDiskId === disk.diskId"
+              :action-loading="actionLoadingDiskId === disk.localDiskId"
               @mount="emit('mount', $event)"
               @eject="emit('eject', $event)"
               @edit="emit('edit', $event)"

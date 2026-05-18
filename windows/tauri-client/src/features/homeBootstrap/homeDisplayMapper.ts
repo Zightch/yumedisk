@@ -1,10 +1,10 @@
 import type { HomeDiskListItem } from "../../entities/disk/model";
-import type { SessionPhase } from "../../entities/session/model";
+import type { AppSessionPhase } from "../../entities/appSession/model";
 
 export type HomeDiskDisplayPhase = "startup" | "normal";
 
 export interface MapHomeDiskDisplayItemsOptions {
-  sessionPhase: SessionPhase;
+  appSessionPhase: AppSessionPhase;
   diskDisplayPhase: HomeDiskDisplayPhase;
 }
 
@@ -19,7 +19,7 @@ export function mapHomeDiskDisplayItems(
     return runtimeDisks.map((disk) => ({ ...disk }));
   }
 
-  const invalidReason = options.sessionPhase === "failed"
+  const invalidReason = options.appSessionPhase === "failed"
     ? SESSION_FAILED_INVALID_REASON
     : STARTUP_INVALID_REASON;
 

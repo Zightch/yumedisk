@@ -12,7 +12,7 @@ import {
   pickNewRawFilePath,
   pickRawFilePath,
 } from "../../shared/api/diskClient";
-import { getErrorMessage } from "../../shared/api/sessionClient";
+import { getErrorMessage } from "../../shared/api/appSessionClient";
 
 interface FileDiskFormModel {
   diskName: string;

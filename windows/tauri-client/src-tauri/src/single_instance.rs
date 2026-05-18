@@ -69,7 +69,8 @@ mod imp {
         let wake_event_handle = guard.wake_event_handle;
 
         thread::spawn(move || loop {
-            let wait_result = unsafe { WaitForSingleObject(handle_from_raw(wake_event_handle), INFINITE) };
+            let wait_result =
+                unsafe { WaitForSingleObject(handle_from_raw(wake_event_handle), INFINITE) };
             if wait_result != 0 {
                 break;
             }
@@ -93,25 +94,12 @@ mod imp {
 
     fn create_mutex(name: &str) -> HANDLE {
         let name = to_wide(name);
-        unsafe {
-            CreateMutexW(
-                ptr::null::<SECURITY_ATTRIBUTES>(),
-                0,
-                name.as_ptr(),
-            )
-        }
+        unsafe { CreateMutexW(ptr::null::<SECURITY_ATTRIBUTES>(), 0, name.as_ptr()) }
     }
 
     fn create_event(name: &str) -> HANDLE {
         let name = to_wide(name);
-        unsafe {
-            CreateEventW(
-                ptr::null::<SECURITY_ATTRIBUTES>(),
-                0,
-                0,
-                name.as_ptr(),
-            )
-        }
+        unsafe { CreateEventW(ptr::null::<SECURITY_ATTRIBUTES>(), 0, 0, name.as_ptr()) }
     }
 
     fn close_handle(handle: HANDLE) {

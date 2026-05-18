@@ -13,10 +13,10 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  mount: [diskId: string];
-  eject: [diskId: string];
-  delete: [diskId: string];
-  edit: [diskId: string];
+  mount: [localDiskId: string];
+  eject: [localDiskId: string];
+  delete: [localDiskId: string];
+  edit: [localDiskId: string];
 }>();
 
 const detailText = computed(() => formatDiskDetailText(props.disk));
@@ -63,11 +63,11 @@ function handlePrimaryAction(): void {
   }
 
   if (isMounted.value) {
-    emit("eject", props.disk.diskId);
+    emit("eject", props.disk.localDiskId);
     return;
   }
 
-  emit("mount", props.disk.diskId);
+  emit("mount", props.disk.localDiskId);
 }
 
 function handleEdit(): void {
@@ -75,7 +75,7 @@ function handleEdit(): void {
     return;
   }
 
-  emit("edit", props.disk.diskId);
+  emit("edit", props.disk.localDiskId);
 }
 
 function handleDelete(): void {
@@ -83,7 +83,7 @@ function handleDelete(): void {
     return;
   }
 
-  emit("delete", props.disk.diskId);
+  emit("delete", props.disk.localDiskId);
 }
 </script>
 

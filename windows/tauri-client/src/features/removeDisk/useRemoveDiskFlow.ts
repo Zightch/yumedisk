@@ -7,7 +7,7 @@ import {
   deleteDisk,
   undoDeleteDisk,
 } from "../../shared/api/diskClient";
-import { getErrorMessage } from "../../shared/api/sessionClient";
+import { getErrorMessage } from "../../shared/api/appSessionClient";
 import DeleteDiskNotification from "./DeleteDiskNotification.vue";
 
 const DELETE_NOTIFICATION_DURATION_MS = 3400;
@@ -137,10 +137,10 @@ export function useRemoveDiskFlow(options: {
       throw error;
     }
 
-    options.actionLoadingDiskId.value = disk.diskId;
+    options.actionLoadingDiskId.value = disk.localDiskId;
 
     try {
-      const response = await deleteDisk({ diskId: disk.diskId });
+      const response = await deleteDisk({ localDiskId: disk.localDiskId });
       await options.loadHomeDiskList({ showLoading: false });
 
       if (response.undoAvailable) {

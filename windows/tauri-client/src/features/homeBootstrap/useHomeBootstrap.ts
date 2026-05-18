@@ -1,6 +1,6 @@
 import { nextTick, onMounted, ref } from "vue";
 import type { HomeDiskListItem, HomeDiskListSnapshot } from "../../entities/disk/model";
-import type { SessionPhase, SessionSnapshot } from "../../entities/session/model";
+import type { AppSessionPhase, AppSessionSnapshot } from "../../entities/appSession/model";
 import {
   mountDisk,
   queryHomeDiskList,
@@ -9,9 +9,9 @@ import {
 import {
   getErrorDetail,
   getErrorMessage,
-  openSession,
+  openAppSession,
   restoreClientState,
-} from "../../shared/api/sessionClient";
+} from "../../shared/api/appSessionClient";
 import type { HomeDiskDisplayPhase } from "./homeDisplayMapper";
 
 export interface HomeBootstrapState {
@@ -19,10 +19,10 @@ export interface HomeBootstrapState {
   autoMountCount: number;
   loading: boolean;
   errorText: string | null;
-  sessionPhase: SessionPhase;
-  sessionStatusText: string | null;
+  appSessionPhase: AppSessionPhase;
+  appSessionStatusText: string | null;
   diskDisplayPhase: HomeDiskDisplayPhase;
-  sessionSnapshot: SessionSnapshot | null;
+  appSessionSnapshot: AppSessionSnapshot | null;
 }
 
 export function useHomeBootstrap() {
@@ -30,10 +30,10 @@ export function useHomeBootstrap() {
   const autoMountCount = ref(0);
   const loading = ref(true);
   const errorText = ref<string | null>(null);
-  const sessionPhase = ref<SessionPhase>("initializing");
-  const sessionStatusText = ref<string | null>("正在恢复配置");
+  const appSessionPhase = ref<AppSessionPhase>("initializing");
+  const appSessionStatusText = ref<string | null>("正在恢复配置");
   const diskDisplayPhase = ref<HomeDiskDisplayPhase>("startup");
-  const sessionSnapshot = ref<SessionSnapshot | null>(null);
+  const appSessionSnapshot = ref<AppSessionSnapshot | null>(null);
   const initialAutoMountCompleted = ref(false);
   const actionLoadingDiskId = ref<string | null>(null);
 
@@ -86,13 +86,13 @@ export function useHomeBootstrap() {
   }
 
   async function handleMountDisk(
-    diskId: string,
+    localDiskId: string,
     options: { silentSuccess?: boolean } = {},
   ): Promise<{ ok: boolean; errorText: string | null }> {
-    actionLoadingDiskId.value = diskId;
+    actionLoadingDiskId.value = localDiskId;
 
     try {
-      await mountDisk({ diskId });
+      await mountDisk({ localDiskId });
       await loadHomeDiskList({ showLoading: false });
       return { ok: true, errorText: null };
     } catch (error) {
@@ -114,52 +114,52 @@ export function useHomeBootstrap() {
 
     initialAutoMountCompleted.value = true;
 
-    const diskIds = snapshot.disks
+    const localDiskIds = snapshot.disks
       .filter((disk) => disk.autoMount && disk.status === "unmounted")
-      .map((disk) => disk.diskId);
+      .map((disk) => disk.localDiskId);
 
-    for (const diskId of diskIds) {
-      await handleMountDisk(diskId, { silentSuccess: true });
+    for (const localDiskId of localDiskIds) {
+      await handleMountDisk(localDiskId, { silentSuccess: true });
     }
   }
 
-  function setSessionFailureState(text: string): void {
-    sessionPhase.value = "failed";
-    sessionStatusText.value = text;
+  function setAppSessionFailureState(text: string): void {
+    appSessionPhase.value = "failed";
+    appSessionStatusText.value = text;
     diskDisplayPhase.value = "startup";
   }
 
-  function resolveSessionFailureText(error: unknown): string {
+  function resolveAppSessionFailureText(error: unknown): string {
     return getErrorDetail(error) ?? getErrorMessage(error);
   }
 
-  async function runOpenSessionFlow(): Promise<boolean> {
+  async function runOpenAppSessionFlow(): Promise<boolean> {
     errorText.value = null;
-    sessionPhase.value = "initializing";
+    appSessionPhase.value = "initializing";
     diskDisplayPhase.value = "startup";
-    sessionStatusText.value = "正在打开 Backend 会话";
+    appSessionStatusText.value = "正在打开 Backend 会话";
 
     try {
-      sessionSnapshot.value = await openSession();
-      sessionPhase.value = "ready";
+      appSessionSnapshot.value = await openAppSession();
+      appSessionPhase.value = "ready";
 
-      sessionStatusText.value = "正在重扫磁盘运行态";
+      appSessionStatusText.value = "正在重扫磁盘运行态";
       const rescanSnapshot = await handleRescanRuntimeDisks({ showLoading: false });
       if (rescanSnapshot === null) {
-        setSessionFailureState(errorText.value ?? "重扫磁盘运行态失败");
+        setAppSessionFailureState(errorText.value ?? "重扫磁盘运行态失败");
         return false;
       }
 
       diskDisplayPhase.value = "normal";
       await nextTick();
 
-      sessionStatusText.value = "正在执行自动挂载";
+      appSessionStatusText.value = "正在执行自动挂载";
       await runInitialAutoMount(rescanSnapshot);
-      sessionStatusText.value = sessionSnapshot.value.stateText;
+      appSessionStatusText.value = appSessionSnapshot.value.stateText;
       return true;
     } catch (error) {
-      sessionSnapshot.value = null;
-      setSessionFailureState(resolveSessionFailureText(error));
+      appSessionSnapshot.value = null;
+      setAppSessionFailureState(resolveAppSessionFailureText(error));
       errorText.value = getErrorMessage(error);
       return false;
     }
@@ -169,19 +169,19 @@ export function useHomeBootstrap() {
     loading.value = true;
     errorText.value = null;
     actionLoadingDiskId.value = null;
-    sessionSnapshot.value = null;
-    sessionPhase.value = "initializing";
-    sessionStatusText.value = "正在恢复配置";
+    appSessionSnapshot.value = null;
+    appSessionPhase.value = "initializing";
+    appSessionStatusText.value = "正在恢复配置";
     diskDisplayPhase.value = "startup";
     initialAutoMountCompleted.value = false;
 
     try {
       await restoreClientState();
 
-      sessionStatusText.value = "正在加载磁盘配置";
+      appSessionStatusText.value = "正在加载磁盘配置";
       const snapshot = await loadHomeDiskList({ showLoading: false });
       if (snapshot === null) {
-        setSessionFailureState(errorText.value ?? "加载磁盘配置失败");
+        setAppSessionFailureState(errorText.value ?? "加载磁盘配置失败");
         loading.value = false;
         return;
       }
@@ -189,20 +189,20 @@ export function useHomeBootstrap() {
       loading.value = false;
       await nextTick();
 
-      await runOpenSessionFlow();
+      await runOpenAppSessionFlow();
     } catch (error) {
-      sessionSnapshot.value = null;
-      setSessionFailureState(resolveSessionFailureText(error));
+      appSessionSnapshot.value = null;
+      setAppSessionFailureState(resolveAppSessionFailureText(error));
       errorText.value = getErrorMessage(error);
     } finally {
       loading.value = false;
     }
   }
 
-  async function retryOpenSessionFlow(): Promise<boolean> {
+  async function retryOpenAppSessionFlow(): Promise<boolean> {
     initialAutoMountCompleted.value = false;
     actionLoadingDiskId.value = null;
-    return runOpenSessionFlow();
+    return runOpenAppSessionFlow();
   }
 
   onMounted(() => {
@@ -218,10 +218,10 @@ export function useHomeBootstrap() {
     handleRescanRuntimeDisks,
     loadHomeDiskList,
     loading,
-    retryOpenSessionFlow,
+    retryOpenAppSessionFlow,
     runtimeDisks,
-    sessionPhase,
-    sessionSnapshot,
-    sessionStatusText,
+    appSessionPhase,
+    appSessionSnapshot,
+    appSessionStatusText,
   };
 }

@@ -3,7 +3,7 @@ use crate::backend::persistence_service;
 use crate::state::client_state::ClientState;
 
 #[derive(Debug, Clone)]
-pub struct SessionSnapshot {
+pub struct AppSessionSnapshot {
     pub ready: bool,
     pub state_text: String,
 }
@@ -35,7 +35,7 @@ pub fn restore_client_state(state: &ClientState) -> Result<(), ApiError> {
     Ok(())
 }
 
-pub fn open_session(state: &ClientState) -> Result<SessionSnapshot, ApiError> {
+pub fn open_app_session(state: &ClientState) -> Result<AppSessionSnapshot, ApiError> {
     if !state.backend.open() {
         return Err(ApiError::new(
             "backend-session-open-failed",
@@ -44,7 +44,7 @@ pub fn open_session(state: &ClientState) -> Result<SessionSnapshot, ApiError> {
         ));
     }
 
-    Ok(SessionSnapshot {
+    Ok(AppSessionSnapshot {
         ready: true,
         state_text: state.backend.query_session_state_text(),
     })
