@@ -14,7 +14,7 @@
 - `gateway` 是认证和路由的唯一决策点
 - `auth_id` 是显式短生命周期授权对象
 - `auth_id` 只存在于 `client-gateway`
-- route 只来自 `storer -> gateway` 注册
+- route 来自外部 `storer -> gateway` 注册或 `whole` 的本地 fixed route
 
 ## 2. 领盘码模型
 
@@ -42,11 +42,10 @@ proof = HMAC-SHA512(key = auth_verifier, msg = salt_bytes)
 
 ## 3. route 真源
 
-当前 route 唯一来源是：
+当前 route 来源固定为两种：
 
-```text
-storer -> gateway 注册
-```
+1. `role = storer`：`storer -> gateway` 注册
+2. `role = whole`：内嵌 gateway 为自己的 `disk_id` 写入本地 fixed route
 
 注册后，gateway 在 `route_registry` 至少保存：
 
@@ -63,6 +62,7 @@ storer -> gateway 注册
 - gateway 不保存原始 `claim_code`
 - 一个 route 只绑定一个 `disk_id`
 - 一个 `disk_id` 同时只允许一个活跃 route
+- `role = whole` 的 `route_registry` 中只保留自己的 `disk_id`
 
 ## 4. challenge 模型
 
@@ -304,6 +304,8 @@ storer 只需要知道：
 3. 关闭该 route 名下全部 session
 4. 向仍在线 client 发送 `SessionCloseNotice`
 
+`role = whole` 下若本地 fixed route 失效，gateway 也必须走完全相同的 grant/session 清理路径。
+
 这样可避免：
 
 - 悬空授权对象
@@ -321,7 +323,7 @@ storer 只需要知道：
 1. `gateway` 是认证与路由的唯一决策点。
 2. `auth_id` 是显式授权对象，不是隐式 connection 状态。
 3. `auth_id` 只存在于 `client-gateway`。
-4. route 只来自 `storer` 注册。
+4. route 来自外部 `storer` 注册或 `whole` 的本地 fixed route。
 5. storer 不知道 client 的 `auth_id`。
 6. `SessionOpen(auth_id)` 成功后只得到 `session_id`。
 7. metadata 通过 `SessionDescribe(session_id)` 单独查询。

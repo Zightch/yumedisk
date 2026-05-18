@@ -19,7 +19,8 @@
 
 ```text
 TCP
-  -> Hello
+  -> HelloRequest
+  -> HelloResponse(server_capabilities)
   -> optional TLS
   -> transport
   -> client-gateway business protocol
@@ -30,6 +31,13 @@ TCP
 - `Hello` 不属于 transport
 - TLS 握手不属于 transport
 - transport 只在 client bootstrap 完成后才启动
+
+当前第一版固定为：
+
+- `HelloRequest` 当前负载为空
+- `HelloResponse` 当前 `server_capabilities` 负载为空
+- 因当前能力负载为空，`Hello` 完成后直接进入 transport
+- 未来若引入 TLS 或其他 server 能力，必须从 `HelloResponse.server_capabilities` 扩展，不再新增第二套 bootstrap 消息
 
 ### 2.2 storer-facing
 
@@ -118,11 +126,16 @@ whole
   -> client bootstrap
   -> transport runtime
   -> client-gateway handler
-  -> local gateway core
+  -> embedded gateway core
+  -> local fixed route(self disk_id)
   -> local storer core
 ```
 
-`whole` 只是装配方式不同，不改变 transport 语义。
+补充约束：
+
+- `whole` 不启动外部 storer-facing listener
+- `whole` 不增加第二套 client-facing bootstrap 或 transport 语义
+- client 看到的仍然是完整 `Hello -> transport -> auth -> session` 主链
 
 ## 8. 帧格式
 
@@ -204,9 +217,11 @@ transport 只承载并发，不做并发业务决策。
 
 ### 13.2 storer-facing bootstrap 错误
 
-当前第一版 storer-facing 没有单独 bootstrap 协商阶段。
+当前第一版 `role = storer` 的 storer-facing 没有单独 bootstrap 协商阶段。
 
-因此 storer-facing 在 transport 之前只有 TCP 建连本身；一旦开始收发，就直接进入 transport。
+因此外部 storer-facing 在 transport 之前只有 TCP 建连本身；一旦开始收发，就直接进入 transport。
+
+`role = whole` 不存在外部 storer-facing TCP 边，因此不适用这一节。
 
 ### 13.3 transport 错误
 

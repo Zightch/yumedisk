@@ -18,8 +18,8 @@
 
 ```text
 TCP connected
-  -> Hello
-  -> optional TLS
+  -> HelloRequest
+  -> HelloResponse(server_capabilities = empty)
   -> transport ready
   -> AuthStart
   -> AuthFinish
@@ -35,6 +35,8 @@ TCP connected
 
 - `Hello` 不属于本文档
 - TLS 握手不属于本文档
+- `HelloResponse` 携带 `server_capabilities`
+- 当前第一版 `server_capabilities` 负载固定为空
 - `auth_id` 只存在于 `client-gateway`
 - metadata 不再混入 `SessionOpen`
 
@@ -347,12 +349,16 @@ TCP connected
 
 ### 14.2 请求与响应
 
+- client 主动发送 `ConnHeartbeat`
+- gateway 只返回对应 response
 - body 为空
 - 不带 `session_id`
 
 ### 14.3 约束
 
 - 它属于 connection，不属于某个 session
+- 它是当前 `client-gateway` 边唯一的心跳方向
+- `client-gateway` 不再保留 session-scoped heartbeat
 - timeout 等价于 connection 死亡
 
 ## 15. Close

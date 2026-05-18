@@ -29,8 +29,11 @@ client <-> gateway <-> storer
   - 单进程只承载一个 `disk_id`
   - 职责限定为本地介质、本地 session 及 I/O 执行
 - `whole`
-  - 仅仅是 `gateway + storer` 的同进程装配形态
-  - 不派生第二套结构或协议
+  - `role = whole`
+  - 对 client 暴露完整的 gateway client-facing 入口
+  - 不对其他 `storer` 暴露 storer-facing 监听口
+  - 内嵌 gateway 固定路由本地 storer
+  - `route_registry` 中只保留自己的 `disk_id`
 
 第一版不做：
 
@@ -49,8 +52,8 @@ client 侧主链固定为：
 
 ```text
 TCP connected
-  -> Hello
-  -> optional TLS
+  -> HelloRequest
+  -> HelloResponse(server_capabilities = empty)
   -> transport ready
   -> AuthStart / AuthFinish -> auth_id
   -> SessionOpen(auth_id) -> session_id
@@ -84,7 +87,11 @@ TCP connected
 8. `SessionOpen` 仅负责打开会话，不返回 metadata。
 9. `SessionDescribe` 单独返回 session 绑定的 metadata。
 10. `NetworkMedia` 显式持有 `disk_id + DiskSession + metadata`，不承担认证、建连、心跳和重连。
-11. session / connection / route 失效后，网络层仅将失效事件上报给 `NetworkMedia` 对外接口；立即清理还是保留假死挂起态，由 client / 宿主策略决定。
+11. 当前正式心跳只有两个方向：
+   - `client(connection) -> gateway : ConnHeartbeat`
+   - `gateway -> storer : LinkHeartbeat`
+12. `whole` 对 client 仍完整走 `Hello -> transport -> auth -> session -> metadata -> data plane` 主链，只是 route 固定为本地唯一 `disk_id`。
+13. session / connection / route 失效后，网络层仅将失效事件上报给 `NetworkMedia` 对外接口；立即清理还是保留假死挂起态，由 client / 宿主策略决定。
 
 ## 文档使用原则
 

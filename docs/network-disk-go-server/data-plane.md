@@ -9,11 +9,22 @@
 - `WriteAt`
 - `Close`
 
-另外保留两类边界命令：
+另外保留三类边界命令：
 
 - `ConnHeartbeat`：只存在于 `client-gateway`
 - `SessionCloseNotice`：只存在于 `client-gateway`
 - `LinkHeartbeat`：只存在于 `gateway-storer`
+
+当前全系统正式只保留两个心跳方向：
+
+- `client(connection) -> gateway : ConnHeartbeat`
+- `gateway -> storer : LinkHeartbeat`
+
+第一版不再保留：
+
+- session-scoped heartbeat
+- `gateway -> client` 反向心跳
+- `storer -> gateway` 反向心跳
 
 ## 2. 进入数据面的前置条件
 
@@ -124,6 +135,11 @@ client 构造 `NetworkMedia` 所需的最小 metadata 只有：
 
 它不代表某个盘会话保活。
 
+它的方向固定为：
+
+- client 主动发送
+- gateway 返回 response
+
 当前正式模型中，client 不再对每个 session 单独做 heartbeat。
 
 ## 9. LinkHeartbeat
@@ -136,6 +152,14 @@ client 构造 `NetworkMedia` 所需的最小 metadata 只有：
 ### 9.2 边界
 
 它不属于某个 session。
+
+它的方向固定为：
+
+- gateway 主动发送
+- storer 返回 response
+- `role = storer` 超时未收到 heartbeat 时主动退出
+
+`role = whole` 的本地 fixed route 不走这条外部 heartbeat 链路。
 
 route heartbeat 超时等价于 route connection 死亡。
 

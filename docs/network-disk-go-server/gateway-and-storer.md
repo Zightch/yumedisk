@@ -13,14 +13,22 @@
 - 它不承接 client-facing metadata 查询
 - 它只服务“一个 storer 进程承载一个 disk”的第一版结构
 
+本文档只定义独立 `gateway` 与 `role = storer` 的外部网络边界。
+
+`role = whole` 只复用这里的 route / session / data plane 语义，不额外暴露这条外部网络边。
+
 ## 2. 角色与连接方向
 
 ### 2.1 whole
 
+- `role = whole`
 - 持有本地存储
 - 内嵌 gateway
 - 对 client 监听
-- 不走本注册协议
+- 不对其他 `storer` 暴露 storer listener
+- 不走外部 `StorerRegister` 网络注册协议
+- gateway 的 `route_registry` 中只保留自己的 `disk_id`
+- client-facing 完整走 `Hello -> transport -> auth -> session`
 
 ### 2.2 storer
 
@@ -101,6 +109,16 @@ storer ----主动长连----> gateway
 - `SessionOpen` 成功时，gateway 复制当前 route metadata 作为 session 快照
 - `SessionDescribe(session_id)` 由 gateway 从 `session_registry` 本地回答
 - gateway 不再为 `SessionDescribe` 向 storer 发起额外 round-trip
+
+### 4.5 whole 的本地 fixed route
+
+`role = whole` 不走外部注册消息，但内嵌 gateway 启动后仍需在本地写入一条 fixed route。
+
+该 fixed route 与外部注册成功后的 `route_registry` 字段口径一致，并固定为：
+
+- 只对应本地唯一 `disk_id`
+- 只路由到本地 storer core
+- 不派生第二套 session / metadata / data plane 语义
 
 ## 5. route connection
 
@@ -211,10 +229,17 @@ gateway 随后：
 当前方向固定为：
 
 - gateway 主动喂狗
-- storer 只响应 `LinkHeartbeat`
-- heartbeat 超时等价于 route connection 死亡
+- storer 收到后必须立即响应 `LinkHeartbeat`
+- `role = storer` 必须维护本地 watchdog；超时未收到 gateway heartbeat 时主动退出
+- gateway 发送 heartbeat 超时未收到响应，等价于 route connection 死亡
 
 这是 route connection 级能力，不属于某个 session。
+
+补充约束：
+
+- `gateway-storer` 不存在反向 `storer -> gateway` heartbeat
+- `gateway-storer` 不存在 session-scoped heartbeat
+- `role = whole` 的本地 fixed route 不走外部 `LinkHeartbeat` 网络链路
 
 ## 10. route 故障传播
 
@@ -226,6 +251,8 @@ gateway 随后：
 4. 将这些 session 收束为 closed
 5. 对仍在线的 client connection 发送 `SessionCloseNotice`
 6. 清理本地映射
+
+`role = whole` 下若本地 storer core 失效，内嵌 gateway 也必须走与 route 丢失完全相同的 grant/session 清理路径。
 
 这里的 client-facing 结果固定为：
 
@@ -244,4 +271,6 @@ gateway 随后：
 7. `auth_id` 只存在于 client-gateway。
 8. storer 只处理真实会话和数据面。
 9. route metadata 真源在 gateway route 表，`SessionDescribe` 由 gateway 本地回答。
-10. route 断线时 gateway 必须主动接管关闭相关 client session，但不替宿主决定 `NetworkMedia` 对象清理策略。
+10. `gateway-storer` 唯一心跳方向是 `gateway -> storer : LinkHeartbeat`。
+11. `role = whole` 不暴露 storer listener，且 `route_registry` 中只保留本地唯一 `disk_id`。
+12. route 断线时 gateway 必须主动接管关闭相关 client session，但不替宿主决定 `NetworkMedia` 对象清理策略。
