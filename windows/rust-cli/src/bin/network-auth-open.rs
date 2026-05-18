@@ -2,9 +2,12 @@ use std::env;
 use std::io;
 use std::io::Write;
 
+use rust_cli::network::AuthGrant;
 use rust_cli::network::ConnectionAuthenticator;
 use rust_cli::network::DiskSession;
 use rust_cli::network::GatewayConnection;
+use rust_cli::network::SessionDescriber;
+use rust_cli::network::SessionMetadata;
 use rust_cli::network::SessionOpener;
 use rust_cli::network::TransportEndpoint;
 
@@ -37,8 +40,10 @@ fn run() -> Result<(), String> {
 struct DebugShell {
     connection: std::sync::Arc<GatewayConnection>,
     claim_code: String,
+    auth: Option<AuthGrant>,
     disk_id: Option<String>,
     session: Option<DiskSession>,
+    metadata: Option<SessionMetadata>,
 }
 
 impl DebugShell {
@@ -46,8 +51,10 @@ impl DebugShell {
         Self {
             connection,
             claim_code,
+            auth: None,
             disk_id: None,
             session: None,
+            metadata: None,
         }
     }
 
@@ -104,16 +111,21 @@ impl DebugShell {
 
     fn auth(&mut self) -> Result<(), String> {
         let authenticator = ConnectionAuthenticator::new(self.connection.clone());
-        let disk_id = authenticator
+        let auth = authenticator
             .authenticate(&self.claim_code)
             .map_err(|error| error.to_string())?;
-        println!("auth_ok disk_id={}", disk_id);
-        self.disk_id = Some(disk_id);
+        println!(
+            "auth_ok disk_id={} auth_id={}",
+            auth.disk_id(),
+            auth.auth_id()
+        );
+        self.disk_id = Some(auth.disk_id().to_string());
+        self.auth = Some(auth);
         Ok(())
     }
 
     fn open(&mut self) -> Result<(), String> {
-        let Some(disk_id) = self.disk_id.clone() else {
+        let Some(auth) = self.auth.clone() else {
             return Err("auth-required".to_string());
         };
         if self.session.is_some() {
@@ -121,15 +133,28 @@ impl DebugShell {
         }
 
         let opener = SessionOpener::new(self.connection.clone());
-        let session = opener.open(disk_id.clone()).map_err(|error| error.to_string())?;
+        let session_id = opener.open(&auth).map_err(|error| error.to_string())?;
+        let session = DiskSession::new(self.connection.clone(), session_id)
+            .map_err(|error| error.to_string())?;
+        let describer = SessionDescriber::new(self.connection.clone());
+        let metadata = match describer.describe(session_id) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                let _ = session.close();
+                return Err(error.to_string());
+            }
+        };
         println!(
             "open_ok disk_id={} session_id={} disk_bytes={} read_only={} max_io_bytes={}",
-            session.disk_id(),
+            auth.disk_id(),
             session.session_id(),
-            session.disk_size_bytes(),
-            session.read_only(),
-            session.max_io_bytes()
+            metadata.disk_size_bytes,
+            metadata.read_only,
+            metadata.max_io_bytes
         );
+        self.disk_id = Some(auth.disk_id().to_string());
+        self.auth = None;
+        self.metadata = Some(metadata);
         self.session = Some(session);
         Ok(())
     }
@@ -141,14 +166,16 @@ impl DebugShell {
         };
 
         session.close().map_err(|error| error.to_string())?;
+        self.metadata = None;
         println!("closed session_id={}", session.session_id());
         Ok(())
     }
 
     fn print_state(&self) {
         let disk_id = self
-            .connection
-            .authorized_disk_id()
+            .auth
+            .as_ref()
+            .map(|auth| auth.disk_id().to_string())
             .or_else(|| self.disk_id.clone())
             .unwrap_or_else(|| "-".to_string());
         let phase = self.connection.phase_name();
@@ -181,7 +208,7 @@ impl DebugShell {
         println!("  help   show this help");
         println!("  state  print connection/auth/session state");
         println!("  auth   run AuthStart/AuthFinish on current connection");
-        println!("  open   run SessionOpen on current authorized connection");
+        println!("  open   run SessionOpen/SessionDescribe on current authorized connection");
         println!("  close  run Close for current session");
         println!("  exit   close session/connection and quit");
     }

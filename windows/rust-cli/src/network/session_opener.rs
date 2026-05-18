@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use super::disk_session::DiskSession;
+use super::connection_authenticator::AuthGrant;
 use super::error::NetworkClientError;
 use super::gateway_connection::GatewayConnection;
-use super::protocol_client::LegacySessionOpenRequest;
-use super::protocol_client::LegacySessionOpenResponse;
 use super::protocol_client::ProtocolClientError;
 use super::protocol_client::ProtocolStatusCode;
+use super::protocol_client::SessionOpenRequest;
+use super::protocol_client::SessionOpenResponse;
 
 #[derive(Debug, Clone)]
 pub struct SessionOpener {
@@ -18,53 +18,45 @@ impl SessionOpener {
         Self { connection }
     }
 
-    pub fn open(&self, disk_id: impl Into<String>) -> Result<DiskSession, NetworkClientError> {
-        let disk_id = disk_id.into();
-        if disk_id.is_empty() {
-            return Err(NetworkClientError::InvalidArgument("disk_id"));
-        }
-        self.connection.begin_session_open(&disk_id)?;
+    pub fn open(&self, grant: &AuthGrant) -> Result<u64, NetworkClientError> {
+        self.connection
+            .begin_session_open(grant.disk_id(), grant.auth_id())?;
 
         let request_id = self.connection.allocate_request_id();
-        let payload = LegacySessionOpenRequest {
-            disk_id: disk_id.clone(),
+        let payload = SessionOpenRequest {
+            auth_id: grant.auth_id(),
         }
         .encode_request(request_id)
         .map_err(NetworkClientError::Protocol)?;
         let response_payload = match self.connection.send_request_and_wait(payload) {
             Ok(payload) => payload,
             Err(error) => {
-                self.connection.cancel_session_open(&disk_id);
+                self.connection
+                    .cancel_session_open(grant.disk_id(), grant.auth_id());
                 return Err(error);
             }
         };
-        let response =
-            match LegacySessionOpenResponse::decode_response(&response_payload, request_id)
-                .map_err(map_session_open_error(&disk_id))
-            {
-                Ok(response) => response,
-                Err(error) => {
-                    self.connection.cancel_session_open(&disk_id);
-                    return Err(error);
-                }
-            };
-        if let Err(error) = self
-            .connection
-            .finish_session_open(&disk_id, response.session_id)
+        let response = match SessionOpenResponse::decode_response(&response_payload, request_id)
+            .map_err(map_session_open_error(grant.disk_id()))
         {
-            self.connection.cancel_session_open(&disk_id);
+            Ok(response) => response,
+            Err(error) => {
+                self.connection
+                    .cancel_session_open(grant.disk_id(), grant.auth_id());
+                return Err(error);
+            }
+        };
+        if let Err(error) = self.connection.finish_session_open(
+            grant.disk_id(),
+            grant.auth_id(),
+            response.session_id,
+        ) {
+            self.connection
+                .cancel_session_open(grant.disk_id(), grant.auth_id());
             return Err(error);
         }
 
-        DiskSession::new(
-            self.connection.clone(),
-            disk_id,
-            response.session_id,
-            response.disk_size_bytes,
-            response.read_only,
-            response.max_io_bytes,
-            response.session_ttl_seconds,
-        )
+        Ok(response.session_id)
     }
 }
 
@@ -93,6 +85,7 @@ fn map_session_open_error<'a>(
 #[cfg(test)]
 mod tests {
     use super::SessionOpener;
+    use crate::network::AuthGrant;
     use crate::network::ClientOperationCode;
     use crate::network::FLAG_RESPONSE;
     use crate::network::GatewayConnection;
@@ -106,9 +99,10 @@ mod tests {
     use crate::network::transport_client::write_frame;
     use std::net::TcpListener;
     use std::thread;
+    use std::time::Duration;
 
     #[test]
-    fn session_open_builds_disk_session_after_authorization() {
+    fn session_open_returns_session_id_after_authorization() {
         let disk_id = "A1b2C3d4E5f6G7h8";
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
         let address = listener.local_addr().expect("local addr should succeed");
@@ -123,14 +117,8 @@ mod tests {
             let header =
                 crate::network::parse_request_header(&request).expect("parse session open");
             assert_eq!(header.op_code, ClientOperationCode::SessionOpen);
-            assert_eq!(&request[HEADER_SIZE..], disk_id.as_bytes());
+            assert_eq!(&request[HEADER_SIZE..], &88u64.to_be_bytes());
 
-            let mut body = Vec::new();
-            body.extend_from_slice(&4096u64.to_be_bytes());
-            body.extend_from_slice(&60_000u32.to_be_bytes());
-            body.extend_from_slice(&300u32.to_be_bytes());
-            body.extend_from_slice(&1u16.to_be_bytes());
-            body.extend_from_slice(&0u16.to_be_bytes());
             let response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
                 header_len: HEADER_SIZE as u8,
@@ -141,8 +129,9 @@ mod tests {
                 request_id: header.request_id,
                 session_id: 77,
             }
-            .encode(&body);
+            .encode(&[]);
             write_frame(&mut stream, &response).expect("write session open response");
+            thread::sleep(Duration::from_millis(20));
         });
 
         let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
@@ -151,17 +140,15 @@ mod tests {
             .begin_auth(disk_id)
             .expect("begin auth should succeed");
         connection
-            .finish_auth(disk_id)
+            .finish_auth(disk_id, 88)
             .expect("finish auth should succeed");
         let opener = SessionOpener::new(connection.clone());
+        let grant = AuthGrant::new(disk_id, 88).expect("grant should build");
 
-        let session = opener.open(disk_id).expect("open should succeed");
-        assert_eq!(session.disk_id(), disk_id);
-        assert_eq!(session.session_id(), 77);
-        assert_eq!(session.disk_size_bytes(), 4096);
-        assert_eq!(session.max_io_bytes(), 60_000);
-        assert_eq!(session.session_ttl_seconds(), 300);
-        assert!(session.read_only());
+        let session_id = opener.open(&grant).expect("open should succeed");
+        assert_eq!(session_id, 77);
+        assert!(connection.is_session_active(77));
+        assert_eq!(connection.phase_name(), "idle");
 
         connection.close().expect("close should succeed");
         server.join().expect("server should join");
@@ -171,10 +158,9 @@ mod tests {
     fn session_open_rejects_unauthorized_disk_before_network_round_trip() {
         let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:1"));
         let opener = SessionOpener::new(connection);
+        let grant = AuthGrant::new("A1b2C3d4E5f6G7h8", 88).expect("grant should build");
 
-        let error = opener
-            .open("A1b2C3d4E5f6G7h8")
-            .expect_err("open should fail");
+        let error = opener.open(&grant).expect_err("open should fail");
         assert_eq!(error.to_string(), "invalid-state: session_open");
     }
 
@@ -207,6 +193,7 @@ mod tests {
             }
             .encode(&[]);
             write_frame(&mut stream, &response).expect("write session open busy response");
+            thread::sleep(Duration::from_millis(20));
         });
 
         let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
@@ -215,11 +202,12 @@ mod tests {
             .begin_auth(disk_id)
             .expect("begin auth should succeed");
         connection
-            .finish_auth(disk_id)
+            .finish_auth(disk_id, 88)
             .expect("finish auth should succeed");
         let opener = SessionOpener::new(connection.clone());
+        let grant = AuthGrant::new(disk_id, 88).expect("grant should build");
 
-        let error = opener.open(disk_id).expect_err("open should fail");
+        let error = opener.open(&grant).expect_err("open should fail");
         assert_eq!(error.to_string(), "disk-busy: A1b2C3d4E5f6G7h8");
 
         connection.close().expect("close should succeed");

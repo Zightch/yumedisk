@@ -14,8 +14,6 @@ pub const AUTH_CHALLENGE_TOKEN_MIN_BYTES: usize = 1;
 pub const AUTH_ALGO_VERSION_V1: u8 = 1;
 pub const AUTH_FINISH_RESPONSE_BYTES: usize = 8;
 pub const SESSION_DESCRIBE_RESPONSE_BYTES: usize = 16;
-pub const LEGACY_SESSION_OPEN_RESPONSE_BYTES: usize = 20;
-pub const LEGACY_SESSION_PING_BODY_BYTES: usize = 8;
 pub const SESSION_CLOSE_NOTICE_BYTES: usize = 2;
 pub const READ_WRITE_FIXED_BODY_BYTES: usize = 12;
 pub const SESSION_FLAG_READ_ONLY: u16 = 1 << 0;
@@ -263,33 +261,6 @@ pub struct CloseRequest {
 pub struct SessionCloseNotice {
     pub session_id: u64,
     pub reason_code: u16,
-}
-
-// Legacy codecs stay private to the current pre-rebuild orchestration and will be
-// removed once the auth/open/session pipeline is rewritten.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LegacySessionOpenRequest {
-    pub disk_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LegacySessionOpenResponse {
-    pub session_id: u64,
-    pub disk_size_bytes: u64,
-    pub max_io_bytes: u32,
-    pub session_ttl_seconds: u32,
-    pub read_only: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LegacySessionPingRequest {
-    pub session_id: u64,
-    pub nonce: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LegacySessionPingResponse {
-    pub nonce: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -710,105 +681,6 @@ impl SessionCloseNotice {
     }
 }
 
-impl LegacySessionOpenRequest {
-    pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
-        let body = encode_disk_id(&self.disk_id)?;
-        Ok(
-            ProtocolHeader::new_request(ClientOperationCode::SessionOpen, request_id, 0)?
-                .encode(&body),
-        )
-    }
-}
-
-impl LegacySessionOpenResponse {
-    pub fn decode_response(
-        payload: &[u8],
-        expected_request_id: u64,
-    ) -> Result<Self, ProtocolClientError> {
-        let (header, body) = decode_success_response(
-            payload,
-            ClientOperationCode::SessionOpen,
-            expected_request_id,
-            None,
-        )?;
-        if header.session_id == 0 {
-            return Err(ProtocolClientError::UnexpectedSessionId {
-                expected: None,
-                actual: 0,
-            });
-        }
-        if body.len() != LEGACY_SESSION_OPEN_RESPONSE_BYTES {
-            return Err(ProtocolClientError::InvalidBody(
-                "session_open_response_len",
-            ));
-        }
-
-        let disk_size_bytes =
-            u64::from_be_bytes(body[0..8].try_into().expect("slice length fixed"));
-        let max_io_bytes = u32::from_be_bytes(body[8..12].try_into().expect("slice length fixed"));
-        let session_ttl_seconds =
-            u32::from_be_bytes(body[12..16].try_into().expect("slice length fixed"));
-        let session_flags =
-            u16::from_be_bytes(body[16..18].try_into().expect("slice length fixed"));
-        let reserved = u16::from_be_bytes(body[18..20].try_into().expect("slice length fixed"));
-
-        if reserved != 0 {
-            return Err(ProtocolClientError::InvalidBody("session_open_reserved"));
-        }
-        if session_flags & !SESSION_FLAG_READ_ONLY != 0 {
-            return Err(ProtocolClientError::InvalidBody("session_flags"));
-        }
-        if disk_size_bytes == 0 {
-            return Err(ProtocolClientError::InvalidBody("disk_size_bytes"));
-        }
-        if max_io_bytes == 0 || max_io_bytes > ABSOLUTE_MAX_IO_BYTES {
-            return Err(ProtocolClientError::InvalidBody("max_io_bytes"));
-        }
-
-        Ok(Self {
-            session_id: header.session_id,
-            disk_size_bytes,
-            max_io_bytes,
-            session_ttl_seconds,
-            read_only: session_flags & SESSION_FLAG_READ_ONLY != 0,
-        })
-    }
-}
-
-impl LegacySessionPingRequest {
-    pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
-        validate_non_zero_session_id(self.session_id)?;
-        let body = self.nonce.to_be_bytes();
-        Ok(ProtocolHeader::new_request(
-            ClientOperationCode::ConnHeartbeat,
-            request_id,
-            self.session_id,
-        )?
-        .encode(&body))
-    }
-}
-
-impl LegacySessionPingResponse {
-    pub fn decode_response(
-        payload: &[u8],
-        expected_request_id: u64,
-        expected_session_id: u64,
-    ) -> Result<Self, ProtocolClientError> {
-        let (_, body) = decode_success_response(
-            payload,
-            ClientOperationCode::ConnHeartbeat,
-            expected_request_id,
-            Some(expected_session_id),
-        )?;
-        if body.len() != LEGACY_SESSION_PING_BODY_BYTES {
-            return Err(ProtocolClientError::InvalidBody("ping_response_len"));
-        }
-
-        let nonce = u64::from_be_bytes(body.try_into().expect("slice length fixed"));
-        Ok(Self { nonce })
-    }
-}
-
 pub fn parse_header(payload: &[u8]) -> Result<ProtocolHeader, ProtocolClientError> {
     if payload.len() < HEADER_SIZE {
         return Err(ProtocolClientError::PayloadTooSmall {
@@ -1015,9 +887,6 @@ mod tests {
     use super::FLAG_RESPONSE;
     use super::HEADER_LEN;
     use super::HEADER_SIZE;
-    use super::LegacySessionOpenResponse;
-    use super::LegacySessionPingRequest;
-    use super::LegacySessionPingResponse;
     use super::PROTOCOL_VERSION;
     use super::ProtocolClientError;
     use super::ProtocolHeader;
@@ -1166,35 +1035,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_session_open_response_decodes_old_metadata_body() {
-        let mut body = Vec::new();
-        body.extend_from_slice(&4096u64.to_be_bytes());
-        body.extend_from_slice(&60_000u32.to_be_bytes());
-        body.extend_from_slice(&300u32.to_be_bytes());
-        body.extend_from_slice(&1u16.to_be_bytes());
-        body.extend_from_slice(&0u16.to_be_bytes());
-        let payload = ProtocolHeader {
-            protocol_version: PROTOCOL_VERSION,
-            header_len: HEADER_LEN,
-            op_code: ClientOperationCode::SessionOpen,
-            flags: FLAG_RESPONSE,
-            status_code: ProtocolStatusCode::Ok,
-            reserved: 0,
-            request_id: 12,
-            session_id: 99,
-        }
-        .encode(&body);
-
-        let decoded = LegacySessionOpenResponse::decode_response(&payload, 12)
-            .expect("decode should succeed");
-        assert_eq!(decoded.session_id, 99);
-        assert_eq!(decoded.disk_size_bytes, 4096);
-        assert_eq!(decoded.max_io_bytes, 60_000);
-        assert_eq!(decoded.session_ttl_seconds, 300);
-        assert!(decoded.read_only);
-    }
-
-    #[test]
     fn read_and_write_requests_match_server_body_layout() {
         let read = ReadAtRequest {
             session_id: 5,
@@ -1254,34 +1094,6 @@ mod tests {
             .encode_request(22)
             .expect("close encode should succeed");
         assert_eq!(close_payload.len(), HEADER_SIZE);
-    }
-
-    #[test]
-    fn legacy_session_ping_preserves_old_shape_for_interim_callers() {
-        let ping_payload = LegacySessionPingRequest {
-            session_id: 7,
-            nonce: 12345,
-        }
-        .encode_request(21)
-        .expect("ping encode should succeed");
-        assert_eq!(ping_payload.len(), HEADER_SIZE + 8);
-        assert_eq!(ping_payload[2], ClientOperationCode::ConnHeartbeat as u8);
-        assert_eq!(&ping_payload[HEADER_SIZE..], &12345u64.to_be_bytes());
-
-        let response_payload = ProtocolHeader {
-            protocol_version: PROTOCOL_VERSION,
-            header_len: HEADER_LEN,
-            op_code: ClientOperationCode::ConnHeartbeat,
-            flags: FLAG_RESPONSE,
-            status_code: ProtocolStatusCode::Ok,
-            reserved: 0,
-            request_id: 21,
-            session_id: 7,
-        }
-        .encode(&12345u64.to_be_bytes());
-        let response = LegacySessionPingResponse::decode_response(&response_payload, 21, 7)
-            .expect("ping decode should succeed");
-        assert_eq!(response.nonce, 12345);
     }
 
     #[test]

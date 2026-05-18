@@ -9,6 +9,34 @@ use super::protocol_client::AuthStartResponse;
 use super::protocol_client::ProtocolClientError;
 use super::protocol_client::ProtocolStatusCode;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthGrant {
+    disk_id: String,
+    auth_id: u64,
+}
+
+impl AuthGrant {
+    pub fn new(disk_id: impl Into<String>, auth_id: u64) -> Result<Self, NetworkClientError> {
+        let disk_id = disk_id.into();
+        if disk_id.is_empty() {
+            return Err(NetworkClientError::InvalidArgument("disk_id"));
+        }
+        if auth_id == 0 {
+            return Err(NetworkClientError::InvalidArgument("auth_id"));
+        }
+
+        Ok(Self { disk_id, auth_id })
+    }
+
+    pub fn disk_id(&self) -> &str {
+        self.disk_id.as_str()
+    }
+
+    pub fn auth_id(&self) -> u64 {
+        self.auth_id
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ConnectionAuthenticator {
     connection: Arc<GatewayConnection>,
@@ -23,7 +51,7 @@ impl ConnectionAuthenticator {
         &self.connection
     }
 
-    pub fn authenticate(&self, claim_code: &str) -> Result<String, NetworkClientError> {
+    pub fn authenticate(&self, claim_code: &str) -> Result<AuthGrant, NetworkClientError> {
         let material = parse_claim_code(claim_code)?;
         self.connection.begin_auth(&material.disk_id)?;
 
@@ -73,19 +101,32 @@ impl ConnectionAuthenticator {
                 return Err(error);
             }
         };
-        if let Err(error) =
-            AuthFinishRequest::decode_response(&finish_response_payload, finish_request_id)
+        let finish_response =
+            match AuthFinishRequest::decode_response(&finish_response_payload, finish_request_id)
                 .map_err(map_auth_finish_error(&material.disk_id))
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    self.connection.fail_auth();
+                    return Err(error);
+                }
+            };
+        let grant = match AuthGrant::new(material.disk_id.clone(), finish_response.auth_id) {
+            Ok(grant) => grant,
+            Err(error) => {
+                self.connection.fail_auth();
+                return Err(error);
+            }
+        };
+
+        if let Err(error) = self
+            .connection
+            .finish_auth(grant.disk_id(), grant.auth_id())
         {
             self.connection.fail_auth();
             return Err(error);
         }
-
-        if let Err(error) = self.connection.finish_auth(&material.disk_id) {
-            self.connection.fail_auth();
-            return Err(error);
-        }
-        Ok(material.disk_id)
+        Ok(grant)
     }
 }
 
@@ -155,6 +196,7 @@ mod tests {
     use crate::network::transport_client::write_frame;
     use std::net::TcpListener;
     use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn authenticate_completes_start_and_finish_and_marks_connection() {
@@ -218,16 +260,18 @@ mod tests {
             }
             .encode(&1u64.to_be_bytes());
             write_frame(&mut stream, &finish_response).expect("write auth finish response");
+            thread::sleep(Duration::from_millis(20));
         });
 
         let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
         connection.connect().expect("connect should succeed");
         let authenticator = ConnectionAuthenticator::new(connection.clone());
 
-        let disk_id = authenticator
+        let auth = authenticator
             .authenticate(claim_code)
             .expect("authenticate should succeed");
-        assert_eq!(disk_id, "A1b2C3d4E5f6G7h8");
+        assert_eq!(auth.disk_id(), "A1b2C3d4E5f6G7h8");
+        assert_eq!(auth.auth_id(), 1);
         assert!(connection.is_authorized("A1b2C3d4E5f6G7h8"));
 
         connection.close().expect("close should succeed");
@@ -288,6 +332,7 @@ mod tests {
             }
             .encode(&[]);
             write_frame(&mut stream, &finish_response).expect("write auth finish response");
+            thread::sleep(Duration::from_millis(20));
         });
 
         let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
@@ -308,7 +353,7 @@ mod tests {
     fn authenticate_rejects_second_attempt_in_non_idle_phase() {
         let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:1"));
         connection
-            .finish_auth("A1b2C3d4E5f6G7h8")
+            .finish_auth("A1b2C3d4E5f6G7h8", 9)
             .expect_err("finish auth without pending should fail");
         connection
             .begin_auth("A1b2C3d4E5f6G7h8")

@@ -1,9 +1,9 @@
 use std::io;
 use std::io::Write;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
 
@@ -23,7 +23,12 @@ pub fn run_shell() -> AppResult<()> {
     let host = Arc::new(Mutex::new(CliHost::open()?));
     let reaper = start_dead_network_reaper(Arc::clone(&host));
     println!("state=ready(rust-cli)");
-    println!("{}", host.lock().expect("host poisoned").query_session_state_text());
+    println!(
+        "{}",
+        host.lock()
+            .expect("host poisoned")
+            .query_session_state_text()
+    );
     print_runtime_help();
 
     let loop_result = run_command_loop(&host);
@@ -36,7 +41,12 @@ pub fn run_shell_with_startup_command(planned: PlannedNetworkCommand) -> AppResu
     let host = Arc::new(Mutex::new(CliHost::open()?));
     let reaper = start_dead_network_reaper(Arc::clone(&host));
     println!("state=ready(rust-cli)");
-    println!("{}", host.lock().expect("host poisoned").query_session_state_text());
+    println!(
+        "{}",
+        host.lock()
+            .expect("host poisoned")
+            .query_session_state_text()
+    );
 
     let args = planned.args.iter().map(String::as_str).collect::<Vec<_>>();
     let mut host_guard = host.lock().expect("host poisoned");
@@ -339,7 +349,11 @@ fn bool_to_text(value: bool) -> &'static str {
 }
 
 fn reap_dead_network_disks(host: &Arc<Mutex<CliHost>>) {
-    match host.lock().expect("host poisoned").reap_dead_network_disks() {
+    match host
+        .lock()
+        .expect("host poisoned")
+        .reap_dead_network_disks()
+    {
         Ok(removed) => {
             for target_id in removed {
                 eprintln!("notice: removed dead network target={}", target_id);

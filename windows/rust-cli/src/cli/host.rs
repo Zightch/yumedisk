@@ -19,6 +19,7 @@ use crate::network::GatewayConnection;
 use crate::network::NetworkClientError;
 use crate::network::NetworkMedia;
 use crate::network::SessionCloseNotice;
+use crate::network::SessionDescriber;
 use crate::network::SessionOpener;
 use crate::network::TransportEndpoint;
 
@@ -47,6 +48,9 @@ struct MountedNetworkDisk {
     addr: String,
     disk_id: String,
     session: DiskSession,
+    disk_size_bytes: u64,
+    read_only: bool,
+    max_io_bytes: u32,
 }
 
 pub struct CliHost {
@@ -172,29 +176,32 @@ impl CliHost {
         let connection = GatewayConnection::new(TransportEndpoint::new(addr.to_string()));
         connection.connect().map_err(|error| error.to_string())?;
         let authenticator = ConnectionAuthenticator::new(Arc::clone(&connection));
-        let disk_id = authenticator
+        let auth = authenticator
             .authenticate(claim_code)
             .map_err(|error| error.to_string())?;
 
         let opener = SessionOpener::new(Arc::clone(&connection));
-        let session = opener
-            .open(disk_id.clone())
-            .map_err(|error| {
-                let _ = connection.close();
-                error.to_string()
-            })?;
-
-        let media = NetworkMedia::bind(
-            session.clone(),
-            session.disk_size_bytes(),
-            session.read_only(),
-            session.max_io_bytes(),
-        )
-        .map_err(|error| {
+        let session_id = opener.open(&auth).map_err(|error| {
+            let _ = connection.close();
+            error.to_string()
+        })?;
+        let session = DiskSession::new(Arc::clone(&connection), session_id).map_err(|error| {
+            let _ = connection.close();
+            error.to_string()
+        })?;
+        let describer = SessionDescriber::new(Arc::clone(&connection));
+        let metadata = describer.describe(session_id).map_err(|error| {
             let _ = session.close();
             let _ = connection.close();
             error.to_string()
         })?;
+
+        let media = NetworkMedia::bind(auth.disk_id().to_string(), session.clone(), metadata)
+            .map_err(|error| {
+                let _ = session.close();
+                let _ = connection.close();
+                error.to_string()
+            })?;
 
         let target_id = target_id.unwrap_or_else(|| self.context.find_first_free_target());
         if target_id > YUMEDISK_MAX_USABLE_TARGET_ID {
@@ -203,8 +210,8 @@ impl CliHost {
 
         let disk_config = DiskConfig {
             target_id,
-            disk_size_bytes: session.disk_size_bytes(),
-            read_only: session.read_only(),
+            disk_size_bytes: metadata.disk_size_bytes,
+            read_only: metadata.read_only,
             ..DiskConfig::default()
         };
 
@@ -237,19 +244,22 @@ impl CliHost {
                 target_id,
                 MountedNetworkDisk {
                     addr: addr.to_string(),
-                    disk_id: disk_id.clone(),
+                    disk_id: auth.disk_id().to_string(),
                     session: session.clone(),
+                    disk_size_bytes: metadata.disk_size_bytes,
+                    read_only: metadata.read_only,
+                    max_io_bytes: metadata.max_io_bytes,
                 },
             );
 
         Ok(NetworkMountResult {
             target_id,
             addr: addr.to_string(),
-            disk_id,
+            disk_id: auth.disk_id().to_string(),
             session_id: session.session_id(),
-            disk_size_bytes: session.disk_size_bytes(),
-            read_only: session.read_only(),
-            max_io_bytes: session.max_io_bytes(),
+            disk_size_bytes: metadata.disk_size_bytes,
+            read_only: metadata.read_only,
+            max_io_bytes: metadata.max_io_bytes,
         })
     }
 
@@ -261,7 +271,10 @@ impl CliHost {
             .get(&target_id)
             .cloned()
         {
-            mounted.session.connection().set_session_notice_handler(None);
+            mounted
+                .session
+                .connection()
+                .set_session_notice_handler(None);
             match mounted.session.close() {
                 Ok(()) => {}
                 Err(NetworkClientError::SessionUnavailable) => {}
@@ -377,9 +390,9 @@ impl CliHost {
                 addr: mounted.addr.clone(),
                 disk_id: mounted.disk_id.clone(),
                 session_id: mounted.session.session_id(),
-                disk_size_bytes: mounted.session.disk_size_bytes(),
-                read_only: mounted.session.read_only(),
-                max_io_bytes: mounted.session.max_io_bytes(),
+                disk_size_bytes: mounted.disk_size_bytes,
+                read_only: mounted.read_only,
+                max_io_bytes: mounted.max_io_bytes,
             })
             .collect()
     }

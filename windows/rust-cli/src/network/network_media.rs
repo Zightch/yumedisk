@@ -3,9 +3,11 @@ use backend_rust::Media;
 
 use super::disk_session::DiskSession;
 use super::error::NetworkClientError;
+use super::session_describer::SessionMetadata;
 
 #[derive(Debug, Clone)]
 pub struct NetworkMedia {
+    disk_id: String,
     session: DiskSession,
     disk_size_bytes: u64,
     read_only: bool,
@@ -14,33 +16,32 @@ pub struct NetworkMedia {
 
 impl NetworkMedia {
     pub fn bind(
+        disk_id: impl Into<String>,
         session: DiskSession,
-        disk_size_bytes: u64,
-        read_only: bool,
-        max_io_bytes: u32,
+        metadata: SessionMetadata,
     ) -> Result<Self, NetworkClientError> {
-        if disk_size_bytes == 0 {
+        let disk_id = disk_id.into();
+        if disk_id.is_empty() {
+            return Err(NetworkClientError::InvalidArgument("disk_id"));
+        }
+        if metadata.disk_size_bytes == 0 {
             return Err(NetworkClientError::InvalidArgument("disk_size_bytes"));
         }
-        if max_io_bytes == 0 {
-            return Err(NetworkClientError::InvalidArgument("max_io_bytes"));
-        }
-        if session.disk_size_bytes() != disk_size_bytes {
-            return Err(NetworkClientError::InvalidArgument("disk_size_bytes"));
-        }
-        if session.read_only() != read_only {
-            return Err(NetworkClientError::InvalidArgument("read_only"));
-        }
-        if session.max_io_bytes() != max_io_bytes {
+        if metadata.max_io_bytes == 0 {
             return Err(NetworkClientError::InvalidArgument("max_io_bytes"));
         }
 
         Ok(Self {
+            disk_id,
             session,
-            disk_size_bytes,
-            read_only,
-            max_io_bytes,
+            disk_size_bytes: metadata.disk_size_bytes,
+            read_only: metadata.read_only,
+            max_io_bytes: metadata.max_io_bytes,
         })
+    }
+
+    pub fn disk_id(&self) -> &str {
+        self.disk_id.as_str()
     }
 
     pub fn session(&self) -> &DiskSession {
@@ -151,6 +152,7 @@ mod tests {
     use crate::network::PROTOCOL_VERSION;
     use crate::network::ProtocolHeader;
     use crate::network::ProtocolStatusCode;
+    use crate::network::SessionMetadata;
     use crate::network::TransportEndpoint;
     use crate::network::transport_client::MAX_FRAME_PAYLOAD_BYTES;
     use crate::network::transport_client::read_frame_into;
@@ -171,22 +173,33 @@ mod tests {
             .begin_auth(disk_id)
             .expect("begin auth should succeed");
         connection
-            .finish_auth(disk_id)
+            .finish_auth(disk_id, 9)
             .expect("finish auth should succeed");
         connection
-            .finish_session_open(disk_id, session_id)
+            .begin_session_open(disk_id, 9)
+            .expect("begin session open should succeed");
+        connection
+            .finish_session_open(disk_id, 9, session_id)
             .expect("finish session open should succeed");
         connection
     }
 
     #[test]
-    fn bind_requires_session_metadata_to_match_media_metadata() {
+    fn bind_requires_explicit_disk_id_and_metadata() {
         let connection = staged_connection(TransportEndpoint::new("127.0.0.1:9000"), "disk-1", 7);
-        let session = DiskSession::new(connection, "disk-1", 7, 4096, false, 1024, 300)
-            .expect("session should build");
+        let session = DiskSession::new(connection, 7).expect("session should build");
 
-        let error = NetworkMedia::bind(session, 2048, false, 1024).expect_err("bind should fail");
-        assert_eq!(error.to_string(), "invalid-argument: disk_size_bytes");
+        let error = NetworkMedia::bind(
+            "",
+            session,
+            SessionMetadata {
+                disk_size_bytes: 2048,
+                read_only: false,
+                max_io_bytes: 1024,
+            },
+        )
+        .expect_err("bind should fail");
+        assert_eq!(error.to_string(), "invalid-argument: disk_id");
     }
 
     #[test]
@@ -252,17 +265,17 @@ mod tests {
             77,
         );
         connection.connect().expect("connect should succeed");
-        let session = DiskSession::new(
-            connection.clone(),
+        let session = DiskSession::new(connection.clone(), 77).expect("session should build");
+        let media = NetworkMedia::bind(
             "A1b2C3d4E5f6G7h8",
-            77,
-            4096,
-            false,
-            4,
-            300,
+            session,
+            SessionMetadata {
+                disk_size_bytes: 4096,
+                read_only: false,
+                max_io_bytes: 4,
+            },
         )
-        .expect("session should build");
-        let media = NetworkMedia::bind(session, 4096, false, 4).expect("bind should succeed");
+        .expect("bind should succeed");
 
         let mut buffer = [0u8; 8];
         media
@@ -339,17 +352,17 @@ mod tests {
             77,
         );
         connection.connect().expect("connect should succeed");
-        let session = DiskSession::new(
-            connection.clone(),
+        let session = DiskSession::new(connection.clone(), 77).expect("session should build");
+        let media = NetworkMedia::bind(
             "A1b2C3d4E5f6G7h8",
-            77,
-            4096,
-            false,
-            4,
-            300,
+            session,
+            SessionMetadata {
+                disk_size_bytes: 4096,
+                read_only: false,
+                max_io_bytes: 4,
+            },
         )
-        .expect("session should build");
-        let media = NetworkMedia::bind(session, 4096, false, 4).expect("bind should succeed");
+        .expect("bind should succeed");
 
         media
             .write_locked(0, b"ABCDEFGH")
