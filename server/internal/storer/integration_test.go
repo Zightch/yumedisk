@@ -165,21 +165,14 @@ func TestWholeRuntimeSecondClientBusyAndAuthIDReusable(t *testing.T) {
 	authIDTwo := authenticateConnection(t, connTwo, material, &requestIDTwo)
 	openRespTwo := mustRoundTrip(t, connTwo, buildRequest(proto.OpSessionOpen, requestIDTwo, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
 	openHeaderTwo := mustParseHeader(t, openRespTwo)
-	if openHeaderTwo.StatusCode != proto.StatusSessionBusy {
-		t.Fatalf("expected session busy, got %d", openHeaderTwo.StatusCode)
+	if openHeaderTwo.StatusCode != proto.StatusOK {
+		t.Fatalf("expected second open success, got %d", openHeaderTwo.StatusCode)
 	}
-
-	requestIDOne++
-	closeResp := mustRoundTrip(t, connOne, buildRequest(proto.OpClose, requestIDOne, openHeaderOne.SessionID, nil))
-	if header := mustParseHeader(t, closeResp); header.StatusCode != proto.StatusOK {
-		t.Fatalf("close first session status: %d", header.StatusCode)
+	if openHeaderTwo.SessionID == 0 {
+		t.Fatal("expected non-zero second session id")
 	}
-
-	requestIDTwo++
-	retryOpenResp := mustRoundTrip(t, connTwo, buildRequest(proto.OpSessionOpen, requestIDTwo, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
-	retryOpenHeader := mustParseHeader(t, retryOpenResp)
-	if retryOpenHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("expected retry open success, got %d", retryOpenHeader.StatusCode)
+	if openHeaderTwo.SessionID == openHeaderOne.SessionID {
+		t.Fatalf("expected distinct session ids, got %d", openHeaderTwo.SessionID)
 	}
 
 	cancel()

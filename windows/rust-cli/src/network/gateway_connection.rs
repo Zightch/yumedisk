@@ -53,6 +53,7 @@ impl fmt::Debug for GatewayConnection {
             .field("endpoint", &self.endpoint)
             .field("pending_request_count", &self.pending_request_count())
             .field("phase", &self.phase_name())
+            .field("auth_grant_count", &self.auth_grant_count())
             .field("active_session_count", &self.active_session_count())
             .field("is_connected", &self.is_connected())
             .finish()
@@ -76,6 +77,7 @@ struct ConnectionLifecycle {
     auth_in_flight: bool,
     open_in_flight: bool,
     active_sessions: HashSet<u64>,
+    auth_grants: HashMap<u64, String>,
 }
 
 impl GatewayResponseFuture {
@@ -268,6 +270,55 @@ impl GatewayConnection {
         Ok(())
     }
 
+    pub fn register_auth_grant(
+        &self,
+        auth_id: u64,
+        disk_id: String,
+    ) -> Result<(), NetworkClientError> {
+        if auth_id == 0 {
+            return Err(NetworkClientError::InvalidArgument("auth_id"));
+        }
+        if disk_id.is_empty() {
+            return Err(NetworkClientError::InvalidArgument("disk_id"));
+        }
+
+        self.lifecycle
+            .lock()
+            .expect("lifecycle poisoned")
+            .auth_grants
+            .insert(auth_id, disk_id);
+        Ok(())
+    }
+
+    pub fn consume_auth_grant(&self, auth_id: u64) -> bool {
+        self.lifecycle
+            .lock()
+            .expect("lifecycle poisoned")
+            .auth_grants
+            .remove(&auth_id)
+            .is_some()
+    }
+
+    pub fn discard_auth_grant(&self, auth_id: u64) -> bool {
+        self.consume_auth_grant(auth_id)
+    }
+
+    pub fn auth_grant_count(&self) -> usize {
+        self.lifecycle
+            .lock()
+            .expect("lifecycle poisoned")
+            .auth_grants
+            .len()
+    }
+
+    pub fn should_close_after_session_close(&self) -> bool {
+        let lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
+        !lifecycle.auth_in_flight
+            && !lifecycle.open_in_flight
+            && lifecycle.active_sessions.is_empty()
+            && lifecycle.auth_grants.is_empty()
+    }
+
     pub fn fail_session_open(&self) {
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
         lifecycle.open_in_flight = false;
@@ -313,6 +364,7 @@ impl GatewayConnection {
         lifecycle.auth_in_flight = false;
         lifecycle.open_in_flight = false;
         lifecycle.active_sessions.clear();
+        lifecycle.auth_grants.clear();
     }
 
     fn handle_disconnect(&self, error: NetworkClientError) {
@@ -543,6 +595,43 @@ mod tests {
 
         assert!(!connection.is_session_active(101));
         assert!(connection.is_session_active(202));
+    }
+
+    #[test]
+    fn gateway_connection_only_becomes_idle_closeable_after_sessions_and_grants_clear() {
+        let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:1"));
+
+        assert!(connection.should_close_after_session_close());
+
+        connection.begin_auth().expect("auth should begin");
+        assert!(!connection.should_close_after_session_close());
+        connection.fail_auth();
+        assert!(connection.should_close_after_session_close());
+
+        connection
+            .register_auth_grant(31, "A1b2C3d4E5f6G7h8".to_string())
+            .expect("grant should register");
+        assert_eq!(connection.auth_grant_count(), 1);
+        assert!(!connection.should_close_after_session_close());
+        assert!(connection.consume_auth_grant(31));
+        assert!(connection.should_close_after_session_close());
+
+        connection
+            .begin_session_open()
+            .expect("session open should begin");
+        assert!(!connection.should_close_after_session_close());
+        connection.fail_session_open();
+        assert!(connection.should_close_after_session_close());
+
+        connection
+            .begin_session_open()
+            .expect("second session open should begin");
+        connection
+            .finish_session_open(501)
+            .expect("second session open should finish");
+        assert!(!connection.should_close_after_session_close());
+        connection.clear_session(501);
+        assert!(connection.should_close_after_session_close());
     }
 
     #[test]

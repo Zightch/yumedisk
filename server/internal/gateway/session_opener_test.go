@@ -82,7 +82,7 @@ func TestSessionOpenDescribeReadWriteAndClose(t *testing.T) {
 	}
 }
 
-func TestSessionOpenBusyKeepsAuthIDReusable(t *testing.T) {
+func TestSessionOpenAllowsMultipleLiveSessions(t *testing.T) {
 	t.Parallel()
 
 	handler, stateOne, material := newSessionTestHandler(t)
@@ -95,28 +95,19 @@ func TestSessionOpenBusyKeepsAuthIDReusable(t *testing.T) {
 	stateTwo := handler.NewConnectionState(101)
 	authIDTwo := issueAuthIDForTest(t, handler, stateTwo, material)
 
-	firstBusyResp, err := handler.HandlePayload(stateTwo, buildRequest(proto.OpSessionOpen, 40, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
+	secondOpenResp, err := handler.HandlePayload(stateTwo, buildRequest(proto.OpSessionOpen, 40, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
 	if err != nil {
 		t.Fatalf("open session on second client: %v", err)
 	}
-	if header := mustParseGatewayHeader(t, firstBusyResp); header.StatusCode != proto.StatusSessionBusy {
-		t.Fatalf("unexpected second open status: %d", header.StatusCode)
+	secondOpenHeader := mustParseGatewayHeader(t, secondOpenResp)
+	if secondOpenHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected second open status: %d", secondOpenHeader.StatusCode)
 	}
-
-	closeResp, err := handler.HandlePayload(stateOne, buildRequest(proto.OpClose, 41, firstSessionID, nil))
-	if err != nil {
-		t.Fatalf("close first session: %v", err)
+	if secondOpenHeader.SessionID == 0 {
+		t.Fatal("expected non-zero second session id")
 	}
-	if header := mustParseGatewayHeader(t, closeResp); header.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected close status: %d", header.StatusCode)
-	}
-
-	secondOpenResp, err := handler.HandlePayload(stateTwo, buildRequest(proto.OpSessionOpen, 42, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
-	if err != nil {
-		t.Fatalf("retry open after busy: %v", err)
-	}
-	if header := mustParseGatewayHeader(t, secondOpenResp); header.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected retry open status: %d", header.StatusCode)
+	if secondOpenHeader.SessionID == firstSessionID {
+		t.Fatalf("expected distinct session ids, got %d", secondOpenHeader.SessionID)
 	}
 }
 

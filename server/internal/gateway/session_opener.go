@@ -193,8 +193,6 @@ func (o *sessionOpener) mapSessionError(header proto.Header, err error) []byte {
 	switch err {
 	case session.ErrSessionUnavailable:
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable)
-	case session.ErrSessionBusy:
-		return proto.BuildErrorResponse(header, proto.StatusSessionBusy)
 	case session.ErrReadOnly:
 		return proto.BuildErrorResponse(header, proto.StatusIOReadOnly)
 	case session.ErrIOLimit:

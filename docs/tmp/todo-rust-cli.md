@@ -210,6 +210,24 @@
 - 对应的 `NetworkMedia` 立即卸载并清理
 - `SessionCloseNotice` 只清理目标 session 对应的盘对象，不波及其他仍然存活的 session
 
+另外补充一条 session 关闭后的 connection 收束规则：
+
+- 当一个 session 进入 closed 后，rust-cli 才允许检查该 connection 是否应主动关闭
+- 检查时必须同时确认该 connection 下已经没有：
+  - 已打开 session
+  - open 过程
+  - auth 过程
+  - 已签发但未失效的 `AuthGrant`
+- 只有上述对象全部为空时，才主动关闭这条 connection
+- 这条 connection 清理逻辑只允许发生在 session 关闭路径上
+- 不能做成“任意时刻只要观察到 connection 为空就立刻关闭”的通用即时回收
+
+session 关闭事件包括至少：
+
+- client 主动 `Close` 成功
+- 收到 `SessionCloseNotice`
+- 本地把目标 session 明确收束为 closed 的其他等价路径
+
 说明：
 
 - 这属于 rust-cli 宿主策略
@@ -239,6 +257,9 @@
 - 已打开 session 的读写可与后续新的 auth/open 串行过程共存
 - 第二次 `auth` 失败不影响第一次 `auth` 得到的 grant 和已有 session
 - `SessionCloseNotice` 只清理目标盘对象
+- session 关闭后若该 connection 下已无 session、无 open 过程、无 auth 过程、无 `AuthGrant`，则主动关闭该 connection
+- session 关闭后若该 connection 下仍有其他 session 或 grant，connection 保持存活
+- 不能因为某次普通状态扫描观察到 connection 当前为空，就直接触发 connection 关闭
 - connection 死亡会清理该 connection 下全部 grant / session / `NetworkMedia`
 - `gateway` 与 `whole` 两种 endpoint 都满足上述语义
 

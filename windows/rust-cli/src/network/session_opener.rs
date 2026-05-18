@@ -40,6 +40,9 @@ impl SessionOpener {
             Ok(response) => response,
             Err(error) => {
                 self.connection.fail_session_open();
+                if should_discard_auth_grant(&error) {
+                    self.connection.discard_auth_grant(grant.auth_id());
+                }
                 return Err(error);
             }
         };
@@ -47,9 +50,17 @@ impl SessionOpener {
             self.connection.fail_session_open();
             return Err(error);
         }
+        self.connection.consume_auth_grant(grant.auth_id());
 
         Ok(response.session_id)
     }
+}
+
+fn should_discard_auth_grant(error: &NetworkClientError) -> bool {
+    matches!(
+        error,
+        NetworkClientError::UnauthorizedDisk { .. } | NetworkClientError::SessionUnavailable
+    )
 }
 
 fn map_session_open_error<'a>(

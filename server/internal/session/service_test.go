@@ -1,7 +1,6 @@
 package session
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -68,7 +67,7 @@ func TestReadAndWriteRefreshSessionExpiration(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsSecondClientWhileFirstSessionIsAlive(t *testing.T) {
+func TestOpenAllowsMultipleLiveSessions(t *testing.T) {
 	tempDir := t.TempDir()
 	storagePath := filepath.Join(tempDir, "disk.img")
 	file, err := os.Create(storagePath)
@@ -103,17 +102,14 @@ func TestOpenRejectsSecondClientWhileFirstSessionIsAlive(t *testing.T) {
 		t.Fatal("expected non-zero session id")
 	}
 
-	_, err = service.Open(2)
-	if !errors.Is(err, ErrSessionBusy) {
-		t.Fatalf("expected session busy, got %v", err)
-	}
-
-	service.Close(first.ID)
 	second, err := service.Open(2)
 	if err != nil {
-		t.Fatalf("open second session after close: %v", err)
+		t.Fatalf("open second session: %v", err)
 	}
 	if second.ID == 0 {
 		t.Fatal("expected non-zero second session id")
+	}
+	if second.ID == first.ID {
+		t.Fatalf("expected distinct session ids, got %d", second.ID)
 	}
 }

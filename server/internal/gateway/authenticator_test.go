@@ -59,6 +59,30 @@ func TestAuthenticatorAuthStartAndFinishSuccess(t *testing.T) {
 	}
 }
 
+func TestAuthenticatorKeepsMultipleGrantedAuthIDsOnOneConnection(t *testing.T) {
+	t.Parallel()
+
+	material := newTestMaterial(t)
+	handler, err := newAuthHandler(t, material)
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+
+	state := handler.NewConnectionState(43)
+	firstAuthID := issueAuthIDForTest(t, handler, state, material)
+	secondAuthID := issueAuthIDForTest(t, handler, state, material)
+	if firstAuthID == secondAuthID {
+		t.Fatalf("expected distinct auth ids, got %d", firstAuthID)
+	}
+
+	if _, status, ok := handler.grants.Lookup(firstAuthID, state.ID); !ok || status != proto.StatusOK {
+		t.Fatalf("expected first auth grant to stay valid, ok=%v status=%d", ok, status)
+	}
+	if _, status, ok := handler.grants.Lookup(secondAuthID, state.ID); !ok || status != proto.StatusOK {
+		t.Fatalf("expected second auth grant to stay valid, ok=%v status=%d", ok, status)
+	}
+}
+
 func TestAuthenticatorFakeDiskUsesUnifiedFailure(t *testing.T) {
 	t.Parallel()
 

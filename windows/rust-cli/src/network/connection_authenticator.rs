@@ -123,6 +123,12 @@ impl ConnectionAuthenticator {
             self.connection.fail_auth();
             return Err(error);
         }
+        if let Err(error) = self
+            .connection
+            .register_auth_grant(grant.auth_id(), grant.disk_id().to_string())
+        {
+            return Err(error);
+        }
         Ok(grant)
     }
 }

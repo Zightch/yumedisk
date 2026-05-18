@@ -161,8 +161,6 @@ func (r *StorerRouteRegistry) roundTripData(routeConnectionID uint64, opCode uin
 
 func mapResponseStatus(status uint16) error {
 	switch status {
-	case proto.StatusSessionBusy:
-		return session.ErrSessionBusy
 	case proto.StatusIOReadOnly:
 		return session.ErrReadOnly
 	case proto.StatusIOLarge:

@@ -48,9 +48,6 @@ func (r *authGrantRegistry) Issue(connectionID uint64, diskID string, expiresAt 
 	}
 
 	r.mu.Lock()
-	for _, existingID := range r.collectConnectionIDsLocked(connectionID) {
-		r.removeLocked(existingID)
-	}
 	r.items[id] = item
 	if _, ok := r.byConn[connectionID]; !ok {
 		r.byConn[connectionID] = make(map[uint64]struct{})

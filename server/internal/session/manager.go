@@ -3,7 +3,6 @@ package session
 import (
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 type Manager struct {
@@ -28,26 +27,6 @@ func (m *Manager) Open(record Record) Record {
 	m.items[record.ID] = record
 	m.mu.Unlock()
 	return record
-}
-
-func (m *Manager) OpenExclusive(record Record, now time.Time) (Record, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	for id, existing := range m.items {
-		if now.After(existing.ExpiresAt) {
-			delete(m.items, id)
-			continue
-		}
-		return Record{}, false
-	}
-
-	record.ID = m.nextID.Add(1)
-	if record.ID == 0 {
-		record.ID = m.nextID.Add(1)
-	}
-	m.items[record.ID] = record
-	return record, true
 }
 
 func (m *Manager) Get(id uint64) (Record, bool) {

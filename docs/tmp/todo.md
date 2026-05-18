@@ -33,6 +33,7 @@
 - 按开发原则重建，不做补丁和历史兼容
 - 不长期并存新旧 bootstrap / 心跳 / whole 语义
 - rust-cli 的 connection 复用边界是 gateway endpoint，不是 `disk_id`
+- rust-cli 的空闲 connection 回收只允许挂在 session 关闭路径上，不做任意时刻的通用即时回收
 - `ConnHeartbeat` 只属于 `client-gateway` connection
 - `LinkHeartbeat` 只属于 `gateway-storer` route
 - 不再保留 session-scoped heartbeat
