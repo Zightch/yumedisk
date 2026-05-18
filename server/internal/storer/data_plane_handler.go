@@ -9,14 +9,12 @@ import (
 
 type dataPlaneHandler struct {
 	connectionID uint64
-	diskID       string
 	sessions     *session.Service
 }
 
-func newDataPlaneHandler(connectionID uint64, diskID string, sessions *session.Service) *dataPlaneHandler {
+func newDataPlaneHandler(connectionID uint64, sessions *session.Service) *dataPlaneHandler {
 	return &dataPlaneHandler{
 		connectionID: connectionID,
-		diskID:       diskID,
 		sessions:     sessions,
 	}
 }
@@ -55,7 +53,7 @@ func (h *dataPlaneHandler) handleSessionOpen(header proto.Header, body []byte) (
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
 
-	desc, err := h.sessions.Open(h.connectionID, h.diskID)
+	desc, err := h.sessions.Open(h.connectionID)
 	if err != nil {
 		return h.mapSessionError(header, err), nil
 	}

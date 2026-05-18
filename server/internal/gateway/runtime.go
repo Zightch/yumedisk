@@ -196,7 +196,7 @@ func (r *Runtime) serveStorerConnection(ctx context.Context, connectionID uint64
 	storerConn.startHeartbeat(storerHeartbeatInterval, storerHeartbeatTimeout)
 	done := make(chan error, 1)
 	go func() {
-		done <- storerConn.serve(ctx, r.routes, r.cfg.Storer.GatewayToken)
+		done <- storerConn.serve(ctx, r.routes.routes, r.cfg.Storer.GatewayToken)
 	}()
 
 	select {

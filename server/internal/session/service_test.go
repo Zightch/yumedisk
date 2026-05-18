@@ -31,8 +31,13 @@ func TestReadAndWriteRefreshSessionExpiration(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 
-	service := NewService(NewManager(), storage, 5*time.Second, 1024)
-	desc, err := service.Open(1, "A1b2C3d4E5f6G7h8")
+	service := NewService(NewManager(), storage, Metadata{
+		DiskID:        "A1b2C3d4E5f6G7h8",
+		DiskSizeBytes: storage.Size(),
+		ReadOnly:      storage.ReadOnly(),
+		MaxIOBytes:    1024,
+	}, 5*time.Second)
+	desc, err := service.Open(1)
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
@@ -84,8 +89,13 @@ func TestOpenRejectsSecondClientWhileFirstSessionIsAlive(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 
-	service := NewService(NewManager(), storage, 5*time.Second, 1024)
-	first, err := service.Open(1, "A1b2C3d4E5f6G7h8")
+	service := NewService(NewManager(), storage, Metadata{
+		DiskID:        "A1b2C3d4E5f6G7h8",
+		DiskSizeBytes: storage.Size(),
+		ReadOnly:      storage.ReadOnly(),
+		MaxIOBytes:    1024,
+	}, 5*time.Second)
+	first, err := service.Open(1)
 	if err != nil {
 		t.Fatalf("open first session: %v", err)
 	}
@@ -93,13 +103,13 @@ func TestOpenRejectsSecondClientWhileFirstSessionIsAlive(t *testing.T) {
 		t.Fatal("expected non-zero session id")
 	}
 
-	_, err = service.Open(2, "A1b2C3d4E5f6G7h8")
+	_, err = service.Open(2)
 	if !errors.Is(err, ErrSessionBusy) {
 		t.Fatalf("expected session busy, got %v", err)
 	}
 
 	service.Close(first.ID)
-	second, err := service.Open(2, "A1b2C3d4E5f6G7h8")
+	second, err := service.Open(2)
 	if err != nil {
 		t.Fatalf("open second session after close: %v", err)
 	}

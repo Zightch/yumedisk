@@ -18,36 +18,32 @@ var (
 )
 
 type Service struct {
-	manager      *Manager
-	storage      *filestorage.Backend
-	defaultTTL   time.Duration
-	defaultMaxIO uint32
+	manager    *Manager
+	storage    *filestorage.Backend
+	metadata   Metadata
+	defaultTTL time.Duration
 }
 
-func NewService(manager *Manager, storage *filestorage.Backend, defaultTTL time.Duration, defaultMaxIO uint32) *Service {
+func NewService(manager *Manager, storage *filestorage.Backend, metadata Metadata, defaultTTL time.Duration) *Service {
 	return &Service{
-		manager:      manager,
-		storage:      storage,
-		defaultTTL:   defaultTTL,
-		defaultMaxIO: defaultMaxIO,
+		manager:    manager,
+		storage:    storage,
+		metadata:   metadata,
+		defaultTTL: defaultTTL,
 	}
 }
 
-func (s *Service) Open(connectionID uint64, diskID string) (Descriptor, error) {
+func (s *Service) Open(connectionID uint64) (Record, error) {
 	now := time.Now()
-	desc, ok := s.manager.OpenExclusive(Descriptor{
-		DiskID:     diskID,
-		DiskSize:   s.storage.Size(),
-		ReadOnly:   s.storage.ReadOnly(),
-		MaxIOBytes: s.defaultMaxIO,
-		TTLSeconds: s.TTLSeconds(),
-		ExpiresAt:  now.Add(s.defaultTTL),
+	record, ok := s.manager.OpenExclusive(Record{
 		Connection: connectionID,
+		Metadata:   s.metadata,
+		ExpiresAt:  now.Add(s.defaultTTL),
 	}, now)
 	if !ok {
-		return Descriptor{}, ErrSessionBusy
+		return Record{}, ErrSessionBusy
 	}
-	return desc, nil
+	return record, nil
 }
 
 func (s *Service) Close(sessionID uint64) {
@@ -63,7 +59,11 @@ func (s *Service) TTLSeconds() uint32 {
 }
 
 func (s *Service) MaxIOBytes() uint32 {
-	return s.defaultMaxIO
+	return s.metadata.MaxIOBytes
+}
+
+func (s *Service) Metadata() Metadata {
+	return s.metadata
 }
 
 func (s *Service) Manager() *Manager {
@@ -71,14 +71,14 @@ func (s *Service) Manager() *Manager {
 }
 
 func (s *Service) Read(sessionID uint64, offset uint64, length uint32) ([]byte, error) {
-	desc, err := s.touch(sessionID)
+	record, err := s.touch(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	if length == 0 || length > desc.MaxIOBytes {
+	if length == 0 || length > record.Metadata.MaxIOBytes {
 		return nil, ErrIOLimit
 	}
-	if offset > desc.DiskSize || uint64(length) > desc.DiskSize-offset {
+	if offset > record.Metadata.DiskSizeBytes || uint64(length) > record.Metadata.DiskSizeBytes-offset {
 		return nil, ErrOutOfRange
 	}
 
@@ -90,17 +90,17 @@ func (s *Service) Read(sessionID uint64, offset uint64, length uint32) ([]byte, 
 }
 
 func (s *Service) Write(sessionID uint64, offset uint64, data []byte) error {
-	desc, err := s.touch(sessionID)
+	record, err := s.touch(sessionID)
 	if err != nil {
 		return err
 	}
-	if desc.ReadOnly {
+	if record.Metadata.ReadOnly {
 		return ErrReadOnly
 	}
-	if len(data) == 0 || uint32(len(data)) > desc.MaxIOBytes {
+	if len(data) == 0 || uint32(len(data)) > record.Metadata.MaxIOBytes {
 		return ErrIOLimit
 	}
-	if offset > desc.DiskSize || uint64(len(data)) > desc.DiskSize-offset {
+	if offset > record.Metadata.DiskSizeBytes || uint64(len(data)) > record.Metadata.DiskSizeBytes-offset {
 		return ErrOutOfRange
 	}
 
@@ -110,27 +110,27 @@ func (s *Service) Write(sessionID uint64, offset uint64, data []byte) error {
 	return nil
 }
 
-func (s *Service) validate(sessionID uint64) (Descriptor, error) {
-	desc, ok := s.manager.Get(sessionID)
+func (s *Service) validate(sessionID uint64) (Record, error) {
+	record, ok := s.manager.Get(sessionID)
 	if !ok {
-		return Descriptor{}, ErrSessionUnavailable
+		return Record{}, ErrSessionUnavailable
 	}
-	if time.Now().After(desc.ExpiresAt) {
+	if time.Now().After(record.ExpiresAt) {
 		s.manager.Close(sessionID)
-		return Descriptor{}, ErrSessionUnavailable
+		return Record{}, ErrSessionUnavailable
 	}
-	return desc, nil
+	return record, nil
 }
 
-func (s *Service) touch(sessionID uint64) (Descriptor, error) {
-	desc, err := s.validate(sessionID)
+func (s *Service) touch(sessionID uint64) (Record, error) {
+	record, err := s.validate(sessionID)
 	if err != nil {
-		return Descriptor{}, err
+		return Record{}, err
 	}
 
-	desc.ExpiresAt = time.Now().Add(s.defaultTTL)
-	s.manager.Update(desc)
-	return desc, nil
+	record.ExpiresAt = time.Now().Add(s.defaultTTL)
+	s.manager.Update(record)
+	return record, nil
 }
 
 func mapStorageError(err error) error {

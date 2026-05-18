@@ -15,7 +15,7 @@ func TestDataPlaneHandlerOpenReadWriteAndClose(t *testing.T) {
 	t.Parallel()
 
 	core := newTestCore(t)
-	handler := newDataPlaneHandler(17, core.DiskID(), core.SessionService())
+	handler := newDataPlaneHandler(17, core.SessionService())
 
 	openResp, err := handler.HandlePayload(buildRequest(proto.OpSessionOpen, 1, 0, nil))
 	if err != nil {
@@ -60,7 +60,7 @@ func TestDataPlaneHandlerRejectsBadOpenBodyAndAuthOps(t *testing.T) {
 	t.Parallel()
 
 	core := newTestCore(t)
-	handler := newDataPlaneHandler(18, core.DiskID(), core.SessionService())
+	handler := newDataPlaneHandler(18, core.SessionService())
 
 	openResp, err := handler.HandlePayload(buildRequest(proto.OpSessionOpen, 1, 0, []byte("unexpected")))
 	if err != nil {

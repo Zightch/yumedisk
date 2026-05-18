@@ -46,7 +46,7 @@ func (r *StorerRuntime) Run(ctx context.Context) error {
 	}
 
 	connectionID := r.nextConn.Add(1)
-	handler := newDataPlaneHandler(connectionID, r.core.DiskID(), r.core.SessionService())
+	handler := newDataPlaneHandler(connectionID, r.core.SessionService())
 	runErr := r.runGatewayConnection(ctx, connectionID, conn, handler)
 	if ctx.Err() != nil {
 		return nil

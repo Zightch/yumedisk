@@ -20,5 +20,5 @@ func (h *StorerHandler) ServeConnection(conn *storerConnection, gatewayToken str
 	if conn == nil {
 		return fmt.Errorf("storer handler requires connection")
 	}
-	return conn.serve(context.Background(), h.routes, gatewayToken)
+	return conn.serve(context.Background(), h.routes.routes, gatewayToken)
 }

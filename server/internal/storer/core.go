@@ -6,6 +6,7 @@ import (
 
 	"yumedisk/server/internal/auth"
 	"yumedisk/server/internal/config"
+	"yumedisk/server/internal/route"
 	"yumedisk/server/internal/session"
 	filestorage "yumedisk/server/internal/storage/file"
 )
@@ -20,6 +21,7 @@ type Core struct {
 	material auth.Material
 	storage  *filestorage.Backend
 	sessions *session.Service
+	metadata session.Metadata
 }
 
 func NewCore(cfg config.StorerConfig) (*Core, error) {
@@ -33,11 +35,19 @@ func NewCore(cfg config.StorerConfig) (*Core, error) {
 		return nil, err
 	}
 
+	metadata := session.Metadata{
+		DiskID:        material.DiskID,
+		DiskSizeBytes: storage.Size(),
+		ReadOnly:      storage.ReadOnly(),
+		MaxIOBytes:    defaultSessionMaxIO,
+	}
+
 	return &Core{
 		cfg:      cfg,
 		material: material,
 		storage:  storage,
-		sessions: session.NewService(session.NewManager(), storage, defaultSessionTTL, defaultSessionMaxIO),
+		metadata: metadata,
+		sessions: session.NewService(session.NewManager(), storage, metadata, defaultSessionTTL),
 	}, nil
 }
 
@@ -49,7 +59,7 @@ func (c *Core) Close() error {
 }
 
 func (c *Core) DiskID() string {
-	return c.material.DiskID
+	return c.metadata.DiskID
 }
 
 func (c *Core) AuthVerifier() [64]byte {
@@ -57,11 +67,11 @@ func (c *Core) AuthVerifier() [64]byte {
 }
 
 func (c *Core) DiskSize() uint64 {
-	return c.storage.Size()
+	return c.metadata.DiskSizeBytes
 }
 
 func (c *Core) ReadOnly() bool {
-	return c.storage.ReadOnly()
+	return c.metadata.ReadOnly
 }
 
 func (c *Core) StoragePath() string {
@@ -70,4 +80,21 @@ func (c *Core) StoragePath() string {
 
 func (c *Core) SessionService() *session.Service {
 	return c.sessions
+}
+
+func (c *Core) SessionMetadata() session.Metadata {
+	return c.metadata
+}
+
+func (c *Core) RouteEntry(routeTarget string, connectionID uint64) route.Entry {
+	return route.Entry{
+		DiskID:        c.metadata.DiskID,
+		AuthVerifier:  c.material.AuthVerifier,
+		RouteTarget:   routeTarget,
+		ConnectionID:  connectionID,
+		Connected:     true,
+		DiskSizeBytes: c.metadata.DiskSizeBytes,
+		ReadOnly:      c.metadata.ReadOnly,
+		MaxIOBytes:    c.metadata.MaxIOBytes,
+	}
 }

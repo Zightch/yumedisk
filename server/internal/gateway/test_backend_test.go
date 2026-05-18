@@ -38,7 +38,7 @@ func (b *testGatewayBackend) DisconnectRoute() {
 }
 
 func (b *testGatewayBackend) Open(connectionID uint64, entry route.Entry) (uint64, error) {
-	desc, err := b.sessions.Open(connectionID, entry.DiskID)
+	desc, err := b.sessions.Open(connectionID)
 	if err != nil {
 		return 0, err
 	}

@@ -31,16 +31,7 @@ func NewWholeRuntime(cfg config.StorerConfig, core *Core) (*WholeRuntime, error)
 	}
 
 	routes := route.NewRegistry()
-	if err := routes.Register(route.Entry{
-		DiskID:        core.DiskID(),
-		AuthVerifier:  core.AuthVerifier(),
-		RouteTarget:   "embedded://whole",
-		ConnectionID:  0,
-		Connected:     true,
-		DiskSizeBytes: core.DiskSize(),
-		ReadOnly:      core.ReadOnly(),
-		MaxIOBytes:    core.SessionService().MaxIOBytes(),
-	}); err != nil {
+	if err := routes.Register(core.RouteEntry("embedded://whole", 0)); err != nil {
 		return nil, err
 	}
 

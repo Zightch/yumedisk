@@ -201,7 +201,12 @@ func newAuthHandler(t *testing.T, material auth.Material) (*Handler, error) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 
-	sessions := session.NewService(session.NewManager(), storage, 30*time.Second, 60*1024)
+	sessions := session.NewService(session.NewManager(), storage, session.Metadata{
+		DiskID:        material.DiskID,
+		DiskSizeBytes: storage.Size(),
+		ReadOnly:      storage.ReadOnly(),
+		MaxIOBytes:    60 * 1024,
+	}, 30*time.Second)
 	backend := newTestGatewayBackend(material, sessions, storage.Size(), storage.ReadOnly())
 	handler, err := NewHandler(backend, backend)
 	if err != nil {

@@ -13,7 +13,7 @@ func newLocalGatewayBackend(core *Core) *localGatewayBackend {
 }
 
 func (b *localGatewayBackend) Open(connectionID uint64, entry route.Entry) (uint64, error) {
-	desc, err := b.core.SessionService().Open(connectionID, entry.DiskID)
+	desc, err := b.core.SessionService().Open(connectionID)
 	if err != nil {
 		return 0, err
 	}
