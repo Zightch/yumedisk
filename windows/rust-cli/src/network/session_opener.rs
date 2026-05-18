@@ -76,11 +76,6 @@ fn map_session_open_error<'a>(
         ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrInvalidRequest) => {
             NetworkClientError::InvalidState("session_open")
         }
-        ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrSessionBusy) => {
-            NetworkClientError::DiskBusy {
-                disk_id: disk_id.to_string(),
-            }
-        }
         other => NetworkClientError::Protocol(other),
     }
 }
@@ -164,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn session_open_maps_busy_status_to_disk_busy() {
+    fn session_open_keeps_busy_status_as_protocol_failure() {
         let disk_id = "A1b2C3d4E5f6G7h8";
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
         let address = listener.local_addr().expect("local addr should succeed");
@@ -202,7 +197,7 @@ mod tests {
         let grant = AuthGrant::new(disk_id, 88).expect("grant should build");
 
         let error = opener.open(&grant).expect_err("open should fail");
-        assert_eq!(error.to_string(), "disk-busy: A1b2C3d4E5f6G7h8");
+        assert_eq!(error.to_string(), "protocol: gateway-status: 0x1202");
 
         connection.close().expect("close should succeed");
         server.join().expect("server should join");
