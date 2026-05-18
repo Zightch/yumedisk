@@ -178,8 +178,8 @@ func TestGatewayRouteDisconnectClosesClientSessionAndRevokesGrant(t *testing.T) 
 	if len(closed) != 1 {
 		t.Fatalf("unexpected closed sessions count: %d", len(closed))
 	}
-	if closed[0].ClientConnection != state.ID {
-		t.Fatalf("unexpected client connection id: %d", closed[0].ClientConnection)
+	if closed[0].Runtime.ClientConnectionID != state.ID {
+		t.Fatalf("unexpected client connection id: %d", closed[0].Runtime.ClientConnectionID)
 	}
 
 	if _, status, ok := handler.grants.Lookup(pendingAuthID, state.ID); ok || status != proto.StatusAuthIDInvalid {

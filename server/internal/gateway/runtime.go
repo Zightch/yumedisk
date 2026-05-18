@@ -210,9 +210,9 @@ func (r *Runtime) serveStorerConnection(ctx context.Context, connectionID uint64
 	}
 }
 
-func (r *Runtime) notifyClientSessionClosed(session gatewaySession, reason uint16) {
+func (r *Runtime) notifyClientSessionClosed(session gatewaySessionRecord, reason uint16) {
 	r.clientConnMu.RLock()
-	client := r.clientConns[session.ClientConnection]
+	client := r.clientConns[session.Runtime.ClientConnectionID]
 	r.clientConnMu.RUnlock()
 	if client == nil {
 		return

@@ -7,88 +7,99 @@ import (
 
 const gatewaySessionBaseID = uint64(1) << 63
 
-type gatewaySession struct {
-	ID               uint64
-	ClientConnection uint64
-	RouteConnection  uint64
-	UpstreamSession  uint64
-	DiskID           string
-	DiskSizeBytes    uint64
-	ReadOnly         bool
-	MaxIOBytes       uint32
+type gatewaySessionRuntime struct {
+	ClientConnectionID uint64
+	RouteConnectionID  uint64
+	UpstreamSessionID  uint64
+}
+
+type gatewaySessionSnapshot struct {
+	DiskID        string
+	DiskSizeBytes uint64
+	ReadOnly      bool
+	MaxIOBytes    uint32
+}
+
+type gatewaySessionRecord struct {
+	ID       uint64
+	Runtime  gatewaySessionRuntime
+	Snapshot gatewaySessionSnapshot
 }
 
 type sessionRegistry struct {
 	nextID atomic.Uint64
 
 	mu      sync.RWMutex
-	items   map[uint64]gatewaySession
+	items   map[uint64]gatewaySessionRecord
 	byConn  map[uint64]map[uint64]struct{}
 	byRoute map[uint64]map[uint64]struct{}
 }
 
 func newSessionRegistry() *sessionRegistry {
 	return &sessionRegistry{
-		items:   make(map[uint64]gatewaySession),
+		items:   make(map[uint64]gatewaySessionRecord),
 		byConn:  make(map[uint64]map[uint64]struct{}),
 		byRoute: make(map[uint64]map[uint64]struct{}),
 	}
 }
 
-func (r *sessionRegistry) Open(clientConnectionID uint64, routeConnectionID uint64, upstreamSessionID uint64, diskID string, diskSizeBytes uint64, readOnly bool, maxIOBytes uint32) uint64 {
+func (r *sessionRegistry) Open(runtime gatewaySessionRuntime, snapshot gatewaySessionSnapshot) uint64 {
 	id := gatewaySessionBaseID + r.nextID.Add(1)
 	if id == 0 {
 		id = gatewaySessionBaseID + r.nextID.Add(1)
 	}
 
-	item := gatewaySession{
-		ID:               id,
-		ClientConnection: clientConnectionID,
-		RouteConnection:  routeConnectionID,
-		UpstreamSession:  upstreamSessionID,
-		DiskID:           diskID,
-		DiskSizeBytes:    diskSizeBytes,
-		ReadOnly:         readOnly,
-		MaxIOBytes:       maxIOBytes,
+	item := gatewaySessionRecord{
+		ID:       id,
+		Runtime:  runtime,
+		Snapshot: snapshot,
 	}
 
 	r.mu.Lock()
 	r.items[id] = item
-	if _, ok := r.byConn[clientConnectionID]; !ok {
-		r.byConn[clientConnectionID] = make(map[uint64]struct{})
+	if _, ok := r.byConn[runtime.ClientConnectionID]; !ok {
+		r.byConn[runtime.ClientConnectionID] = make(map[uint64]struct{})
 	}
-	r.byConn[clientConnectionID][id] = struct{}{}
-	if _, ok := r.byRoute[routeConnectionID]; !ok {
-		r.byRoute[routeConnectionID] = make(map[uint64]struct{})
+	r.byConn[runtime.ClientConnectionID][id] = struct{}{}
+	if _, ok := r.byRoute[runtime.RouteConnectionID]; !ok {
+		r.byRoute[runtime.RouteConnectionID] = make(map[uint64]struct{})
 	}
-	r.byRoute[routeConnectionID][id] = struct{}{}
+	r.byRoute[runtime.RouteConnectionID][id] = struct{}{}
 	r.mu.Unlock()
 	return id
 }
 
-func (r *sessionRegistry) Lookup(id uint64) (gatewaySession, bool) {
+func (r *sessionRegistry) Lookup(id uint64) (gatewaySessionRecord, bool) {
 	r.mu.RLock()
 	item, ok := r.items[id]
 	r.mu.RUnlock()
 	return item, ok
 }
 
-func (r *sessionRegistry) Close(id uint64) (gatewaySession, bool) {
+func (r *sessionRegistry) LookupOwned(id uint64, clientConnectionID uint64) (gatewaySessionRecord, bool) {
+	item, ok := r.Lookup(id)
+	if !ok || item.Runtime.ClientConnectionID != clientConnectionID {
+		return gatewaySessionRecord{}, false
+	}
+	return item, true
+}
+
+func (r *sessionRegistry) Close(id uint64) (gatewaySessionRecord, bool) {
 	r.mu.Lock()
 	item, ok := r.items[id]
 	if ok {
 		delete(r.items, id)
-		r.removeClientIndex(item.ClientConnection, id)
-		r.removeRouteIndex(item.RouteConnection, id)
+		r.removeClientIndex(item.Runtime.ClientConnectionID, id)
+		r.removeRouteIndex(item.Runtime.RouteConnectionID, id)
 	}
 	r.mu.Unlock()
 	return item, ok
 }
 
-func (r *sessionRegistry) CloseConnection(connectionID uint64) []gatewaySession {
+func (r *sessionRegistry) CloseConnection(connectionID uint64) []gatewaySessionRecord {
 	r.mu.Lock()
 	ids := r.collectClientSessionIDs(connectionID)
-	items := make([]gatewaySession, 0, len(ids))
+	items := make([]gatewaySessionRecord, 0, len(ids))
 	for _, id := range ids {
 		item, ok := r.items[id]
 		if !ok {
@@ -96,17 +107,17 @@ func (r *sessionRegistry) CloseConnection(connectionID uint64) []gatewaySession 
 		}
 		items = append(items, item)
 		delete(r.items, id)
-		r.removeRouteIndex(item.RouteConnection, id)
+		r.removeRouteIndex(item.Runtime.RouteConnectionID, id)
 	}
 	delete(r.byConn, connectionID)
 	r.mu.Unlock()
 	return items
 }
 
-func (r *sessionRegistry) CloseRouteConnection(routeConnectionID uint64) []gatewaySession {
+func (r *sessionRegistry) CloseRouteConnection(routeConnectionID uint64) []gatewaySessionRecord {
 	r.mu.Lock()
 	ids := r.collectRouteSessionIDs(routeConnectionID)
-	items := make([]gatewaySession, 0, len(ids))
+	items := make([]gatewaySessionRecord, 0, len(ids))
 	for _, id := range ids {
 		item, ok := r.items[id]
 		if !ok {
@@ -114,7 +125,7 @@ func (r *sessionRegistry) CloseRouteConnection(routeConnectionID uint64) []gatew
 		}
 		items = append(items, item)
 		delete(r.items, id)
-		r.removeClientIndex(item.ClientConnection, id)
+		r.removeClientIndex(item.Runtime.ClientConnectionID, id)
 	}
 	delete(r.byRoute, routeConnectionID)
 	r.mu.Unlock()

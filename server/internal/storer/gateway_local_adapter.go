@@ -5,11 +5,22 @@ import (
 )
 
 type localGatewayBackend struct {
-	core *Core
+	core  *Core
+	entry route.Entry
 }
 
 func newLocalGatewayBackend(core *Core) *localGatewayBackend {
-	return &localGatewayBackend{core: core}
+	return &localGatewayBackend{
+		core:  core,
+		entry: core.RouteEntry("embedded://whole", 0),
+	}
+}
+
+func (b *localGatewayBackend) LookupRoute(diskID string) (route.Entry, bool) {
+	if diskID != b.entry.DiskID {
+		return route.Entry{}, false
+	}
+	return b.entry, true
 }
 
 func (b *localGatewayBackend) Open(connectionID uint64, entry route.Entry) (uint64, error) {

@@ -99,7 +99,7 @@ func (h *Handler) CloseConnection(connectionID uint64) {
 	h.sessionOpener.closeConnection(connectionID)
 }
 
-func (h *Handler) CloseRouteConnection(routeConnectionID uint64, diskIDs []string) []gatewaySession {
+func (h *Handler) CloseRouteConnection(routeConnectionID uint64, diskIDs []string) []gatewaySessionRecord {
 	for _, diskID := range diskIDs {
 		h.grants.CloseDisk(diskID)
 	}

@@ -57,13 +57,17 @@ func (o *sessionOpener) handleSessionOpen(state *ConnectionState, header proto.H
 	}
 
 	gatewaySessionID := o.registry.Open(
-		state.ID,
-		routeEntry.ConnectionID,
-		upstreamSessionID,
-		routeEntry.DiskID,
-		routeEntry.DiskSizeBytes,
-		routeEntry.ReadOnly,
-		routeEntry.MaxIOBytes,
+		gatewaySessionRuntime{
+			ClientConnectionID: state.ID,
+			RouteConnectionID:  routeEntry.ConnectionID,
+			UpstreamSessionID:  upstreamSessionID,
+		},
+		gatewaySessionSnapshot{
+			DiskID:        routeEntry.DiskID,
+			DiskSizeBytes: routeEntry.DiskSizeBytes,
+			ReadOnly:      routeEntry.ReadOnly,
+			MaxIOBytes:    routeEntry.MaxIOBytes,
+		},
 	)
 	if _, ok := o.grants.Consume(authID); !ok {
 		o.registry.Close(gatewaySessionID)
@@ -88,12 +92,12 @@ func (o *sessionOpener) handleDescribe(state *ConnectionState, header proto.Head
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
 
-	mapped, ok := o.registry.Lookup(header.SessionID)
-	if !ok || mapped.ClientConnection != state.ID {
+	mapped, ok := o.registry.LookupOwned(header.SessionID, state.ID)
+	if !ok {
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
 
-	bodyOut := proto.BuildSessionDescribeResponseBody(mapped.DiskSizeBytes, mapped.MaxIOBytes, mapped.ReadOnly)
+	bodyOut := proto.BuildSessionDescribeResponseBody(mapped.Snapshot.DiskSizeBytes, mapped.Snapshot.MaxIOBytes, mapped.Snapshot.ReadOnly)
 	return proto.BuildSuccessResponse(header, bodyOut), nil
 }
 
@@ -115,13 +119,13 @@ func (o *sessionOpener) handleClose(state *ConnectionState, header proto.Header,
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
 
-	mapped, ok := o.registry.Lookup(header.SessionID)
-	if !ok || mapped.ClientConnection != state.ID {
+	mapped, ok := o.registry.LookupOwned(header.SessionID, state.ID)
+	if !ok {
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
 
 	o.registry.Close(header.SessionID)
-	o.sessions.Close(mapped.RouteConnection, mapped.UpstreamSession)
+	o.sessions.Close(mapped.Runtime.RouteConnectionID, mapped.Runtime.UpstreamSessionID)
 	return proto.BuildSuccessResponse(header, nil), nil
 }
 
@@ -135,12 +139,12 @@ func (o *sessionOpener) handleRead(state *ConnectionState, header proto.Header, 
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
 
-	mapped, ok := o.registry.Lookup(header.SessionID)
-	if !ok || mapped.ClientConnection != state.ID {
+	mapped, ok := o.registry.LookupOwned(header.SessionID, state.ID)
+	if !ok {
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
 
-	data, err := o.sessions.Read(mapped.RouteConnection, mapped.UpstreamSession, offset, length)
+	data, err := o.sessions.Read(mapped.Runtime.RouteConnectionID, mapped.Runtime.UpstreamSessionID, offset, length)
 	if err != nil {
 		if err == session.ErrSessionUnavailable {
 			o.registry.Close(header.SessionID)
@@ -160,12 +164,12 @@ func (o *sessionOpener) handleWrite(state *ConnectionState, header proto.Header,
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
 
-	mapped, ok := o.registry.Lookup(header.SessionID)
-	if !ok || mapped.ClientConnection != state.ID {
+	mapped, ok := o.registry.LookupOwned(header.SessionID, state.ID)
+	if !ok {
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
 
-	if err := o.sessions.Write(mapped.RouteConnection, mapped.UpstreamSession, offset, data); err != nil {
+	if err := o.sessions.Write(mapped.Runtime.RouteConnectionID, mapped.Runtime.UpstreamSessionID, offset, data); err != nil {
 		if err == session.ErrSessionUnavailable {
 			o.registry.Close(header.SessionID)
 		}
@@ -176,12 +180,12 @@ func (o *sessionOpener) handleWrite(state *ConnectionState, header proto.Header,
 
 func (o *sessionOpener) closeConnection(connectionID uint64) {
 	for _, mapped := range o.registry.CloseConnection(connectionID) {
-		o.sessions.Close(mapped.RouteConnection, mapped.UpstreamSession)
+		o.sessions.Close(mapped.Runtime.RouteConnectionID, mapped.Runtime.UpstreamSessionID)
 	}
 	o.sessions.CloseConnection(connectionID)
 }
 
-func (o *sessionOpener) closeRouteConnection(routeConnectionID uint64) []gatewaySession {
+func (o *sessionOpener) closeRouteConnection(routeConnectionID uint64) []gatewaySessionRecord {
 	return o.registry.CloseRouteConnection(routeConnectionID)
 }
 
