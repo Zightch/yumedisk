@@ -20,6 +20,7 @@
 - `whole` 对 client 完整表现为 gateway
 - `whole` 不暴露 storer listener
 - `whole.route_registry` 中只保留本地唯一 `disk_id`
+- 同一 connection 上只限制 auth/open 的 in-flight 过程互斥；多个已签发 `auth_id` 与多个已打开 session 可以并存
 - 网络文档只定义失效事件；当前宿主的“立即卸载并清理”策略只写入 Rust CLI todo，不反向污染网络文档
 
 ## 3. 拆分
@@ -31,6 +32,7 @@
 
 - 按开发原则重建，不做补丁和历史兼容
 - 不长期并存新旧 bootstrap / 心跳 / whole 语义
+- rust-cli 的 connection 复用边界是 gateway endpoint，不是 `disk_id`
 - `ConnHeartbeat` 只属于 `client-gateway` connection
 - `LinkHeartbeat` 只属于 `gateway-storer` route
 - 不再保留 session-scoped heartbeat

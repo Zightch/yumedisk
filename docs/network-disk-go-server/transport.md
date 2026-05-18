@@ -87,20 +87,20 @@ transport 不理解任何业务语义。
 当前 client 侧结构应理解为：
 
 ```text
-NetworkMedia
-  -> DiskSession
-    -> GatewayConnection
+client disk object
+  -> opened session
+    -> connection runtime
       -> transport runtime
         -> stream(TCP or TLS-over-TCP)
 ```
 
 含义：
 
-- `NetworkMedia` 不直接持有 transport
-- `NetworkMedia` 自身只绑定 `disk_id + session + metadata`
-- `DiskSession` 不直接持有裸 TCP
-- `GatewayConnection` 内部持有 transport runtime
-- 多个 session 并发复用同一条 `GatewayConnection`
+- client disk object 不直接持有 transport
+- client disk object 自身只绑定 `disk_id + session + metadata`
+- opened session 不直接持有裸 TCP
+- connection runtime 内部持有 transport runtime
+- 多个 session 并发复用同一条 connection runtime
 
 ## 6. gateway 侧位置
 
@@ -235,8 +235,7 @@ transport 只承载并发，不做并发业务决策。
 这里的边界同时固定为：
 
 - transport 只上报 connection 终止
-- transport 不直接定义 `NetworkMedia` 的清理策略
-- 是否立即删除对象，还是保留为严格假死挂起态，由上层宿主决定
+- transport 不直接定义上层对象的收束策略
 
 ## 14. 对上层协议的要求
 
@@ -252,4 +251,4 @@ transport 只提供“完整 payload 收发”。
 - `session_id`
 - `SessionDescribe(session_id)` metadata 查询
 - route/session 映射
-- 失效事件和宿主策略对接
+- 失效事件上传给各自上层

@@ -183,6 +183,8 @@ AuthFinishResponse {
 
 当前正式口径里，auth 过程结束后只留下 `auth_id`，不再在 connection 上保留“已认证磁盘”这种长期业务状态。
 
+同一 connection 上可以同时存在多个 `granted` 状态的 `auth_id`。
+
 ## 6. auth_id 生命周期
 
 `auth_id` 状态固定为：
@@ -216,8 +218,9 @@ granted
 
 ### 6.5 当前额外约束
 
-- 一个 connection 同时最多只保留一个未消费 `auth_id`
-- 如果 client 要在同一 connection 上继续打开第二个 session，必须等前一个 `auth_id` 被消费后重新走一次 auth
+- 同一 connection 在 auth 过程结束后，可以继续再次签发新的 `auth_id`
+- 多个 `granted` 状态的 `auth_id` 可以在同一 connection 上并存，直到各自被消费、过期或撤销
+- auth 过程与 `SessionOpen` 过程的互斥，只约束建会话前的 in-flight lane
 
 ## 7. 认证失败口径
 
@@ -314,9 +317,8 @@ storer 只需要知道：
 
 这里的 client-facing 边界同时固定为：
 
-- 网络层只上报“session 已失效”
-- 网络层只调用 `NetworkMedia` 失效处理接口
-- 是否立即删除盘对象，还是保留为严格假死挂起态，由 client / 宿主策略决定
+- 协议层只定义“session 已失效”
+- 上层盘对象如何清理或保留，由具体宿主实现决定，不属于本文档定义范围
 
 ## 10. 当前正式约束
 
@@ -327,4 +329,5 @@ storer 只需要知道：
 5. storer 不知道 client 的 `auth_id`。
 6. `SessionOpen(auth_id)` 成功后只得到 `session_id`。
 7. metadata 通过 `SessionDescribe(session_id)` 单独查询。
-8. route 失效后 gateway 必须主动撤销对应 `auth_id` 与 session，但不替宿主决定 `NetworkMedia` 对象清理策略。
+8. 同一 connection 可以并存多个 `granted` 状态的 `auth_id`，但 auth/open 只允许单 in-flight lane。
+9. route 失效后 gateway 必须主动撤销对应 `auth_id` 与 session。

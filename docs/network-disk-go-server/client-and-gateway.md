@@ -10,7 +10,7 @@
 - `SessionOpen(auth_id)` 是进入真实会话的唯一入口
 - `SessionOpen` 只负责打开会话，不返回 metadata
 - `SessionDescribe(session_id)` 单独返回 metadata
-- `NetworkMedia` 基于 `disk_id + session + metadata` 构造
+- 客户端盘对象基于 `disk_id + session + metadata` 构造
 
 本文档只描述 bootstrap 完成后的业务层，不重复定义 transport 帧格式。
 
@@ -55,6 +55,8 @@ TCP connected
 - 一个 connection 同时最多只允许一个 auth 过程
 - 一个 connection 同时最多只允许一个 `SessionOpen` 过程
 - auth 过程与 `SessionOpen` 过程互斥
+- 一个 connection 可以同时持有多个已签发 `auth_id`
+- 一个 connection 可以同时持有多个已打开 session
 - 已打开 session 的 `SessionDescribe / ReadAt / WriteAt / Close` 允许并发
 - 活跃 session 的存在，不阻止该 connection 后续再次串行发起 auth/open
 
@@ -258,7 +260,8 @@ TCP connected
 - `auth_id` 只对当前 connection 有效
 - 一个 `auth_id` 只绑定一个 `disk_id`
 - 一个 `auth_id` 只能消费一次
-- 一个 connection 同时最多只保留一个未消费 `auth_id`
+- 同一 connection 可以并存多个未消费 `auth_id`
+- 每次认证成功都会生成新的 `auth_id`，不覆盖已有授权对象
 - 认证失败不关闭 connection
 
 ## 10. SessionOpen
@@ -284,6 +287,7 @@ TCP connected
 - `SessionOpen` 成功后，`auth_id` 被消费
 - `SessionOpen` 失败且返回 `busy` 时，未过期 `auth_id` 仍可重试
 - `SessionOpen` 不返回 metadata
+- `SessionOpen` 只消费目标 `auth_id`，不影响同 connection 上其他 `auth_id` 或已打开 session
 
 ## 11. SessionDescribe
 
@@ -416,7 +420,7 @@ TCP connected
 
 当前第一版固定由 body 承载关闭原因，不再保留第二种原因承载位置。
 
-## 17. 失效事件与宿主边界
+## 17. 失效事件边界
 
 ### 17.1 connection 死亡
 
@@ -433,27 +437,11 @@ connection 死亡后：
 - 目标 session 已失效
 - 后续对该 session 的 `SessionDescribe / ReadAt / WriteAt / Close` 不应再返回成功
 
-### 17.3 `NetworkMedia` 边界
+### 17.3 宿主边界
 
-网络层固定只做两件事：
+协议层固定只定义 connection / session 的失效事实。
 
-1. 识别 connection / session 失效
-2. 调用 `NetworkMedia` 的失效处理接口
-
-网络层不直接决定：
-
-- 是否立即删除盘对象
-- 是否保留盘对象为严格假死挂起态
-
-这些都由 client / 宿主策略决定。
-
-### 17.4 假死挂起态要求
-
-如果宿主保留对象，则该状态必须满足：
-
-- 不主动返回成功
-- 不伪装读写已完成
-- 不静默自动重连
+客户端宿主如何释放、保留或替换自己的盘对象，不属于本文档定义范围。
 
 ## 18. 第一版最小验收
 
@@ -461,7 +449,7 @@ connection 死亡后：
 2. client 可通过 `AuthStart / AuthFinish` 获得 `auth_id`。
 3. client 可通过 `SessionOpen(auth_id)` 获得有效 `session_id`。
 4. client 可通过 `SessionDescribe(session_id)` 获得 metadata。
-5. `NetworkMedia` 以 `disk_id + session + metadata` 完成构造。
-6. `NetworkMedia` 可完成真实 `ReadAt / WriteAt`。
-7. 一个 `GatewayConnection` 可并发承载多个 `DiskSession`。
-8. route 故障时 gateway 能向 client 下发 `SessionCloseNotice`，网络层仅把失效事件上报给 `NetworkMedia` 接口。
+5. 客户端可用 `disk_id + session + metadata` 构造盘对象。
+6. 客户端盘对象可完成真实 `ReadAt / WriteAt`。
+7. 一条 connection 可并发承载多个已打开 session。
+8. route 故障时 gateway 能向 client 下发 `SessionCloseNotice`，协议层只定义目标 session 已失效。

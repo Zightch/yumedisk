@@ -28,7 +28,7 @@
 - 不对其他 `storer` 暴露 storer listener
 - 不走外部 `StorerRegister` 网络注册协议
 - gateway 的 `route_registry` 中只保留自己的 `disk_id`
-- client-facing 完整走 `Hello -> transport -> auth -> session`
+- client-facing 完整走 `Hello -> transport -> auth -> session -> metadata -> data plane`
 
 ### 2.2 storer
 
@@ -257,8 +257,7 @@ gateway 随后：
 这里的 client-facing 结果固定为：
 
 - gateway 明确判定 session 已失效
-- 网络层只把失效事件上报给 `NetworkMedia` 接口
-- 是否立即删除对象，还是保留为严格假死挂起态，由 client / 宿主策略决定
+- 协议层只定义目标 session 已失效
 
 ## 11. 当前正式约束
 
@@ -273,4 +272,4 @@ gateway 随后：
 9. route metadata 真源在 gateway route 表，`SessionDescribe` 由 gateway 本地回答。
 10. `gateway-storer` 唯一心跳方向是 `gateway -> storer : LinkHeartbeat`。
 11. `role = whole` 不暴露 storer listener，且 `route_registry` 中只保留本地唯一 `disk_id`。
-12. route 断线时 gateway 必须主动接管关闭相关 client session，但不替宿主决定 `NetworkMedia` 对象清理策略。
+12. route 断线时 gateway 必须主动接管关闭相关 client session。

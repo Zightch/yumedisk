@@ -37,7 +37,7 @@
 5. `SessionOpen(auth_id)` 成功
 6. 获得有效 `session_id`
 7. `SessionDescribe(session_id)` 成功
-8. 构造 `NetworkMedia`
+8. 构造客户端盘对象
 
 硬约束：
 
@@ -46,13 +46,15 @@
 - `SessionOpen` 是进入数据面的唯一入口
 - metadata 通过 `SessionDescribe` 获取
 - auth 过程与 `SessionOpen` 在同一 connection 上必须互斥
+- 同一 connection 上可以并存多个已签发 `auth_id`
+- 同一 connection 上可以并存多个已打开 session
 - 上述互斥只约束建会话前阶段
 
 ## 3. metadata 口径
 
 ### 3.1 作用
 
-client 构造 `NetworkMedia` 所需的最小 metadata 只有：
+client 构造盘对象所需的最小 metadata 只有：
 
 - `disk_size_bytes`
 - `read_only`
@@ -67,12 +69,12 @@ client 构造 `NetworkMedia` 所需的最小 metadata 只有：
 3. `SessionOpen` 成功响应只返回 `session_id`
 4. `SessionDescribe(session_id)` 从 gateway 的 session 快照中返回 metadata
 
-## 4. NetworkMedia 构造口径
+## 4. 客户端盘对象构造口径
 
-`NetworkMedia` 第一版构造时显式保存：
+客户端盘对象第一版构造时显式保存：
 
 - `disk_id`
-- 已打开的 `DiskSession`
+- 已打开 session
 - `disk_size_bytes`
 - `read_only`
 - `max_io_bytes`
@@ -170,7 +172,7 @@ route heartbeat 超时等价于 route connection 死亡。
 因此：
 
 - `max_io_bytes` 必须小于 transport 上限扣除业务头开销后的安全值
-- 大块 I/O 必须由 `NetworkMedia` 主动拆片
+- 大块 I/O 必须由客户端盘对象主动拆片
 
 拆片规则：
 
@@ -202,7 +204,7 @@ route heartbeat 超时等价于 route connection 死亡。
 
 - 建会话前阶段的“单 auth 过程、单 `SessionOpen` 过程、二者互斥”只约束 auth/open lane
 - 已打开 session 上的 `SessionDescribe / ReadAt / WriteAt / Close` 允许并发复用同一条 connection
-- 一个 `GatewayConnection` 可以在持有多个活跃 session 的同时继续串行打开新的 session
+- 一条 connection 可以在持有多个活跃 session 的同时继续串行打开新的 session
 
 ## 12. 错误语义
 
@@ -221,7 +223,7 @@ route heartbeat 超时等价于 route connection 死亡。
 
 - 协议结构错误由 connection 边界直接拒绝
 - 数据面只处理已经成立的业务对象错误
-- `NetworkMedia` 不重复做网络协议级判断
+- 客户端盘对象不重复做网络协议级判断
 
 ## 13. session / connection / route 失效策略
 
@@ -235,34 +237,15 @@ route heartbeat 超时等价于 route connection 死亡。
 
 ### 13.2 网络层边界
 
-网络层固定只做两件事：
+协议层只定义 session / connection / route 的失效事实。
 
-1. 识别 session / connection / route 的失效事件
-2. 调用 `NetworkMedia` 的失效处理接口
+### 13.3 宿主策略边界
 
-网络层不直接决定：
-
-- 是否立即清理 `NetworkMedia`
-- 是否保留 `NetworkMedia` 为严格假死挂起态
-
-这些都由 client / 宿主策略决定。
-
-### 13.3 假死挂起态要求
-
-如果宿主选择保留对象，则必须满足：
-
-- 不主动返回成功
-- 不伪装读写已完成
-- 不静默自动重连
-
-它只表示：
-
-- 当前无法继续推进 I/O
-- 等待宿主层进一步决策
+宿主是否定义假死挂起态，以及如何收束自己的盘对象，不属于本文档定义范围。
 
 ### 13.4 connection 与 route 失效结果
 
-一条 `GatewayConnection` 失效时：
+一条 client-gateway connection 失效时：
 
 - 该连接下全部 session 一起失效
 - 相关数据面请求全部失败
@@ -277,8 +260,8 @@ route heartbeat 超时等价于 route connection 死亡。
 ## 14. 当前最小验收
 
 1. client 可通过 `SessionOpen` 获得 `session_id`。
-2. client 可通过 `SessionDescribe` 获得构造 `NetworkMedia` 的最小 metadata。
-3. `NetworkMedia` 显式持有 `disk_id + DiskSession + metadata`。
-4. `NetworkMedia` 可完成真实 `ReadAt / WriteAt`。
-5. 一个 `GatewayConnection` 上可并发持有多个 `DiskSession`。
-6. connection 或 route 失效后，网络层仅把失效事件上报给 `NetworkMedia` 接口，清理还是保留假死挂起态由宿主决定。
+2. client 可通过 `SessionDescribe` 获得构造盘对象的最小 metadata。
+3. 客户端盘对象显式持有 `disk_id + session + metadata`。
+4. 客户端盘对象可完成真实 `ReadAt / WriteAt`。
+5. 一条 connection 上可并发持有多个已打开 session。
+6. connection 或 route 失效后，协议层只定义目标 session 已失效。

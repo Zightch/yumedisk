@@ -86,12 +86,13 @@ TCP connected
 7. 上述互斥仅约束建会话前阶段；已打开的 session 在数据面允许并发复用同一条 connection。
 8. `SessionOpen` 仅负责打开会话，不返回 metadata。
 9. `SessionDescribe` 单独返回 session 绑定的 metadata。
-10. `NetworkMedia` 显式持有 `disk_id + DiskSession + metadata`，不承担认证、建连、心跳和重连。
-11. 当前正式心跳只有两个方向：
+10. 客户端盘对象显式持有 `disk_id + session + metadata`，不承担认证、建连、心跳和重连。
+11. 已签发的 `auth_id` 可以在同一 connection 上并存，已打开的 session 也可以并存；只有建会话前的 in-flight lane 受互斥约束。
+12. 当前正式心跳只有两个方向：
    - `client(connection) -> gateway : ConnHeartbeat`
    - `gateway -> storer : LinkHeartbeat`
-12. `whole` 对 client 仍完整走 `Hello -> transport -> auth -> session -> metadata -> data plane` 主链，只是 route 固定为本地唯一 `disk_id`。
-13. session / connection / route 失效后，网络层仅将失效事件上报给 `NetworkMedia` 对外接口；立即清理还是保留假死挂起态，由 client / 宿主策略决定。
+13. `whole` 对 client 仍完整走 `Hello -> transport -> auth -> session -> metadata -> data plane` 主链，只是 route 固定为本地唯一 `disk_id`。
+14. session / connection / route 失效后，协议层只定义失效事实，不定义上层对象的销毁或挂起策略。
 
 ## 文档使用原则
 
