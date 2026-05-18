@@ -24,6 +24,7 @@ pub struct GatewayConnection {
     transport: TransportClient,
     next_request_id: AtomicU64,
     pending_requests: Mutex<HashMap<u64, PendingRequest>>,
+    disconnect_handler: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     session_notice_handler: Mutex<Option<Arc<dyn Fn(SessionCloseNotice) + Send + Sync>>>,
     lifecycle: Mutex<ConnectionLifecycle>,
     receive_loop_started: AtomicBool,
@@ -87,6 +88,7 @@ impl GatewayConnection {
             endpoint,
             next_request_id: AtomicU64::new(1),
             pending_requests: Mutex::new(HashMap::new()),
+            disconnect_handler: Mutex::new(None),
             session_notice_handler: Mutex::new(None),
             lifecycle: Mutex::new(ConnectionLifecycle {
                 auth_state: ConnectionPhase::Idle,
@@ -128,6 +130,13 @@ impl GatewayConnection {
             .session_notice_handler
             .lock()
             .expect("session_notice_handler poisoned") = handler;
+    }
+
+    pub fn set_disconnect_handler(&self, handler: Option<Arc<dyn Fn() + Send + Sync>>) {
+        *self
+            .disconnect_handler
+            .lock()
+            .expect("disconnect_handler poisoned") = handler;
     }
 
     pub fn allocate_request_id(&self) -> u64 {
@@ -367,6 +376,14 @@ impl GatewayConnection {
     }
 
     fn handle_disconnect(&self, error: NetworkClientError) {
+        if let Some(handler) = self
+            .disconnect_handler
+            .lock()
+            .expect("disconnect_handler poisoned")
+            .as_ref()
+        {
+            handler();
+        }
         self.fail_all_pending(error);
         self.reset_lifecycle();
     }
@@ -490,7 +507,10 @@ mod tests {
     use crate::network::transport_client::read_frame_into;
     use crate::network::transport_client::write_frame;
     use std::net::TcpListener;
+    use std::sync::Arc;
+    use std::sync::mpsc;
     use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn gateway_connection_tracks_auth_grants_and_multiple_active_sessions() {
@@ -674,5 +694,73 @@ mod tests {
 
         let _ = connection.close();
         server.join().expect("server thread should join");
+    }
+
+    #[test]
+    fn gateway_connection_calls_disconnect_handler_when_transport_breaks() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
+        let address = listener.local_addr().expect("local_addr should succeed");
+
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept should succeed");
+            drop(stream);
+        });
+
+        let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
+        let (disconnect_tx, disconnect_rx) = mpsc::channel();
+        connection.set_disconnect_handler(Some(Arc::new(move || {
+            let _ = disconnect_tx.send(());
+        })));
+        connection.connect().expect("connect should succeed");
+
+        disconnect_rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("disconnect handler should be called");
+
+        server.join().expect("server should join");
+    }
+
+    #[test]
+    fn gateway_connection_emits_session_close_notice_and_clears_session() {
+        let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:1"));
+        connection
+            .begin_auth("A1b2C3d4E5f6G7h8")
+            .expect("begin auth should succeed");
+        connection
+            .finish_auth("A1b2C3d4E5f6G7h8", 9)
+            .expect("finish auth should succeed");
+        connection
+            .begin_session_open("A1b2C3d4E5f6G7h8", 9)
+            .expect("begin session open should succeed");
+        connection
+            .finish_session_open("A1b2C3d4E5f6G7h8", 9, 77)
+            .expect("finish session open should succeed");
+        let (notice_tx, notice_rx) = mpsc::channel();
+        connection.set_session_notice_handler(Some(Arc::new(move |notice| {
+            let _ = notice_tx.send((notice.session_id, notice.reason_code));
+        })));
+
+        let payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: crate::network::HEADER_SIZE as u8,
+            op_code: ClientOperationCode::SessionCloseNotice,
+            flags: crate::network::FLAG_NOTICE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 0,
+            session_id: 77,
+        }
+        .encode(&1u16.to_be_bytes());
+        connection
+            .dispatch_response(payload)
+            .expect("notice dispatch should succeed");
+
+        assert_eq!(
+            notice_rx
+                .recv_timeout(Duration::from_millis(50))
+                .expect("notice handler should fire"),
+            (77, 1)
+        );
+        assert!(!connection.is_session_active(77));
     }
 }
