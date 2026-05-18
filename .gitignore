@@ -4,6 +4,9 @@
 **/.vs/
 **/.vscode/
 
+# Configuration files
+**/*.toml
+
 # Native build outputs
 **/x64/
 **/build/
@@ -31,12 +34,19 @@
 **/lerna-debug.log*
 **/pnpm-lock.yaml
 
+# Go
+**/go.sum
+**/go.work
+**/*.exe
+**/*.img
+
 # Tauri / Rust generated outputs
 **/src-tauri/target/
 **/src-tauri/gen/
 **/src-tauri/Cargo.lock
 **/target/
 **/Cargo.lock
+!**/Cargo.toml
 
 # Project-local runtime / assets
 symbol/
@@ -54,10 +64,3 @@ docs/tmp/*
 
 # Local environment
 **/env.cmake
-
-# Go
-**/go.sum
-**/go.work
-**/*.exe
-**/*.toml
-**/*.img
