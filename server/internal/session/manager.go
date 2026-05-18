@@ -21,7 +21,7 @@ func (m *Manager) Open(record Record) (Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.items) > 0 {
-		return Record{}, ErrSessionBusy
+		return Record{}, ErrSessionOpenRejected
 	}
 
 	record.ID = m.nextID.Add(1)

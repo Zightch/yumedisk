@@ -103,7 +103,7 @@ func TestOpenRejectsWhileSessionIsLive(t *testing.T) {
 	}
 
 	_, err = service.Open(2)
-	if err != ErrSessionBusy {
-		t.Fatalf("expected session busy, got %v", err)
+	if err != ErrSessionOpenRejected {
+		t.Fatalf("expected session open rejected, got %v", err)
 	}
 }

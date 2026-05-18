@@ -158,6 +158,7 @@ fn map_network_error_to_backend_error(error: NetworkClientError) -> BackendError
     match error {
         NetworkClientError::InvalidArgument(_)
         | NetworkClientError::InvalidState(_)
+        | NetworkClientError::OpenRejected
         | NetworkClientError::InvalidIo(_)
         | NetworkClientError::IoFailed => BackendError::InvalidParameter,
         NetworkClientError::SessionUnavailable

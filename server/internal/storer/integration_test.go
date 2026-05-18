@@ -112,7 +112,7 @@ func TestWholeRuntimeMinimalClosure(t *testing.T) {
 	}
 }
 
-func TestWholeRuntimeSecondClientIsRejectedWhileSessionIsLive(t *testing.T) {
+func TestWholeRuntimeSecondClientOpenIsRejectedButAuthIDStaysValid(t *testing.T) {
 	t.Parallel()
 
 	rawPath, material := newRuntimeDisk(t)
@@ -165,11 +165,27 @@ func TestWholeRuntimeSecondClientIsRejectedWhileSessionIsLive(t *testing.T) {
 	authIDTwo := authenticateConnection(t, connTwo, material, &requestIDTwo)
 	openRespTwo := mustRoundTrip(t, connTwo, buildRequest(proto.OpSessionOpen, requestIDTwo, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
 	openHeaderTwo := mustParseHeader(t, openRespTwo)
-	if openHeaderTwo.StatusCode != proto.StatusSessionBusy {
-		t.Fatalf("expected second open busy, got %d", openHeaderTwo.StatusCode)
+	if openHeaderTwo.StatusCode != proto.StatusSessionOpenRejected {
+		t.Fatalf("expected second open rejected, got %d", openHeaderTwo.StatusCode)
 	}
 	if openHeaderTwo.SessionID != 0 {
 		t.Fatalf("expected zero second session id, got %d", openHeaderTwo.SessionID)
+	}
+	requestIDTwo++
+
+	closeRespOne := mustRoundTrip(t, connOne, buildRequest(proto.OpClose, requestIDOne, openHeaderOne.SessionID, nil))
+	if closeHeaderOne := mustParseHeader(t, closeRespOne); closeHeaderOne.StatusCode != proto.StatusOK {
+		t.Fatalf("first close status: %d", closeHeaderOne.StatusCode)
+	}
+	requestIDOne++
+
+	retryOpenRespTwo := mustRoundTrip(t, connTwo, buildRequest(proto.OpSessionOpen, requestIDTwo, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
+	retryOpenHeaderTwo := mustParseHeader(t, retryOpenRespTwo)
+	if retryOpenHeaderTwo.StatusCode != proto.StatusOK {
+		t.Fatalf("expected retry open success, got %d", retryOpenHeaderTwo.StatusCode)
+	}
+	if retryOpenHeaderTwo.SessionID == 0 {
+		t.Fatal("expected non-zero retry session id")
 	}
 
 	cancel()

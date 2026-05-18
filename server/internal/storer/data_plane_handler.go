@@ -125,8 +125,8 @@ func (h *dataPlaneHandler) mapSessionError(header proto.Header, err error) []byt
 	switch err {
 	case session.ErrSessionUnavailable:
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable)
-	case session.ErrSessionBusy:
-		return proto.BuildErrorResponse(header, proto.StatusSessionBusy)
+	case session.ErrSessionOpenRejected:
+		return proto.BuildErrorResponse(header, proto.StatusSessionOpenRejected)
 	case session.ErrReadOnly:
 		return proto.BuildErrorResponse(header, proto.StatusIOReadOnly)
 	case session.ErrIOLimit:

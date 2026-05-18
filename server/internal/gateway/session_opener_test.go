@@ -100,11 +100,34 @@ func TestSessionOpenRejectsWhenSessionIsAlreadyLive(t *testing.T) {
 		t.Fatalf("open session on second client: %v", err)
 	}
 	secondOpenHeader := mustParseGatewayHeader(t, secondOpenResp)
-	if secondOpenHeader.StatusCode != proto.StatusSessionBusy {
+	if secondOpenHeader.StatusCode != proto.StatusSessionOpenRejected {
 		t.Fatalf("unexpected second open status: %d", secondOpenHeader.StatusCode)
 	}
 	if secondOpenHeader.SessionID != 0 {
 		t.Fatalf("expected zero second session id, got %d", secondOpenHeader.SessionID)
+	}
+	if _, status, ok := handler.grants.Lookup(authIDTwo, stateTwo.ID); !ok || status != proto.StatusOK {
+		t.Fatalf("expected rejected auth grant to stay valid, ok=%v status=%d", ok, status)
+	}
+
+	closeResp, err := handler.HandlePayload(stateOne, buildRequest(proto.OpClose, 41, firstSessionID, nil))
+	if err != nil {
+		t.Fatalf("close first session: %v", err)
+	}
+	if header := mustParseGatewayHeader(t, closeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected close status: %d", header.StatusCode)
+	}
+
+	retryOpenResp, err := handler.HandlePayload(stateTwo, buildRequest(proto.OpSessionOpen, 42, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
+	if err != nil {
+		t.Fatalf("retry open after rejection: %v", err)
+	}
+	retryOpenHeader := mustParseGatewayHeader(t, retryOpenResp)
+	if retryOpenHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected retry open status: %d", retryOpenHeader.StatusCode)
+	}
+	if retryOpenHeader.SessionID == 0 {
+		t.Fatal("expected non-zero retry session id")
 	}
 }
 

@@ -10,7 +10,7 @@ import (
 
 var (
 	ErrSessionUnavailable = errors.New("session unavailable")
-	ErrSessionBusy        = errors.New("session busy")
+	ErrSessionOpenRejected = errors.New("session open rejected")
 	ErrIOLimit            = errors.New("io limit exceeded")
 	ErrOutOfRange         = errors.New("io out of range")
 	ErrReadOnly           = errors.New("session is read only")

@@ -8,6 +8,7 @@ pub enum NetworkClientError {
     InvalidArgument(&'static str),
     InvalidState(&'static str),
     UnauthorizedDisk { disk_id: String },
+    OpenRejected,
     InvalidIo(&'static str),
     IoFailed,
     SessionUnavailable,
@@ -28,6 +29,7 @@ impl fmt::Display for NetworkClientError {
             Self::UnauthorizedDisk { disk_id } => {
                 write!(formatter, "unauthorized-disk: {}", disk_id)
             }
+            Self::OpenRejected => formatter.write_str("open-rejected"),
             Self::InvalidIo(reason) => write!(formatter, "invalid-io: {}", reason),
             Self::IoFailed => formatter.write_str("io-failed"),
             Self::SessionUnavailable => formatter.write_str("session-unavailable"),

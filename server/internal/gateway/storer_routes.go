@@ -171,8 +171,8 @@ func mapResponseStatus(status uint16) error {
 		return session.ErrIOFailed
 	case proto.StatusSessionUnavailable:
 		return session.ErrSessionUnavailable
-	case proto.StatusSessionBusy:
-		return session.ErrSessionBusy
+	case proto.StatusSessionOpenRejected:
+		return session.ErrSessionOpenRejected
 	default:
 		return session.ErrSessionUnavailable
 	}

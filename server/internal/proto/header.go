@@ -39,7 +39,7 @@ const (
 	StatusAuthIDInvalid        = 0x1104
 	StatusAuthIDExpired        = 0x1105
 	StatusSessionUnavailable   = 0x1201
-	StatusSessionBusy          = 0x1202
+	StatusSessionOpenRejected  = 0x1202
 	StatusIOOutOfRange         = 0x1301
 	StatusIOLarge              = 0x1302
 	StatusIOReadOnly           = 0x1303

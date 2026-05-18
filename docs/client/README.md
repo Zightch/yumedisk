@@ -211,9 +211,12 @@ connection 清理工作当前只发生在 session 关闭路径。
 
 - 只认 `OK + session_id` 为成功
 - 成功后始终再做 `SessionDescribe`
-- 若 open 失败，则把它视为 server 定义的 open reject / open failure
+- 当前若收到项目自定义状态 `0x1202`，则映射为 `open-rejected`
+- `open-rejected` 不会让 rust-cli 主动丢弃该 `auth_id`
+- 该 `auth_id` 仍可在同一 connection 上继续等待后续重试或自然过期
+- 其他 open 失败仍按 server 定义的 open failure 处理
 - client 不从失败响应中推导 metadata
-- client 不在协议层额外制造 `busy` 语义
+- client 不在协议层额外发明其他失败语义
 
 若挂载流程在 open 之后、建盘之前失败，当前会：
 

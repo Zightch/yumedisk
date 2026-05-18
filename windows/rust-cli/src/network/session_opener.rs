@@ -76,6 +76,9 @@ fn map_session_open_error<'a>(
         ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrInvalidRequest) => {
             NetworkClientError::InvalidState("session_open")
         }
+        ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrSessionOpenRejected) => {
+            NetworkClientError::OpenRejected
+        }
         other => NetworkClientError::Protocol(other),
     }
 }
@@ -138,6 +141,9 @@ mod tests {
         connection.connect().expect("connect should succeed");
         let opener = SessionOpener::new(connection.clone());
         let grant = AuthGrant::new(disk_id, 88).expect("grant should build");
+        connection
+            .register_auth_grant(grant.auth_id(), grant.disk_id().to_string())
+            .expect("register auth grant should succeed");
 
         let session_id = opener.open(&grant).expect("open should succeed");
         assert_eq!(session_id, 77);
@@ -159,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn session_open_keeps_busy_status_as_protocol_failure() {
+    fn session_open_maps_reject_status_to_open_rejected() {
         let disk_id = "A1b2C3d4E5f6G7h8";
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
         let address = listener.local_addr().expect("local addr should succeed");
@@ -181,13 +187,13 @@ mod tests {
                 header_len: HEADER_SIZE as u8,
                 op_code: ClientOperationCode::SessionOpen,
                 flags: FLAG_RESPONSE,
-                status_code: ProtocolStatusCode::ErrSessionBusy,
+                status_code: ProtocolStatusCode::ErrSessionOpenRejected,
                 reserved: 0,
                 request_id: header.request_id,
                 session_id: 0,
             }
             .encode(&[]);
-            write_frame(&mut stream, &response).expect("write session open busy response");
+            write_frame(&mut stream, &response).expect("write session open reject response");
             thread::sleep(Duration::from_millis(20));
         });
 
@@ -195,9 +201,13 @@ mod tests {
         connection.connect().expect("connect should succeed");
         let opener = SessionOpener::new(connection.clone());
         let grant = AuthGrant::new(disk_id, 88).expect("grant should build");
+        connection
+            .register_auth_grant(grant.auth_id(), grant.disk_id().to_string())
+            .expect("register auth grant should succeed");
 
         let error = opener.open(&grant).expect_err("open should fail");
-        assert_eq!(error.to_string(), "protocol: gateway-status: 0x1202");
+        assert_eq!(error.to_string(), "open-rejected");
+        assert_eq!(connection.auth_grant_count(), 1);
 
         connection.close().expect("close should succeed");
         server.join().expect("server should join");
