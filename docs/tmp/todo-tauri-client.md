@@ -56,7 +56,19 @@
 
 三者混在一起，后续再靠注释区分。
 
-### 3.3 状态口径
+### 3.3 `server_addr`
+
+`tauri-client` 后续统一使用 `server_addr` 作为领域名。
+
+固定要求：
+
+- UI 中文文案统一写“服务器地址”
+- 本地模型字段统一写 `server_addr`
+- 不再使用 `server_ip` 作为领域字段名
+
+当前 UI 如果先只允许输入 IP，这只是输入约束，不改变领域命名。
+
+### 3.4 状态口径
 
 主页网络盘卡片仍只保留三态：
 
@@ -70,11 +82,19 @@
 - 找得到已打开 `disksession` 但还没挂到 `BackendRust`，就是 `unmounted`
 - 已挂到 `BackendRust`，就是 `mounted`
 
+### 3.5 `auth_material`
+
+当前最小闭环下：
+
+- `auth_material` 直接保存原始 `claim_code`
+
+这属于当前实现策略，不改变 network 正式文档对认证材料来源的留白口径。
+
 ## 4. 需要迁移的模块
 
 ## 4.1 直接迁移为共享网络核心
 
-应从 `windows/rust-cli/src/network/` 提炼出共享网络核心，建议新建独立 crate：
+应从 `windows/rust-cli/src/network/` 提炼出共享网络核心，固定收口到现有独立 crate：
 
 - `transport_client.rs`
 - `hello_client.rs`
@@ -87,9 +107,9 @@
 - `crypto_win32.rs`
 - `error.rs`
 
-建议落点：
+固定落点：
 
-- `windows/network-client-core/`
+- `windows/network-core/`
 
 固定原因：
 
@@ -146,6 +166,21 @@
 - `network_create_drafts`
   - key 为 `draft_id`
 
+它的结构定位固定为：
+
+- `NetworkClientState` 是多 connection 的全局协调层
+- 它不是单个 connection 管理器
+- 它不要求采用 `N 线程 = N connection` 这种固定线程模型
+
+并发边界固定为：
+
+- 每个 `server_addr` 必须拥有独立执行 lane
+- 不同 `server_addr` 的建连、重扫、auth、open、读写、故障收束可并发推进
+- 同一 `server_addr` 内，仍遵守单 connection 的 auth/open lane 互斥
+- `NetworkClientState` 不允许把多服务器操作收成一个全局串行大锁
+
+也就是说，这里固定的是“多 connection + 每 connection 独立 lane”的模型，不固定线程实现细节。
+
 这层负责：
 
 - 连接复用
@@ -178,6 +213,7 @@
 - `DiskRuntime` 只描述“本地这张盘卡片应该是什么”
 - 它不是 live `disksession` 的持有者
 - live `disksession` 统一归 `NetworkClientState`
+- `auth_material` 当前最小闭环直接保存原始 `claim_code`
 
 ### 5.4 宿主适配层
 
@@ -276,17 +312,29 @@
 authenticate(claim_code)
   -> SessionOpen(auth_id)
   -> SessionDescribe(session_id)
+  -> 全局重复检查
   -> 写入 draft item
 ```
+
+重复检查固定规则：
+
+- 网盘以 `(server_addr, remote_disk_id)` 做全局唯一检查
+- 不允许重复添加同一远端盘
+- 检查范围至少覆盖：
+  - 已存在正式 `DiskRuntime`
+  - 当前创建对话框 draft 项
+
+若命中重复：
+
+- 当前添加流程直接失败
+- 关闭本次临时打开出来的 `disksession`
+- 不写入 draft 项
+- 不额外显式做 connection cleanup
 
 成功后：
 
 - 在当前对话框草稿列表中新增一张临时卡片
-- 临时卡片至少显示：
-  - `disk_name`
-  - `remote_disk_id`
-  - `capacity_bytes`
-  - 删除按钮
+- 临时卡片至少显示 `disk_name`、`remote_disk_id`、`capacity_bytes` 和删除按钮
 
 失败后：
 
@@ -336,6 +384,11 @@ authenticate(claim_code)
 
 - 提交导致对话框消失
 - 对话框消失进入统一 draft 收尾闸口
+
+提交前需要再做一次防御性重复检查：
+
+- 若 `(server_addr, remote_disk_id)` 与正式盘或当前待提交集冲突，则提交失败
+- 不能依赖前面“添加时检查一次”就认为后续不会出现冲突
 
 ## 7.7 对话框消失
 
@@ -430,6 +483,78 @@ authenticate(claim_code)
 - 拔出不关闭 live `disksession`
 - 拔出不主动回收 connection
 
+## 8.5 编辑
+
+网络盘编辑边界固定为：
+
+- 只允许修改 `disk_name`
+- 只允许修改 `auto_mount`
+
+当前明确不允许通过编辑修改：
+
+- `server_addr`
+- `remote_disk_id`
+- `auth_material`
+
+如果用户要改变这些字段，固定走：
+
+- 删除旧盘
+- 重新添加新盘
+
+不引入“编辑后原地迁移 connection / disksession”的复杂路径。
+
+## 8.6 删除
+
+网络盘删除固定流程为：
+
+1. 若当前已挂载，先 eject
+2. 若当前存在 live `disksession`，则关闭该 `disksession`
+3. 删除对应 `DiskRuntime` 与持久化记录
+
+固定要求：
+
+- 删除后需要清理 live `disksession`
+- 删除后不额外显式调用 connection cleanup
+- 是否关闭 connection 只交给 `disksession close` 路径自动判定
+
+## 8.7 故障路线
+
+这里固定保留两层口径。
+
+### 8.7.1 留白口径
+
+网络层只负责把以下事件上报给 `DiskRuntime` 或宿主事件接口：
+
+- `SessionCloseNotice`
+- connection 死亡
+- `disksession` 进入 closed
+
+网络层不直接规定：
+
+- client 必须立即清理
+- client 必须保留挂死态
+- client 必须自动重连
+
+也就是说：
+
+- `disksession` 关闭后，仅调用 `DiskRuntime` 的事件通知接口
+- 具体是清理、挂死还是做别的处理，交给 client 当前实现策略决定
+
+### 8.7.2 当前最小闭环实现
+
+当前 `tauri-client` 采用的最小闭环策略固定为：
+
+- 已挂载或未挂载的网络盘，只要收到 `SessionCloseNotice` 或 connection 死亡，就直接转为 `invalid`
+- 若当前已挂载，则先 eject
+- 清理对应 live `disksession`
+- 清理挂载侧 `NetworkMedia`
+- `DiskRuntime` 状态改为 `invalid`
+- 不主动重连
+- 不后台感知服务器是否重新上线
+- 后续只能通过 rescan 再走 `bootstrap -> auth -> open -> describe`
+
+也就是说，无效网盘不会自己恢复，恢复入口统一收在重扫逻辑。
+
 ## 9. connection cleanup 收口
 
 `tauri-client` 当前 connection cleanup 闸口固定为两类：
@@ -459,7 +584,15 @@ authenticate(claim_code)
 - draft 临时项即使已经先关闭 `disksession`
 - 也仍然等到对话框消失时再统一做 connection cleanup
 
-### 9.3 明确禁止
+### 9.3 删除路径补充
+
+正式网络盘删除路径固定为：
+
+- 删除时关闭 live `disksession`
+- 关闭后由 `disksession close` 路径自动判定是否释放 connection
+- 删除逻辑自己不额外显式调用 connection cleanup
+
+### 9.4 明确禁止
 
 当前阶段明确不做：
 
@@ -474,7 +607,7 @@ authenticate(claim_code)
 
 需要完成：
 
-- 从 `rust-cli` 抽出纯网络 client 核心到 `windows/network-client-core/`
+- 从 `rust-cli` 抽出纯网络 client 核心并统一收口到 `windows/network-core/`
 - `tauri-client` 改为依赖该共享核心
 - `rust-cli` 后续只作为调试壳或逐步删除其网盘宿主职责
 
@@ -494,6 +627,7 @@ authenticate(claim_code)
 - 新增 `opened_disk_sessions`
 - 新增 `network_create_drafts`
 - 明确 notice / disconnect 收束入口
+- 明确多 connection + 每 connection 独立 lane 的并发模型
 
 ## Phase T4: `DiskRuntime` 与持久化扩展
 
@@ -523,6 +657,8 @@ authenticate(claim_code)
 - 网络盘按 `opened_disk_sessions` 进入 `unmounted`
 - 网络盘挂载时现建 `NetworkMedia`
 - 网络盘拔出后保留 `disksession`
+- 网络盘删除后关闭 `disksession` 并走 session-close cleanup 判定
+- `SessionCloseNotice` / connection 死亡后把盘收为 `invalid`
 
 ## Phase T7: UI 接入
 
@@ -532,20 +668,27 @@ authenticate(claim_code)
 - 新增创建网络盘对话框
 - 主页卡片切到网络盘展示格式
 - 错误提示收成当前最小错误分类
+- 编辑对话框只开放名称和自动挂载
 
 ## 11. 测试与验收
 
 至少补齐：
 
 - 同一 `server_addr` 下复用同一条 connection 添加多个不同 `remote_disk_id`
+- 不同 `server_addr` 下的建连、auth、open、重扫可以并发推进
 - 一个 connection 下多个已打开 `disksession` 并存
 - 已打开网络盘 A 时，仍可继续对网络盘 B 做 auth/open
+- 重复添加 `(server_addr, remote_disk_id)` 会被拒绝
 - 删除临时卡片后不触发 connection cleanup
 - 对话框消失时会统一回收 draft 产生的空闲 connection
 - 提交后不会自动挂载，但重扫后可转为 `unmounted`
 - 找不到 `disksession` 的网络盘会显示 `invalid`
 - 网络盘拔出后保留 live `disksession`，状态回到 `unmounted`
+- 网络盘删除后会关闭 live `disksession`，并仅通过 session-close 路径判定 connection cleanup
 - `SessionCloseNotice` 或 disconnect 到来后，对应网络盘会转为 `invalid`
+- `SessionCloseNotice` 或 disconnect 到来后，若盘当前已挂载，会先 eject，再清理 live `disksession` 和挂载侧 `NetworkMedia`
+- 网络盘编辑只允许修改名称和自动挂载
+- `auth_material` 持久化保存原始 `claim_code`
 - `appsession` 未就绪时，网络盘创建入口不可点击
 
 最终验收：
