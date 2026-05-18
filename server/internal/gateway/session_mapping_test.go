@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -162,6 +163,8 @@ func TestGatewayRouteDisconnectClosesClientSessionAndRevokesGrant(t *testing.T) 
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
 	}
+	notifier := &recordingSessionCloseNotifier{}
+	handler.SetSessionCloseNotifier(notifier)
 	state := handler.NewConnectionState(77)
 	authID := handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
 	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, proto.BuildSessionOpenRequestBody(authID)))
@@ -174,16 +177,44 @@ func TestGatewayRouteDisconnectClosesClientSessionAndRevokesGrant(t *testing.T) 
 	}
 
 	pendingAuthID := handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
-	closed := handler.CloseRouteConnection(routes.entry.ConnectionID, []string{diskID})
+	closed := handler.closeRouteConnectionSessions(routes.entry.ConnectionID, []string{diskID})
 	if len(closed) != 1 {
 		t.Fatalf("unexpected closed sessions count: %d", len(closed))
 	}
 	if closed[0].Runtime.ClientConnectionID != state.ID {
 		t.Fatalf("unexpected client connection id: %d", closed[0].Runtime.ClientConnectionID)
 	}
+	if notifier.count() != 0 {
+		t.Fatalf("manual closeRouteConnectionSessions should not emit notices")
+	}
 
 	if _, status, ok := handler.grants.Lookup(pendingAuthID, state.ID); ok || status != proto.StatusAuthIDInvalid {
 		t.Fatalf("expected route disconnect to revoke auth grant, ok=%v status=%d", ok, status)
+	}
+
+	pendingAuthID = handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
+	authID = handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
+	openResp, err = handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 2, 0, proto.BuildSessionOpenRequestBody(authID)))
+	if err != nil {
+		t.Fatalf("open session for notifier path: %v", err)
+	}
+	openHeader = mustParseGatewayHeader(t, openResp)
+	if openHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected notifier-path open status: %d", openHeader.StatusCode)
+	}
+	handler.CloseRouteConnection(routes.entry.ConnectionID, []string{diskID})
+	if notifier.count() != 1 {
+		t.Fatalf("expected one route-lost notice, got %d", notifier.count())
+	}
+	record := notifier.last()
+	if record.reason != proto.SessionCloseReasonRouteLost {
+		t.Fatalf("unexpected close reason: %d", record.reason)
+	}
+	if record.session.ID != openHeader.SessionID {
+		t.Fatalf("unexpected closed session id: %d", record.session.ID)
+	}
+	if _, status, ok := handler.grants.Lookup(pendingAuthID, state.ID); ok || status != proto.StatusAuthIDInvalid {
+		t.Fatalf("expected notifier path to revoke auth grant, ok=%v status=%d", ok, status)
 	}
 }
 
@@ -230,4 +261,32 @@ func (p *mappingDataPlane) Read(routeConnectionID uint64, sessionID uint64, offs
 func (p *mappingDataPlane) Write(routeConnectionID uint64, sessionID uint64, offset uint64, data []byte) error {
 	p.lastWriteSessionID = sessionID
 	return p.writeErr
+}
+
+type recordingSessionCloseNotifier struct {
+	mu      sync.Mutex
+	records []sessionCloseRecord
+}
+
+type sessionCloseRecord struct {
+	session gatewaySessionRecord
+	reason  uint16
+}
+
+func (n *recordingSessionCloseNotifier) NotifySessionClosed(session gatewaySessionRecord, reason uint16) {
+	n.mu.Lock()
+	n.records = append(n.records, sessionCloseRecord{session: session, reason: reason})
+	n.mu.Unlock()
+}
+
+func (n *recordingSessionCloseNotifier) count() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.records)
+}
+
+func (n *recordingSessionCloseNotifier) last() sessionCloseRecord {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.records[len(n.records)-1]
 }

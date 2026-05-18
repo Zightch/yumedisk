@@ -54,7 +54,8 @@ func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
 		routes:        routes,
 		clientConns:   make(map[uint64]*clientConnection),
 	}
-	routes.SetDisconnectHandler(runtime)
+	clientHandler.SetSessionCloseNotifier(runtime)
+	routes.SetDisconnectHandler(clientHandler)
 	return runtime, nil
 }
 
@@ -210,7 +211,7 @@ func (r *Runtime) serveStorerConnection(ctx context.Context, connectionID uint64
 	}
 }
 
-func (r *Runtime) notifyClientSessionClosed(session gatewaySessionRecord, reason uint16) {
+func (r *Runtime) NotifySessionClosed(session gatewaySessionRecord, reason uint16) {
 	r.clientConnMu.RLock()
 	client := r.clientConns[session.Runtime.ClientConnectionID]
 	r.clientConnMu.RUnlock()
@@ -227,11 +228,5 @@ func (r *Runtime) notifyClientSessionClosed(session gatewaySessionRecord, reason
 	if err != nil {
 		_ = client.conn.Close()
 		return
-	}
-}
-
-func (r *Runtime) CloseRouteConnection(routeConnectionID uint64, diskIDs []string) {
-	for _, session := range r.clientHandler.CloseRouteConnection(routeConnectionID, diskIDs) {
-		r.notifyClientSessionClosed(session, proto.SessionCloseReasonRouteLost)
 	}
 }

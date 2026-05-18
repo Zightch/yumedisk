@@ -12,6 +12,9 @@ type Handler struct {
 	authenticator *authenticator
 	sessionOpener *sessionOpener
 	grants        *authGrantRegistry
+
+	noticeMu             sync.RWMutex
+	sessionCloseNotifier sessionCloseNotifier
 }
 
 type ConnectionState struct {
@@ -99,11 +102,43 @@ func (h *Handler) CloseConnection(connectionID uint64) {
 	h.sessionOpener.closeConnection(connectionID)
 }
 
-func (h *Handler) CloseRouteConnection(routeConnectionID uint64, diskIDs []string) []gatewaySessionRecord {
+func (h *Handler) CloseRouteConnection(routeConnectionID uint64, diskIDs []string) {
+	for _, diskID := range diskIDs {
+		h.grants.CloseDisk(diskID)
+	}
+	h.emitSessionClosed(
+		h.sessionOpener.closeRouteConnection(routeConnectionID),
+		proto.SessionCloseReasonRouteLost,
+	)
+}
+
+func (h *Handler) SetSessionCloseNotifier(notifier sessionCloseNotifier) {
+	h.noticeMu.Lock()
+	h.sessionCloseNotifier = notifier
+	h.noticeMu.Unlock()
+}
+
+func (h *Handler) closeRouteConnectionSessions(routeConnectionID uint64, diskIDs []string) []gatewaySessionRecord {
 	for _, diskID := range diskIDs {
 		h.grants.CloseDisk(diskID)
 	}
 	return h.sessionOpener.closeRouteConnection(routeConnectionID)
+}
+
+func (h *Handler) emitSessionClosed(records []gatewaySessionRecord, reason uint16) {
+	if len(records) == 0 {
+		return
+	}
+
+	h.noticeMu.RLock()
+	notifier := h.sessionCloseNotifier
+	h.noticeMu.RUnlock()
+	if notifier == nil {
+		return
+	}
+	for _, record := range records {
+		notifier.NotifySessionClosed(record, reason)
+	}
 }
 
 func (s *ConnectionState) beginAuth() error {

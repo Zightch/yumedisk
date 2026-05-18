@@ -53,10 +53,20 @@ struct MountedNetworkDisk {
     max_io_bytes: u32,
 }
 
+#[derive(Debug, Default, Clone)]
+struct NetworkMountRegistry {
+    state: Arc<Mutex<NetworkMountState>>,
+}
+
+#[derive(Debug, Default)]
+struct NetworkMountState {
+    mounted: BTreeMap<u32, MountedNetworkDisk>,
+    pending_cleanup_targets: BTreeSet<u32>,
+}
+
 pub struct CliHost {
     context: BackendContext,
-    mounted_network_disks: Arc<Mutex<BTreeMap<u32, MountedNetworkDisk>>>,
-    pending_cleanup_targets: Arc<Mutex<BTreeSet<u32>>>,
+    network_mounts: NetworkMountRegistry,
 }
 
 impl CliHost {
@@ -71,27 +81,16 @@ impl CliHost {
             return Err(error);
         }
 
-        let mounted_network_disks = Arc::new(Mutex::new(BTreeMap::new()));
-        let pending_cleanup_targets = Arc::new(Mutex::new(BTreeSet::new()));
-
         Ok(Self {
             context,
-            mounted_network_disks,
-            pending_cleanup_targets,
+            network_mounts: NetworkMountRegistry::default(),
         })
     }
 
     pub fn shutdown(&mut self) {
         self.remove_all_disks_for_shutdown();
         self.context.close();
-        self.mounted_network_disks
-            .lock()
-            .expect("mounted_network_disks poisoned")
-            .clear();
-        self.pending_cleanup_targets
-            .lock()
-            .expect("pending_cleanup_targets poisoned")
-            .clear();
+        self.network_mounts.clear();
     }
 
     pub fn query_session_state_text(&self) -> String {
@@ -201,19 +200,23 @@ impl CliHost {
             error.to_string()
         })?;
 
-        let pending_cleanup_targets = Arc::clone(&self.pending_cleanup_targets);
         let media = NetworkMedia::bind(auth.disk_id().to_string(), session.clone(), metadata)
             .map_err(|error| {
                 let _ = session.close();
                 let _ = connection.close();
                 error.to_string()
             })?
-            .with_invalidation_handler(Arc::new(move || {
-                pending_cleanup_targets
-                    .lock()
-                    .expect("pending_cleanup_targets poisoned")
-                    .insert(target_id);
-            }));
+            .with_invalidation_handler(self.network_mounts.cleanup_marker(target_id));
+
+        let mounted = MountedNetworkDisk::new(
+            addr.to_string(),
+            auth.disk_id().to_string(),
+            session.clone(),
+            metadata.disk_size_bytes,
+            metadata.read_only,
+            metadata.max_io_bytes,
+        );
+        mounted.attach_cleanup_hooks(self.network_mounts.clone(), target_id);
 
         let disk_config = DiskConfig {
             target_id,
@@ -228,76 +231,23 @@ impl CliHost {
             .context
             .create_managed_disk(disk_config, boxed_media, Some(&mut error_text))
         {
-            let _ = session.close();
-            let _ = connection.close();
+            mounted.shutdown();
+            self.network_mounts.clear_cleanup_mark(target_id);
             if error_text.is_empty() {
                 error_text = "create-failed".to_string();
             }
             return Err(error_text);
         }
 
-        let pending_cleanup_targets = Arc::clone(&self.pending_cleanup_targets);
-        connection.set_session_notice_handler(Some(Arc::new(
-            move |_notice: SessionCloseNotice| {
-                pending_cleanup_targets
-                    .lock()
-                    .expect("pending_cleanup_targets poisoned")
-                    .insert(target_id);
-            },
-        )));
-        let pending_cleanup_targets = Arc::clone(&self.pending_cleanup_targets);
-        connection.set_disconnect_handler(Some(Arc::new(move || {
-            pending_cleanup_targets
-                .lock()
-                .expect("pending_cleanup_targets poisoned")
-                .insert(target_id);
-        })));
+        self.network_mounts.insert(target_id, mounted.clone());
 
-        self.mounted_network_disks
-            .lock()
-            .expect("mounted_network_disks poisoned")
-            .insert(
-                target_id,
-                MountedNetworkDisk {
-                    addr: addr.to_string(),
-                    disk_id: auth.disk_id().to_string(),
-                    session: session.clone(),
-                    disk_size_bytes: metadata.disk_size_bytes,
-                    read_only: metadata.read_only,
-                    max_io_bytes: metadata.max_io_bytes,
-                },
-            );
-
-        Ok(NetworkMountResult {
-            target_id,
-            addr: addr.to_string(),
-            disk_id: auth.disk_id().to_string(),
-            session_id: session.session_id(),
-            disk_size_bytes: metadata.disk_size_bytes,
-            read_only: metadata.read_only,
-            max_io_bytes: metadata.max_io_bytes,
-        })
+        Ok(mounted.mount_result(target_id))
     }
 
     pub fn remove_disk(&mut self, target_id: u32) -> AppResult<()> {
-        if let Some(mounted) = self
-            .mounted_network_disks
-            .lock()
-            .expect("mounted_network_disks poisoned")
-            .get(&target_id)
-            .cloned()
-        {
-            mounted
-                .session
-                .connection()
-                .set_session_notice_handler(None);
-            mounted.session.connection().set_disconnect_handler(None);
-            match mounted.session.close() {
-                Ok(()) => {}
-                Err(NetworkClientError::SessionUnavailable) => {}
-                Err(error) => return Err(error.to_string()),
-            }
-            let _ = mounted.session.connection().close();
+        if let Some(mounted) = self.network_mounts.mounted(target_id) {
+            mounted.detach_cleanup_hooks();
+            mounted.close_for_remove();
         }
 
         let mut error_text = String::new();
@@ -311,14 +261,8 @@ impl CliHost {
             return Err(error_text);
         };
 
-        self.mounted_network_disks
-            .lock()
-            .expect("mounted_network_disks poisoned")
-            .remove(&target_id);
-        self.pending_cleanup_targets
-            .lock()
-            .expect("pending_cleanup_targets poisoned")
-            .remove(&target_id);
+        self.network_mounts.take(target_id);
+        self.network_mounts.clear_cleanup_mark(target_id);
 
         Ok(())
     }
@@ -350,70 +294,166 @@ impl CliHost {
             let _ = self
                 .context
                 .remove_managed_disk_with_media(target_id, Some(&mut error_text));
-            if let Some(mounted) = self
-                .mounted_network_disks
-                .lock()
-                .expect("mounted_network_disks poisoned")
-                .remove(&target_id)
-            {
-                mounted
-                    .session
-                    .connection()
-                    .set_session_notice_handler(None);
-                mounted.session.connection().set_disconnect_handler(None);
-                let _ = mounted.session.connection().close();
+            if let Some(mounted) = self.network_mounts.take(target_id) {
+                mounted.shutdown();
             }
-            self.pending_cleanup_targets
-                .lock()
-                .expect("pending_cleanup_targets poisoned")
-                .remove(&target_id);
+            self.network_mounts.clear_cleanup_mark(target_id);
         }
     }
 
     pub fn reap_dead_network_disks(&mut self) -> AppResult<Vec<u32>> {
-        let pending_targets = self
-            .pending_cleanup_targets
-            .lock()
-            .expect("pending_cleanup_targets poisoned")
-            .clone();
-        let removals = {
-            let mounted_network_disks = self
-                .mounted_network_disks
-                .lock()
-                .expect("mounted_network_disks poisoned");
-            collect_cleanup_target_ids(&mounted_network_disks, &pending_targets)
-        };
+        let removals = self.network_mounts.cleanup_target_ids();
 
         let mut removed = Vec::new();
         for target_id in &removals {
             self.remove_disk(*target_id)?;
             removed.push(*target_id);
         }
-        let mut pending = self
-            .pending_cleanup_targets
-            .lock()
-            .expect("pending_cleanup_targets poisoned");
         for target_id in removals {
-            pending.remove(&target_id);
+            self.network_mounts.clear_cleanup_mark(target_id);
         }
         Ok(removed)
     }
 
     pub fn network_mounts(&self) -> Vec<NetworkMountResult> {
-        self.mounted_network_disks
+        self.network_mounts.network_mounts()
+    }
+}
+
+impl MountedNetworkDisk {
+    fn new(
+        addr: String,
+        disk_id: String,
+        session: DiskSession,
+        disk_size_bytes: u64,
+        read_only: bool,
+        max_io_bytes: u32,
+    ) -> Self {
+        Self {
+            addr,
+            disk_id,
+            session,
+            disk_size_bytes,
+            read_only,
+            max_io_bytes,
+        }
+    }
+
+    fn attach_cleanup_hooks(&self, registry: NetworkMountRegistry, target_id: u32) {
+        let session_notice_registry = registry.clone();
+        self.session
+            .connection()
+            .set_session_notice_handler(Some(Arc::new(move |_notice: SessionCloseNotice| {
+                session_notice_registry.mark_for_cleanup(target_id);
+            })));
+
+        let disconnect_registry = registry;
+        self.session
+            .connection()
+            .set_disconnect_handler(Some(Arc::new(move || {
+                disconnect_registry.mark_for_cleanup(target_id);
+            })));
+    }
+
+    fn detach_cleanup_hooks(&self) {
+        self.session.connection().set_session_notice_handler(None);
+        self.session.connection().set_disconnect_handler(None);
+    }
+
+    fn close_for_remove(&self) {
+        match self.session.close() {
+            Ok(()) | Err(NetworkClientError::SessionUnavailable) => {}
+            Err(_) => {}
+        }
+        let _ = self.session.connection().close();
+    }
+
+    fn shutdown(&self) {
+        self.detach_cleanup_hooks();
+        let _ = self.session.connection().close();
+    }
+
+    fn mount_result(&self, target_id: u32) -> NetworkMountResult {
+        NetworkMountResult {
+            target_id,
+            addr: self.addr.clone(),
+            disk_id: self.disk_id.clone(),
+            session_id: self.session.session_id(),
+            disk_size_bytes: self.disk_size_bytes,
+            read_only: self.read_only,
+            max_io_bytes: self.max_io_bytes,
+        }
+    }
+}
+
+impl NetworkMountRegistry {
+    fn insert(&self, target_id: u32, mounted: MountedNetworkDisk) {
+        self.state
             .lock()
-            .expect("mounted_network_disks poisoned")
+            .expect("network_mount_state poisoned")
+            .mounted
+            .insert(target_id, mounted);
+    }
+
+    fn mounted(&self, target_id: u32) -> Option<MountedNetworkDisk> {
+        self.state
+            .lock()
+            .expect("network_mount_state poisoned")
+            .mounted
+            .get(&target_id)
+            .cloned()
+    }
+
+    fn take(&self, target_id: u32) -> Option<MountedNetworkDisk> {
+        self.state
+            .lock()
+            .expect("network_mount_state poisoned")
+            .mounted
+            .remove(&target_id)
+    }
+
+    fn mark_for_cleanup(&self, target_id: u32) {
+        self.state
+            .lock()
+            .expect("network_mount_state poisoned")
+            .pending_cleanup_targets
+            .insert(target_id);
+    }
+
+    fn clear_cleanup_mark(&self, target_id: u32) {
+        self.state
+            .lock()
+            .expect("network_mount_state poisoned")
+            .pending_cleanup_targets
+            .remove(&target_id);
+    }
+
+    fn cleanup_marker(&self, target_id: u32) -> Arc<dyn Fn() + Send + Sync> {
+        let registry = self.clone();
+        Arc::new(move || {
+            registry.mark_for_cleanup(target_id);
+        })
+    }
+
+    fn cleanup_target_ids(&self) -> Vec<u32> {
+        let state = self.state.lock().expect("network_mount_state poisoned");
+        collect_cleanup_target_ids(&state.mounted, &state.pending_cleanup_targets)
+    }
+
+    fn network_mounts(&self) -> Vec<NetworkMountResult> {
+        self.state
+            .lock()
+            .expect("network_mount_state poisoned")
+            .mounted
             .iter()
-            .map(|(target_id, mounted)| NetworkMountResult {
-                target_id: *target_id,
-                addr: mounted.addr.clone(),
-                disk_id: mounted.disk_id.clone(),
-                session_id: mounted.session.session_id(),
-                disk_size_bytes: mounted.disk_size_bytes,
-                read_only: mounted.read_only,
-                max_io_bytes: mounted.max_io_bytes,
-            })
+            .map(|(target_id, mounted)| mounted.mount_result(*target_id))
             .collect()
+    }
+
+    fn clear(&self) {
+        let mut state = self.state.lock().expect("network_mount_state poisoned");
+        state.mounted.clear();
+        state.pending_cleanup_targets.clear();
     }
 }
 
@@ -439,6 +479,8 @@ fn collect_cleanup_target_ids(
 #[cfg(test)]
 mod tests {
     use super::MountedNetworkDisk;
+    use super::NetworkMountRegistry;
+    use super::NetworkMountResult;
     use super::collect_cleanup_target_ids;
     use crate::network::DiskSession;
     use crate::network::GatewayConnection;
@@ -551,6 +593,36 @@ mod tests {
             collect_cleanup_target_ids(&mounted_network_disks, &BTreeSet::new()),
             vec![5]
         );
+
+        mount.shutdown();
+    }
+
+    #[test]
+    fn network_mount_registry_tracks_mounts_and_cleanup_marks() {
+        let mount = connected_mount(6, "A1b2C3d4E5f6G7h8", 99);
+        let registry = NetworkMountRegistry::default();
+        registry.insert(6, mount.mounted.clone());
+
+        assert_eq!(
+            registry.network_mounts(),
+            vec![NetworkMountResult {
+                target_id: 6,
+                addr: mount.mounted.addr.clone(),
+                disk_id: mount.mounted.disk_id.clone(),
+                session_id: 99,
+                disk_size_bytes: 4096,
+                read_only: false,
+                max_io_bytes: 4096,
+            }]
+        );
+
+        registry.mark_for_cleanup(6);
+        assert_eq!(registry.cleanup_target_ids(), vec![6]);
+
+        let taken = registry.take(6).expect("mount should exist");
+        assert_eq!(taken.session.session_id(), 99);
+        registry.clear_cleanup_mark(6);
+        assert!(registry.network_mounts().is_empty());
 
         mount.shutdown();
     }
