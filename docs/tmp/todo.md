@@ -2,7 +2,7 @@
 
 ## 1. 当前状态
 
-本轮文档收口已完成。
+本轮正式文档收口已完成，当前下一步切到 `tauri-client` 网盘迁移草案。
 
 ## 2. 当前正式口径
 
@@ -15,4 +15,5 @@
 
 ## 3. 当前活跃待办
 
-- 当前无活跃待办。
+- `docs/tmp/todo-tauri-client.md`
+  - 收口 `rust-cli -> tauri-client` 的网盘迁移边界、命名、draft 生命周期、重扫与 cleanup 闸口。
