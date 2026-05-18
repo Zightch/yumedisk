@@ -1,6 +1,6 @@
 # YumeDisk 文档
 
-本文档集采用当前正式口径，区分“当前已落地主线”和“驱动侧长期架构边界”。
+本文档集采用当前正式口径，区分“当前已落地主线”“参考资料”“临时工作区”和“历史归档”。
 
 当前仓内主线分为两部分：
 
@@ -20,6 +20,13 @@
 正式文档只使用当前组件名，不再引用已废弃的 dev 项目名或旧宿主目录。
 
 ## 目录结构
+
+### 网络盘正式主线
+
+- [Network Protocol](./network/README.md)
+- [Protocol Define](./network/define/README.md)
+- [Client 实现文档](./network/client/README.md)
+- [Server 实现文档](./network/server/README.md)
 
 ### 架构与目标
 
@@ -44,6 +51,11 @@
 
 - [Windows驱动问题排查笔记](./troubleshooting/Windows驱动问题排查笔记.md)
 - [进度归档](./progress/README.md)
+
+### 临时与历史
+
+- [临时工作区](./tmp/todo.md)
+- `old_dev/`：早期驱动探索归档，保留不动
 
 ### 组件与 SDK 文档
 

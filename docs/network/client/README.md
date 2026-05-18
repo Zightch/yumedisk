@@ -4,7 +4,7 @@
 
 本文档只描述当前 `rust-cli` 的实现口径。
 
-它承接 `docs/network` 没有定义的 client 侧策略，包括：
+它承接 `docs/network/define` 没有定义的 client 侧策略，包括：
 
 - connection 复用边界
 - auth/open lane 的本地对象组织
@@ -95,8 +95,9 @@ CliHost
 - 前 `16` 个字符作为 `disk_id`
 - 整个 claim code 字节串计算 `SHA512`，得到 `auth_verifier`
 - `algo_version = 1` 时，用该 `auth_verifier` 对 `AuthStart.salt` 做 `HMAC-SHA512`
+- `auth_verifier` 和后续 `proof` 在线上传输都使用原始 `64` 字节，不做十六进制编码
 
-这是一条 client 实现规则，不是 `docs/network` 强行规定的 UI 输入格式。
+这是一条 client 实现规则，不是 `docs/network/define` 强行规定的 UI 输入格式。
 
 ## 连接复用边界
 
@@ -139,7 +140,7 @@ acquire/reuse GatewayConnection
 - `auth_grants`
 - `active_sessions`
 
-本地执行规则与 `docs/network` 对齐：
+本地执行规则与 `docs/network/define` 对齐：
 
 - 同时最多一个 auth 过程
 - 同时最多一个 `SessionOpen` 过程
@@ -170,7 +171,7 @@ acquire/reuse GatewayConnection
 
 ## 当前故障收束策略
 
-`docs/network` 只定义 session / connection / route 失效事实。当前 `rust-cli` 采用的具体策略是：
+`docs/network/define` 只定义 session / connection / route 失效事实。当前 `rust-cli` 采用的具体策略是：
 
 - session 被主动关闭时：直接卸载并清理该盘
 - 收到 `SessionCloseNotice` 时：标记对应盘等待清理，然后卸载
@@ -207,7 +208,7 @@ connection 清理工作当前只发生在 session 关闭路径。
 
 ## `SessionOpen` 当前 client 口径
 
-`docs/network` 不为 `SessionOpen` 失败定义统一业务语义。当前 `rust-cli` 的实现口径是：
+`docs/network/define` 不为 `SessionOpen` 失败定义统一业务语义。当前 `rust-cli` 的实现口径是：
 
 - 只认 `OK + session_id` 为成功
 - 成功后始终再做 `SessionDescribe`

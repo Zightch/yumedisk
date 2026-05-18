@@ -10,6 +10,14 @@
 - gateway 内部如何保存 route / grant / session
 - `SessionOpen` 失败时当前项目采用什么 reject 策略
 
+## 基础约定
+
+- 除特别说明外，所有多字节整数使用 `big-endian`
+- `disk_id` 采用 `ASCII[16]`
+- 变长字节字段统一采用 `u16be len + bytes[len]`
+- 保留字段发送方必须写 `0`
+- 保留字段接收方必须校验为 `0`
+
 ## 通用业务头
 
 所有 `client-gateway` payload 都以固定头开始。
@@ -45,6 +53,7 @@
 - request：两个 bit 都为 `0`
 - response：只允许 `FLAG_RESPONSE`
 - notice：只允许 `FLAG_NOTICE`
+- 未知 bit 置位视为协议错误
 
 ### `request_id`
 
@@ -72,6 +81,8 @@
 | `session_id` | 通用头 | 已打开会话标识 |
 
 `disk_id` 只出现在 `AuthStart` body 中，不在通用头中出现。
+
+`ReadAt / WriteAt / Close` 的请求与响应 body 细节见 [data-plane](data-plane.md)。
 
 ## 操作码
 
