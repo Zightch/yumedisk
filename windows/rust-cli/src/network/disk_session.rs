@@ -250,34 +250,20 @@ mod tests {
     use std::sync::Arc;
     use std::thread;
 
-    fn staged_connection(
-        endpoint: TransportEndpoint,
-        disk_id: &str,
-        session_id: u64,
-    ) -> Arc<GatewayConnection> {
+    fn staged_connection(endpoint: TransportEndpoint, session_id: u64) -> Arc<GatewayConnection> {
         let connection = GatewayConnection::new(endpoint);
         connection
-            .begin_auth(disk_id)
-            .expect("begin auth should succeed");
-        connection
-            .finish_auth(disk_id, 9)
-            .expect("finish auth should succeed");
-        connection
-            .begin_session_open(disk_id, 9)
+            .begin_session_open()
             .expect("begin session open should succeed");
         connection
-            .finish_session_open(disk_id, 9, session_id)
+            .finish_session_open(session_id)
             .expect("finish session open should succeed");
         connection
     }
 
     #[test]
     fn disk_session_tracks_session_handle_and_lifecycle() {
-        let connection = staged_connection(
-            TransportEndpoint::new("127.0.0.1:1"),
-            "A1b2C3d4E5f6G7h8",
-            77,
-        );
+        let connection = staged_connection(TransportEndpoint::new("127.0.0.1:1"), 77);
         let session = DiskSession::new(connection, 77).expect("session should build");
 
         assert_eq!(session.session_id(), 77);
@@ -286,11 +272,7 @@ mod tests {
 
     #[test]
     fn disk_session_shares_closed_state_across_clones() {
-        let connection = staged_connection(
-            TransportEndpoint::new("127.0.0.1:1"),
-            "A1b2C3d4E5f6G7h8",
-            77,
-        );
+        let connection = staged_connection(TransportEndpoint::new("127.0.0.1:1"), 77);
         let session = DiskSession::new(connection, 77).expect("session should build");
         let cloned = session.clone();
 
@@ -385,11 +367,7 @@ mod tests {
             write_frame(&mut stream, &write_response).expect("write write response");
         });
 
-        let connection = staged_connection(
-            TransportEndpoint::new(address.to_string()),
-            "A1b2C3d4E5f6G7h8",
-            77,
-        );
+        let connection = staged_connection(TransportEndpoint::new(address.to_string()), 77);
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(connection.clone(), 77).expect("session should build");
 
@@ -436,11 +414,7 @@ mod tests {
             write_frame(&mut stream, &close_response).expect("write close response");
         });
 
-        let connection = staged_connection(
-            TransportEndpoint::new(address.to_string()),
-            "A1b2C3d4E5f6G7h8",
-            77,
-        );
+        let connection = staged_connection(TransportEndpoint::new(address.to_string()), 77);
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(connection.clone(), 77).expect("session should build");
 
@@ -453,11 +427,7 @@ mod tests {
 
     #[test]
     fn disk_session_marks_itself_terminal_after_session_is_cleared() {
-        let connection = staged_connection(
-            TransportEndpoint::new("127.0.0.1:1"),
-            "A1b2C3d4E5f6G7h8",
-            77,
-        );
+        let connection = staged_connection(TransportEndpoint::new("127.0.0.1:1"), 77);
         let session = DiskSession::new(connection.clone(), 77).expect("session should build");
 
         connection.clear_session(77);

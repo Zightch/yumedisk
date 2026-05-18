@@ -19,8 +19,7 @@ impl SessionOpener {
     }
 
     pub fn open(&self, grant: &AuthGrant) -> Result<u64, NetworkClientError> {
-        self.connection
-            .begin_session_open(grant.disk_id(), grant.auth_id())?;
+        self.connection.begin_session_open()?;
 
         let request_id = self.connection.allocate_request_id();
         let payload = SessionOpenRequest {
@@ -31,8 +30,7 @@ impl SessionOpener {
         let response_payload = match self.connection.send_request_and_wait(payload) {
             Ok(payload) => payload,
             Err(error) => {
-                self.connection
-                    .cancel_session_open(grant.disk_id(), grant.auth_id());
+                self.connection.fail_session_open();
                 return Err(error);
             }
         };
@@ -41,18 +39,12 @@ impl SessionOpener {
         {
             Ok(response) => response,
             Err(error) => {
-                self.connection
-                    .cancel_session_open(grant.disk_id(), grant.auth_id());
+                self.connection.fail_session_open();
                 return Err(error);
             }
         };
-        if let Err(error) = self.connection.finish_session_open(
-            grant.disk_id(),
-            grant.auth_id(),
-            response.session_id,
-        ) {
-            self.connection
-                .cancel_session_open(grant.disk_id(), grant.auth_id());
+        if let Err(error) = self.connection.finish_session_open(response.session_id) {
+            self.connection.fail_session_open();
             return Err(error);
         }
 
@@ -136,12 +128,6 @@ mod tests {
 
         let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
         connection.connect().expect("connect should succeed");
-        connection
-            .begin_auth(disk_id)
-            .expect("begin auth should succeed");
-        connection
-            .finish_auth(disk_id, 88)
-            .expect("finish auth should succeed");
         let opener = SessionOpener::new(connection.clone());
         let grant = AuthGrant::new(disk_id, 88).expect("grant should build");
 
@@ -155,13 +141,13 @@ mod tests {
     }
 
     #[test]
-    fn session_open_rejects_unauthorized_disk_before_network_round_trip() {
+    fn session_open_requires_a_live_connection_or_server_response() {
         let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:1"));
         let opener = SessionOpener::new(connection);
         let grant = AuthGrant::new("A1b2C3d4E5f6G7h8", 88).expect("grant should build");
 
         let error = opener.open(&grant).expect_err("open should fail");
-        assert_eq!(error.to_string(), "invalid-state: session_open");
+        assert_eq!(error.to_string(), "session-unavailable");
     }
 
     #[test]
@@ -198,12 +184,6 @@ mod tests {
 
         let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
         connection.connect().expect("connect should succeed");
-        connection
-            .begin_auth(disk_id)
-            .expect("begin auth should succeed");
-        connection
-            .finish_auth(disk_id, 88)
-            .expect("finish auth should succeed");
         let opener = SessionOpener::new(connection.clone());
         let grant = AuthGrant::new(disk_id, 88).expect("grant should build");
 

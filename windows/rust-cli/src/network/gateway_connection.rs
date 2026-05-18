@@ -55,18 +55,11 @@ pub struct GatewayResponseFuture {
     response_rx: Receiver<Result<Vec<u8>, NetworkClientError>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct ConnectionLifecycle {
-    auth_state: ConnectionPhase,
+    auth_in_flight: bool,
+    open_in_flight: bool,
     active_sessions: HashSet<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum ConnectionPhase {
-    Idle,
-    AuthPending { disk_id: String },
-    Authorized { disk_id: String, auth_id: u64 },
-    SessionOpenPending { disk_id: String, auth_id: u64 },
 }
 
 impl GatewayResponseFuture {
@@ -90,10 +83,7 @@ impl GatewayConnection {
             pending_requests: Mutex::new(HashMap::new()),
             disconnect_handler: Mutex::new(None),
             session_notice_handler: Mutex::new(None),
-            lifecycle: Mutex::new(ConnectionLifecycle {
-                auth_state: ConnectionPhase::Idle,
-                active_sessions: HashSet::new(),
-            }),
+            lifecycle: Mutex::new(ConnectionLifecycle::default()),
             receive_loop_started: AtomicBool::new(false),
         })
     }
@@ -197,112 +187,59 @@ impl GatewayConnection {
             .len()
     }
 
-    pub fn begin_auth(&self, disk_id: &str) -> Result<(), NetworkClientError> {
+    pub fn begin_auth(&self) -> Result<(), NetworkClientError> {
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
-        match &lifecycle.auth_state {
-            ConnectionPhase::Idle => {
-                lifecycle.auth_state = ConnectionPhase::AuthPending {
-                    disk_id: disk_id.to_string(),
-                };
-                Ok(())
-            }
-            _ => Err(NetworkClientError::InvalidState("auth_start")),
+        if lifecycle.auth_in_flight || lifecycle.open_in_flight {
+            return Err(NetworkClientError::InvalidState("auth_start"));
         }
+
+        lifecycle.auth_in_flight = true;
+        Ok(())
     }
 
     pub fn fail_auth(&self) {
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
-        if matches!(lifecycle.auth_state, ConnectionPhase::AuthPending { .. }) {
-            lifecycle.auth_state = ConnectionPhase::Idle;
-        }
+        lifecycle.auth_in_flight = false;
     }
 
-    pub fn finish_auth(&self, disk_id: &str, auth_id: u64) -> Result<(), NetworkClientError> {
-        if auth_id == 0 {
-            return Err(NetworkClientError::InvalidArgument("auth_id"));
-        }
-
+    pub fn finish_auth(&self) -> Result<(), NetworkClientError> {
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
-        match &lifecycle.auth_state {
-            ConnectionPhase::AuthPending {
-                disk_id: pending_disk_id,
-            } if pending_disk_id == disk_id => {
-                lifecycle.auth_state = ConnectionPhase::Authorized {
-                    disk_id: disk_id.to_string(),
-                    auth_id,
-                };
-                Ok(())
-            }
-            _ => Err(NetworkClientError::InvalidState("auth_finish")),
+        if !lifecycle.auth_in_flight || lifecycle.open_in_flight {
+            return Err(NetworkClientError::InvalidState("auth_finish"));
         }
+
+        lifecycle.auth_in_flight = false;
+        Ok(())
     }
 
-    pub fn begin_session_open(
-        &self,
-        disk_id: &str,
-        auth_id: u64,
-    ) -> Result<(), NetworkClientError> {
-        if auth_id == 0 {
-            return Err(NetworkClientError::InvalidArgument("auth_id"));
-        }
-
+    pub fn begin_session_open(&self) -> Result<(), NetworkClientError> {
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
-        match &lifecycle.auth_state {
-            ConnectionPhase::Authorized {
-                disk_id: authorized_disk_id,
-                auth_id: authorized_auth_id,
-            } if authorized_disk_id == disk_id && *authorized_auth_id == auth_id => {
-                lifecycle.auth_state = ConnectionPhase::SessionOpenPending {
-                    disk_id: disk_id.to_string(),
-                    auth_id,
-                };
-                Ok(())
-            }
-            _ => Err(NetworkClientError::InvalidState("session_open")),
+        if lifecycle.auth_in_flight || lifecycle.open_in_flight {
+            return Err(NetworkClientError::InvalidState("session_open"));
         }
+
+        lifecycle.open_in_flight = true;
+        Ok(())
     }
 
-    pub fn finish_session_open(
-        &self,
-        disk_id: &str,
-        auth_id: u64,
-        session_id: u64,
-    ) -> Result<(), NetworkClientError> {
-        if auth_id == 0 {
-            return Err(NetworkClientError::InvalidArgument("auth_id"));
-        }
+    pub fn finish_session_open(&self, session_id: u64) -> Result<(), NetworkClientError> {
         if session_id == 0 {
             return Err(NetworkClientError::InvalidArgument("session_id"));
         }
 
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
-        match &lifecycle.auth_state {
-            ConnectionPhase::SessionOpenPending {
-                disk_id: pending_disk_id,
-                auth_id: pending_auth_id,
-            } if pending_disk_id == disk_id && *pending_auth_id == auth_id => {
-                lifecycle.auth_state = ConnectionPhase::Idle;
-                lifecycle.active_sessions.insert(session_id);
-                Ok(())
-            }
-            _ => Err(NetworkClientError::InvalidState("session_open")),
+        if !lifecycle.open_in_flight || lifecycle.auth_in_flight {
+            return Err(NetworkClientError::InvalidState("session_open"));
         }
+
+        lifecycle.open_in_flight = false;
+        lifecycle.active_sessions.insert(session_id);
+        Ok(())
     }
 
-    pub fn cancel_session_open(&self, disk_id: &str, auth_id: u64) {
+    pub fn fail_session_open(&self) {
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
-        if matches!(
-            &lifecycle.auth_state,
-            ConnectionPhase::SessionOpenPending {
-                disk_id: pending_disk_id,
-                auth_id: pending_auth_id,
-            } if pending_disk_id == disk_id && *pending_auth_id == auth_id
-        ) {
-            lifecycle.auth_state = ConnectionPhase::Authorized {
-                disk_id: disk_id.to_string(),
-                auth_id,
-            };
-        }
+        lifecycle.open_in_flight = false;
     }
 
     pub fn is_session_active(&self, session_id: u64) -> bool {
@@ -321,43 +258,14 @@ impl GatewayConnection {
             .remove(&session_id);
     }
 
-    pub fn is_authorized(&self, disk_id: &str) -> bool {
-        let lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
-        matches!(
-            &lifecycle.auth_state,
-            ConnectionPhase::Authorized {
-                disk_id: current,
-                auth_id: _,
-            }
-                | ConnectionPhase::SessionOpenPending {
-                    disk_id: current,
-                    auth_id: _,
-                } if current == disk_id
-        )
-    }
-
-    pub fn authorized_disk_id(&self) -> Option<String> {
-        let lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
-        match &lifecycle.auth_state {
-            ConnectionPhase::Authorized {
-                disk_id,
-                auth_id: _,
-            }
-            | ConnectionPhase::SessionOpenPending {
-                disk_id,
-                auth_id: _,
-            } => Some(disk_id.clone()),
-            _ => None,
-        }
-    }
-
     pub fn phase_name(&self) -> &'static str {
         let lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
-        match &lifecycle.auth_state {
-            ConnectionPhase::Idle => "idle",
-            ConnectionPhase::AuthPending { .. } => "auth-pending",
-            ConnectionPhase::Authorized { .. } => "authorized",
-            ConnectionPhase::SessionOpenPending { .. } => "session-open-pending",
+        if lifecycle.auth_in_flight {
+            "auth-pending"
+        } else if lifecycle.open_in_flight {
+            "session-open-pending"
+        } else {
+            "idle"
         }
     }
 
@@ -371,7 +279,8 @@ impl GatewayConnection {
 
     fn reset_lifecycle(&self) {
         let mut lifecycle = self.lifecycle.lock().expect("lifecycle poisoned");
-        lifecycle.auth_state = ConnectionPhase::Idle;
+        lifecycle.auth_in_flight = false;
+        lifecycle.open_in_flight = false;
         lifecycle.active_sessions.clear();
     }
 
@@ -498,6 +407,7 @@ fn map_transport_error(error: TransportError) -> NetworkClientError {
 mod tests {
     use super::GatewayConnection;
     use crate::network::ClientOperationCode;
+    use crate::network::FLAG_NOTICE;
     use crate::network::FLAG_RESPONSE;
     use crate::network::PROTOCOL_VERSION;
     use crate::network::ProtocolHeader;
@@ -513,35 +423,29 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn gateway_connection_tracks_auth_grants_and_multiple_active_sessions() {
-        let disk_one = "A1b2C3d4E5f6G7h8";
-        let disk_two = "B1c2D3e4F5g6H7i8";
+    fn gateway_connection_allows_multiple_sessions_without_persisting_authorized_phase() {
         let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:1"));
 
+        connection.begin_auth().expect("first auth should begin");
+        connection.finish_auth().expect("first auth should finish");
+        assert_eq!(connection.phase_name(), "idle");
+
         connection
-            .begin_auth(disk_one)
-            .expect("first auth should begin");
-        connection
-            .finish_auth(disk_one, 11)
-            .expect("first auth should finish");
-        connection
-            .begin_session_open(disk_one, 11)
+            .begin_session_open()
             .expect("first open should begin");
         connection
-            .finish_session_open(disk_one, 11, 101)
+            .finish_session_open(101)
             .expect("first open should finish");
 
         connection
-            .begin_auth(disk_two)
+            .begin_auth()
             .expect("second auth should begin even with an active session");
+        connection.finish_auth().expect("second auth should finish");
         connection
-            .finish_auth(disk_two, 22)
-            .expect("second auth should finish");
-        connection
-            .begin_session_open(disk_two, 22)
+            .begin_session_open()
             .expect("second open should begin");
         connection
-            .finish_session_open(disk_two, 22, 202)
+            .finish_session_open(202)
             .expect("second open should finish");
 
         assert_eq!(connection.phase_name(), "idle");
@@ -724,16 +628,10 @@ mod tests {
     fn gateway_connection_emits_session_close_notice_and_clears_session() {
         let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:1"));
         connection
-            .begin_auth("A1b2C3d4E5f6G7h8")
-            .expect("begin auth should succeed");
-        connection
-            .finish_auth("A1b2C3d4E5f6G7h8", 9)
-            .expect("finish auth should succeed");
-        connection
-            .begin_session_open("A1b2C3d4E5f6G7h8", 9)
+            .begin_session_open()
             .expect("begin session open should succeed");
         connection
-            .finish_session_open("A1b2C3d4E5f6G7h8", 9, 77)
+            .finish_session_open(77)
             .expect("finish session open should succeed");
         let (notice_tx, notice_rx) = mpsc::channel();
         connection.set_session_notice_handler(Some(Arc::new(move |notice| {
@@ -744,7 +642,7 @@ mod tests {
             protocol_version: PROTOCOL_VERSION,
             header_len: crate::network::HEADER_SIZE as u8,
             op_code: ClientOperationCode::SessionCloseNotice,
-            flags: crate::network::FLAG_NOTICE,
+            flags: FLAG_NOTICE,
             status_code: ProtocolStatusCode::Ok,
             reserved: 0,
             request_id: 0,

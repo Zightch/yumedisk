@@ -53,7 +53,7 @@ impl ConnectionAuthenticator {
 
     pub fn authenticate(&self, claim_code: &str) -> Result<AuthGrant, NetworkClientError> {
         let material = parse_claim_code(claim_code)?;
-        self.connection.begin_auth(&material.disk_id)?;
+        self.connection.begin_auth()?;
 
         let start_request_id = self.connection.allocate_request_id();
         let start_payload = AuthStartRequest {
@@ -119,10 +119,7 @@ impl ConnectionAuthenticator {
             }
         };
 
-        if let Err(error) = self
-            .connection
-            .finish_auth(grant.disk_id(), grant.auth_id())
-        {
+        if let Err(error) = self.connection.finish_auth() {
             self.connection.fail_auth();
             return Err(error);
         }
@@ -272,7 +269,7 @@ mod tests {
             .expect("authenticate should succeed");
         assert_eq!(auth.disk_id(), "A1b2C3d4E5f6G7h8");
         assert_eq!(auth.auth_id(), 1);
-        assert!(connection.is_authorized("A1b2C3d4E5f6G7h8"));
+        assert_eq!(connection.phase_name(), "idle");
 
         connection.close().expect("close should succeed");
         server.join().expect("server should join");
@@ -343,7 +340,7 @@ mod tests {
             .authenticate(claim_code)
             .expect_err("authenticate should fail");
         assert_eq!(error.to_string(), "unauthorized-disk: A1b2C3d4E5f6G7h8");
-        assert!(!connection.is_authorized("A1b2C3d4E5f6G7h8"));
+        assert_eq!(connection.phase_name(), "idle");
 
         let _ = connection.close();
         server.join().expect("server should join");
@@ -353,11 +350,9 @@ mod tests {
     fn authenticate_rejects_second_attempt_in_non_idle_phase() {
         let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:1"));
         connection
-            .finish_auth("A1b2C3d4E5f6G7h8", 9)
+            .finish_auth()
             .expect_err("finish auth without pending should fail");
-        connection
-            .begin_auth("A1b2C3d4E5f6G7h8")
-            .expect("begin auth should succeed");
+        connection.begin_auth().expect("begin auth should succeed");
 
         let authenticator = ConnectionAuthenticator::new(connection);
         let claim_code =

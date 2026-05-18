@@ -208,30 +208,20 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    fn staged_connection(
-        endpoint: TransportEndpoint,
-        disk_id: &str,
-        session_id: u64,
-    ) -> Arc<GatewayConnection> {
+    fn staged_connection(endpoint: TransportEndpoint, session_id: u64) -> Arc<GatewayConnection> {
         let connection = GatewayConnection::new(endpoint);
         connection
-            .begin_auth(disk_id)
-            .expect("begin auth should succeed");
-        connection
-            .finish_auth(disk_id, 9)
-            .expect("finish auth should succeed");
-        connection
-            .begin_session_open(disk_id, 9)
+            .begin_session_open()
             .expect("begin session open should succeed");
         connection
-            .finish_session_open(disk_id, 9, session_id)
+            .finish_session_open(session_id)
             .expect("finish session open should succeed");
         connection
     }
 
     #[test]
     fn bind_requires_explicit_disk_id_and_metadata() {
-        let connection = staged_connection(TransportEndpoint::new("127.0.0.1:9000"), "disk-1", 7);
+        let connection = staged_connection(TransportEndpoint::new("127.0.0.1:9000"), 7);
         let session = DiskSession::new(connection, 7).expect("session should build");
 
         let error = NetworkMedia::bind(
@@ -304,11 +294,7 @@ mod tests {
             write_frame(&mut stream, &second_response).expect("write second response");
         });
 
-        let connection = staged_connection(
-            TransportEndpoint::new(address.to_string()),
-            "A1b2C3d4E5f6G7h8",
-            77,
-        );
+        let connection = staged_connection(TransportEndpoint::new(address.to_string()), 77);
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(connection.clone(), 77).expect("session should build");
         let media = NetworkMedia::bind(
@@ -392,11 +378,7 @@ mod tests {
             write_frame(&mut stream, &second_response).expect("write second response");
         });
 
-        let connection = staged_connection(
-            TransportEndpoint::new(address.to_string()),
-            "A1b2C3d4E5f6G7h8",
-            77,
-        );
+        let connection = staged_connection(TransportEndpoint::new(address.to_string()), 77);
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(connection.clone(), 77).expect("session should build");
         let media = NetworkMedia::bind(
@@ -468,11 +450,7 @@ mod tests {
             thread::sleep(Duration::from_millis(20));
         });
 
-        let connection = staged_connection(
-            TransportEndpoint::new(address.to_string()),
-            "A1b2C3d4E5f6G7h8",
-            77,
-        );
+        let connection = staged_connection(TransportEndpoint::new(address.to_string()), 77);
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(connection.clone(), 77).expect("session should build");
         let (invalidate_tx, invalidate_rx) = mpsc::channel();

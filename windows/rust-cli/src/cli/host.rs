@@ -463,23 +463,13 @@ mod tests {
         }
     }
 
-    fn staged_connection(
-        endpoint: TransportEndpoint,
-        disk_id: &str,
-        session_id: u64,
-    ) -> Arc<GatewayConnection> {
+    fn staged_connection(endpoint: TransportEndpoint, session_id: u64) -> Arc<GatewayConnection> {
         let connection = GatewayConnection::new(endpoint);
         connection
-            .begin_auth(disk_id)
-            .expect("begin auth should succeed");
-        connection
-            .finish_auth(disk_id, 9)
-            .expect("finish auth should succeed");
-        connection
-            .begin_session_open(disk_id, 9)
+            .begin_session_open()
             .expect("begin session open should succeed");
         connection
-            .finish_session_open(disk_id, 9, session_id)
+            .finish_session_open(session_id)
             .expect("finish session open should succeed");
         connection
     }
@@ -492,11 +482,7 @@ mod tests {
             thread::sleep(Duration::from_millis(200));
         });
 
-        let connection = staged_connection(
-            TransportEndpoint::new(address.to_string()),
-            disk_id,
-            session_id,
-        );
+        let connection = staged_connection(TransportEndpoint::new(address.to_string()), session_id);
         connection.connect().expect("connect should succeed");
         let session =
             DiskSession::new(connection.clone(), session_id).expect("session should build");
@@ -530,11 +516,7 @@ mod tests {
 
     #[test]
     fn collect_cleanup_target_ids_includes_connection_loss() {
-        let connection = staged_connection(
-            TransportEndpoint::new("127.0.0.1:1"),
-            "A1b2C3d4E5f6G7h8",
-            77,
-        );
+        let connection = staged_connection(TransportEndpoint::new("127.0.0.1:1"), 77);
         let session = DiskSession::new(connection, 77).expect("session should build");
         let mounted_network_disks = BTreeMap::from([(
             4,

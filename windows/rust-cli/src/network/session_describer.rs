@@ -136,16 +136,10 @@ mod tests {
 
         let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
         connection
-            .begin_auth("A1b2C3d4E5f6G7h8")
-            .expect("begin auth should succeed");
-        connection
-            .finish_auth("A1b2C3d4E5f6G7h8", 9)
-            .expect("finish auth should succeed");
-        connection
-            .begin_session_open("A1b2C3d4E5f6G7h8", 9)
+            .begin_session_open()
             .expect("begin open should succeed");
         connection
-            .finish_session_open("A1b2C3d4E5f6G7h8", 9, 77)
+            .finish_session_open(77)
             .expect("finish open should succeed");
         connection.connect().expect("connect should succeed");
         let describer = SessionDescriber::new(connection.clone());

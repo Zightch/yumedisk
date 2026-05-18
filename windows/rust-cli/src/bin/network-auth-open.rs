@@ -208,7 +208,7 @@ impl DebugShell {
         println!("  help   show this help");
         println!("  state  print connection/auth/session state");
         println!("  auth   run AuthStart/AuthFinish on current connection");
-        println!("  open   run SessionOpen/SessionDescribe on current authorized connection");
+        println!("  open   run SessionOpen/SessionDescribe using current auth grant");
         println!("  close  run Close for current session");
         println!("  exit   close session/connection and quit");
     }
