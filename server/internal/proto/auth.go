@@ -10,6 +10,7 @@ const (
 	AuthSaltSize      = 16
 	AuthTokenMinSize  = 1
 	AuthProofSize     = 64
+	AuthIDSize        = 8
 	AuthAlgoVersionV1 = 1
 )
 
@@ -100,8 +101,17 @@ func BuildAuthFinishRequestBody(challengeToken []byte, proof [AuthProofSize]byte
 	return body
 }
 
-func BuildAuthFinishResponseBody() []byte {
-	return nil
+func BuildAuthFinishResponseBody(authID uint64) []byte {
+	body := make([]byte, AuthIDSize)
+	binary.BigEndian.PutUint64(body, authID)
+	return body
+}
+
+func ParseAuthFinishResponseBody(body []byte) (uint64, error) {
+	if len(body) != AuthIDSize {
+		return 0, ErrAuthBody
+	}
+	return binary.BigEndian.Uint64(body), nil
 }
 
 func isAlphaNumericASCII(b []byte) bool {

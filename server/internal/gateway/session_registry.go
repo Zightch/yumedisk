@@ -12,6 +12,10 @@ type gatewaySession struct {
 	ClientConnection uint64
 	RouteConnection  uint64
 	UpstreamSession  uint64
+	DiskID           string
+	DiskSizeBytes    uint64
+	ReadOnly         bool
+	MaxIOBytes       uint32
 }
 
 type sessionRegistry struct {
@@ -31,7 +35,7 @@ func newSessionRegistry() *sessionRegistry {
 	}
 }
 
-func (r *sessionRegistry) Open(clientConnectionID uint64, routeConnectionID uint64, upstreamSessionID uint64) uint64 {
+func (r *sessionRegistry) Open(clientConnectionID uint64, routeConnectionID uint64, upstreamSessionID uint64, diskID string, diskSizeBytes uint64, readOnly bool, maxIOBytes uint32) uint64 {
 	id := gatewaySessionBaseID + r.nextID.Add(1)
 	if id == 0 {
 		id = gatewaySessionBaseID + r.nextID.Add(1)
@@ -42,6 +46,10 @@ func (r *sessionRegistry) Open(clientConnectionID uint64, routeConnectionID uint
 		ClientConnection: clientConnectionID,
 		RouteConnection:  routeConnectionID,
 		UpstreamSession:  upstreamSessionID,
+		DiskID:           diskID,
+		DiskSizeBytes:    diskSizeBytes,
+		ReadOnly:         readOnly,
+		MaxIOBytes:       maxIOBytes,
 	}
 
 	r.mu.Lock()
@@ -88,6 +96,7 @@ func (r *sessionRegistry) CloseConnection(connectionID uint64) []gatewaySession 
 		}
 		items = append(items, item)
 		delete(r.items, id)
+		r.removeRouteIndex(item.RouteConnection, id)
 	}
 	delete(r.byConn, connectionID)
 	r.mu.Unlock()

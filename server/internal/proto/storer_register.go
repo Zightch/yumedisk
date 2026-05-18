@@ -9,24 +9,23 @@ const (
 	StorerRegisterHeaderSize = 2
 	StorerRegisterDiskIDSize = 16
 	StorerRegisterFlagsRO    = 1 << 0
-	StorerRegisterFixedSize  = StorerRegisterHeaderSize + StorerRegisterDiskIDSize + AuthProofSize + 8 + 4 + 4 + 2 + 2
+	StorerRegisterFixedSize  = StorerRegisterHeaderSize + StorerRegisterDiskIDSize + AuthProofSize + 8 + 4 + 2 + 2
 )
 
 var ErrStorerRegisterBody = errors.New("storer register body invalid")
 
 type StorerRegisterRequest struct {
-	GatewayToken      string
-	DiskID            string
-	AuthVerifier      [64]byte
-	DiskSizeBytes     uint64
-	ReadOnly          bool
-	MaxIOBytes        uint32
-	SessionTTLSeconds uint32
+	GatewayToken  string
+	DiskID        string
+	AuthVerifier  [64]byte
+	DiskSizeBytes uint64
+	ReadOnly      bool
+	MaxIOBytes    uint32
 }
 
 func BuildStorerRegisterRequestBody(req StorerRegisterRequest) []byte {
 	tokenBytes := []byte(req.GatewayToken)
-	body := make([]byte, StorerRegisterHeaderSize+len(tokenBytes)+StorerRegisterDiskIDSize+AuthProofSize+8+4+4+2+2)
+	body := make([]byte, StorerRegisterHeaderSize+len(tokenBytes)+StorerRegisterDiskIDSize+AuthProofSize+8+4+2+2)
 	binary.BigEndian.PutUint16(body[0:2], uint16(len(tokenBytes)))
 	offset := StorerRegisterHeaderSize
 	copy(body[offset:offset+len(tokenBytes)], tokenBytes)
@@ -38,8 +37,6 @@ func BuildStorerRegisterRequestBody(req StorerRegisterRequest) []byte {
 	binary.BigEndian.PutUint64(body[offset:offset+8], req.DiskSizeBytes)
 	offset += 8
 	binary.BigEndian.PutUint32(body[offset:offset+4], req.MaxIOBytes)
-	offset += 4
-	binary.BigEndian.PutUint32(body[offset:offset+4], req.SessionTTLSeconds)
 	offset += 4
 	var flags uint16
 	if req.ReadOnly {
@@ -59,7 +56,7 @@ func ParseStorerRegisterRequestBody(body []byte) (StorerRegisterRequest, error) 
 	if tokenLen <= 0 {
 		return StorerRegisterRequest{}, ErrStorerRegisterBody
 	}
-	expectedLen := StorerRegisterHeaderSize + tokenLen + StorerRegisterDiskIDSize + AuthProofSize + 8 + 4 + 4 + 2 + 2
+	expectedLen := StorerRegisterHeaderSize + tokenLen + StorerRegisterDiskIDSize + AuthProofSize + 8 + 4 + 2 + 2
 	if len(body) != expectedLen {
 		return StorerRegisterRequest{}, ErrStorerRegisterBody
 	}
@@ -83,8 +80,6 @@ func ParseStorerRegisterRequestBody(body []byte) (StorerRegisterRequest, error) 
 	offset += 8
 	maxIO := binary.BigEndian.Uint32(body[offset : offset+4])
 	offset += 4
-	ttl := binary.BigEndian.Uint32(body[offset : offset+4])
-	offset += 4
 	flags := binary.BigEndian.Uint16(body[offset : offset+2])
 	offset += 2
 	reserved := binary.BigEndian.Uint16(body[offset : offset+2])
@@ -93,12 +88,11 @@ func ParseStorerRegisterRequestBody(body []byte) (StorerRegisterRequest, error) 
 	}
 
 	return StorerRegisterRequest{
-		GatewayToken:      token,
-		DiskID:            diskID,
-		AuthVerifier:      authVerifier,
-		DiskSizeBytes:     diskSize,
-		ReadOnly:          flags&StorerRegisterFlagsRO != 0,
-		MaxIOBytes:        maxIO,
-		SessionTTLSeconds: ttl,
+		GatewayToken:  token,
+		DiskID:        diskID,
+		AuthVerifier:  authVerifier,
+		DiskSizeBytes: diskSize,
+		ReadOnly:      flags&StorerRegisterFlagsRO != 0,
+		MaxIOBytes:    maxIO,
 	}, nil
 }

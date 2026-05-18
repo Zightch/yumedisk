@@ -26,7 +26,7 @@ type StorerRouteRegistry struct {
 }
 
 type routeDisconnectHandler interface {
-	CloseRouteConnection(routeConnectionID uint64)
+	CloseRouteConnection(routeConnectionID uint64, diskIDs []string)
 }
 
 func NewStorerRouteRegistry() *StorerRouteRegistry {
@@ -59,7 +59,7 @@ func (r *StorerRouteRegistry) AttachConnection(connectionID uint64, conn net.Con
 }
 
 func (r *StorerRouteRegistry) DisconnectConnection(connectionID uint64) {
-	r.routes.DisconnectConnection(connectionID)
+	disconnected := r.routes.DisconnectConnection(connectionID)
 
 	r.mu.Lock()
 	conn := r.connections[connectionID]
@@ -74,7 +74,11 @@ func (r *StorerRouteRegistry) DisconnectConnection(connectionID uint64) {
 	handler := r.handler
 	r.handlerMu.RUnlock()
 	if handler != nil {
-		handler.CloseRouteConnection(connectionID)
+		diskIDs := make([]string, 0, len(disconnected))
+		for _, entry := range disconnected {
+			diskIDs = append(diskIDs, entry.DiskID)
+		}
+		handler.CloseRouteConnection(connectionID, diskIDs)
 	}
 }
 
@@ -85,62 +89,35 @@ func (r *StorerRouteRegistry) connection(connectionID uint64) (*storerConnection
 	return conn, ok
 }
 
-func (r *StorerRouteRegistry) Open(clientConnectionID uint64, diskID string) (session.Descriptor, error) {
-	entry, ok := r.LookupRoute(diskID)
-	if !ok {
-		return session.Descriptor{}, session.ErrSessionUnavailable
-	}
+func (r *StorerRouteRegistry) Open(clientConnectionID uint64, entry route.Entry) (uint64, error) {
 	conn, ok := r.connection(entry.ConnectionID)
 	if !ok {
-		return session.Descriptor{}, session.ErrSessionUnavailable
+		return 0, session.ErrSessionUnavailable
 	}
 
-	req := make([]byte, proto.HeaderSize+len(diskID))
+	req := make([]byte, proto.HeaderSize)
 	proto.EncodeHeader(proto.Header{
 		ProtocolVersion: proto.ProtocolVersion,
 		HeaderLen:       proto.HeaderSize,
 		OpCode:          proto.OpSessionOpen,
 		RequestID:       1,
 	}, req)
-	copy(req[proto.HeaderSize:], []byte(diskID))
 
 	resp, err := conn.roundTrip(req)
 	if err != nil {
-		return session.Descriptor{}, session.ErrSessionUnavailable
+		return 0, session.ErrSessionUnavailable
 	}
 	header, err := proto.ParseHeader(resp)
 	if err != nil {
-		return session.Descriptor{}, session.ErrSessionUnavailable
+		return 0, session.ErrSessionUnavailable
 	}
 	if header.StatusCode != proto.StatusOK {
-		return session.Descriptor{}, mapResponseStatus(header.StatusCode)
+		return 0, mapResponseStatus(header.StatusCode)
 	}
-	diskSize, maxIOBytes, ttlSeconds, readOnly, err := proto.ParseSessionOpenResponseBody(resp[proto.HeaderSize:])
-	if err != nil {
-		return session.Descriptor{}, session.ErrSessionUnavailable
+	if len(resp) != proto.HeaderSize {
+		return 0, session.ErrSessionUnavailable
 	}
-	return session.Descriptor{
-		ID:         header.SessionID,
-		DiskID:     diskID,
-		DiskSize:   diskSize,
-		ReadOnly:   readOnly,
-		MaxIOBytes: maxIOBytes,
-		TTLSeconds: ttlSeconds,
-		ExpiresAt:  time.Now().Add(time.Duration(ttlSeconds) * time.Second),
-		Connection: clientConnectionID,
-	}, nil
-}
-
-func (r *StorerRouteRegistry) Ping(routeConnectionID uint64, sessionID uint64) (session.Descriptor, bool) {
-	resp, err := r.roundTripData(routeConnectionID, proto.OpPing, sessionID, proto.BuildPingResponseBody(0))
-	if err != nil {
-		return session.Descriptor{}, false
-	}
-	header, err := proto.ParseHeader(resp)
-	if err != nil || header.StatusCode != proto.StatusOK {
-		return session.Descriptor{}, false
-	}
-	return session.Descriptor{ID: sessionID}, true
+	return header.SessionID, nil
 }
 
 func (r *StorerRouteRegistry) Close(routeConnectionID uint64, sessionID uint64) {
@@ -218,9 +195,9 @@ type storerConnection struct {
 
 func newStorerConnection(id uint64, conn net.Conn) *storerConnection {
 	return &storerConnection{
-		id:      id,
-		conn:    conn,
-		pending: make(map[uint64]chan []byte),
+		id:            id,
+		conn:          conn,
+		pending:       make(map[uint64]chan []byte),
 		heartbeatStop: make(chan struct{}),
 	}
 }
@@ -298,15 +275,14 @@ func (c *storerConnection) serve(ctx context.Context, registry *StorerRouteRegis
 				continue
 			}
 			err = registry.Register(route.Entry{
-				DiskID:            req.DiskID,
-				AuthVerifier:      req.AuthVerifier,
-				RouteTarget:       c.conn.RemoteAddr().String(),
-				ConnectionID:      c.id,
-				Connected:         true,
-				DiskSizeBytes:     req.DiskSizeBytes,
-				ReadOnly:          req.ReadOnly,
-				MaxIOBytes:        req.MaxIOBytes,
-				SessionTTLSeconds: req.SessionTTLSeconds,
+				DiskID:        req.DiskID,
+				AuthVerifier:  req.AuthVerifier,
+				RouteTarget:   c.conn.RemoteAddr().String(),
+				ConnectionID:  c.id,
+				Connected:     true,
+				DiskSizeBytes: req.DiskSizeBytes,
+				ReadOnly:      req.ReadOnly,
+				MaxIOBytes:    req.MaxIOBytes,
 			})
 			if err != nil {
 				resp := proto.BuildErrorResponse(header, proto.StatusInvalidRequest)
@@ -382,14 +358,14 @@ func (c *storerConnection) startHeartbeat(interval time.Duration, timeout time.D
 				if nonce == 0 {
 					nonce++
 				}
-				payload := make([]byte, proto.HeaderSize+proto.PingBodySize)
+				payload := make([]byte, proto.HeaderSize+proto.LinkHeartbeatBodySize)
 				proto.EncodeHeader(proto.Header{
 					ProtocolVersion: proto.ProtocolVersion,
 					HeaderLen:       proto.HeaderSize,
 					OpCode:          proto.OpLinkHeartbeat,
 					RequestID:       1,
 				}, payload)
-				copy(payload[proto.HeaderSize:], proto.BuildPingResponseBody(nonce))
+				copy(payload[proto.HeaderSize:], proto.BuildLinkHeartbeatBody(nonce))
 				if _, err := c.roundTrip(payload); err != nil {
 					_ = c.conn.Close()
 					return

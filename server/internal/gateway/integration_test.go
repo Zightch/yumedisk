@@ -55,9 +55,7 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 		Role:            config.StorerRoleStorer,
 		StorageFilePath: rawPath,
 		ClaimCode:       claimCode,
-		Whole: config.StorerWholeConfig{
-			ListenAddr: config.DefaultWholeListenAddr,
-		},
+		Whole:           config.StorerWholeConfig{ListenAddr: config.DefaultWholeListenAddr},
 		Storer: config.StorerRemoteConfig{
 			GatewayAddr:  storerListenAddr,
 			GatewayToken: gatewayToken,
@@ -90,30 +88,12 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 	defer conn.Close()
 
 	requestID := uint64(1)
+	authID := authenticateGatewayConnection(t, conn, material, &requestID)
+
 	var openHeader proto.Header
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		startResp := mustGatewayRoundTrip(t, conn, buildGatewayRequest(proto.OpAuthStart, requestID, 0, []byte(material.DiskID)))
-		startHeader := mustGatewayHeader(t, startResp)
-		if startHeader.StatusCode != proto.StatusOK {
-			t.Fatalf("auth start status: %d", startHeader.StatusCode)
-		}
-		startBody, err := proto.ParseAuthStartResponseBody(startResp[proto.HeaderSize:])
-		if err != nil {
-			t.Fatalf("parse auth start: %v", err)
-		}
-
-		requestID++
-		proof := auth.ComputeProof(material.AuthVerifier, startBody.Salt[:])
-		finishBody := proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof)
-		finishResp := mustGatewayRoundTrip(t, conn, buildGatewayRequest(proto.OpAuthFinish, requestID, 0, finishBody))
-		finishHeader := mustGatewayHeader(t, finishResp)
-		if finishHeader.StatusCode != proto.StatusOK {
-			t.Fatalf("auth finish status: %d", finishHeader.StatusCode)
-		}
-
-		requestID++
-		openResp := mustGatewayRoundTrip(t, conn, buildGatewayRequest(proto.OpSessionOpen, requestID, 0, []byte(material.DiskID)))
+		openResp := mustGatewayRoundTrip(t, conn, buildGatewayRequest(proto.OpSessionOpen, requestID, 0, proto.BuildSessionOpenRequestBody(authID)))
 		openHeader = mustGatewayHeader(t, openResp)
 		if openHeader.StatusCode == proto.StatusOK {
 			break
@@ -124,23 +104,35 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 		if openHeader.StatusCode != proto.StatusSessionUnavailable {
 			t.Fatalf("unexpected session open status before registration: %d", openHeader.StatusCode)
 		}
-		requestID++
 		time.Sleep(50 * time.Millisecond)
 	}
 	sessionID := openHeader.SessionID
 	if sessionID == 0 {
 		t.Fatal("expected non-zero gateway session id")
 	}
-
 	requestID++
+
+	describeResp := mustGatewayRoundTrip(t, conn, buildGatewayRequest(proto.OpSessionDescribe, requestID, sessionID, nil))
+	describeHeader := mustGatewayHeader(t, describeResp)
+	if describeHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("describe status: %d", describeHeader.StatusCode)
+	}
+	diskSize, maxIOBytes, readOnly, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse describe response: %v", err)
+	}
+	if diskSize != 4096 || maxIOBytes != 60*1024 || readOnly {
+		t.Fatalf("unexpected describe response: size=%d maxIO=%d readOnly=%v", diskSize, maxIOBytes, readOnly)
+	}
+	requestID++
+
 	writePayload := append(proto.BuildReadWriteBody(32, 4), []byte("D123")...)
 	writeResp := mustGatewayRoundTrip(t, conn, buildGatewayRequest(proto.OpWriteAt, requestID, sessionID, writePayload))
-	writeHeader := mustGatewayHeader(t, writeResp)
-	if writeHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("write status: %d", writeHeader.StatusCode)
+	if header := mustGatewayHeader(t, writeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("write status: %d", header.StatusCode)
 	}
-
 	requestID++
+
 	readResp := mustGatewayRoundTrip(t, conn, buildGatewayRequest(proto.OpReadAt, requestID, sessionID, proto.BuildReadBody(32, 4)))
 	readHeader := mustGatewayHeader(t, readResp)
 	if readHeader.StatusCode != proto.StatusOK {
@@ -149,12 +141,11 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("D123")) {
 		t.Fatalf("unexpected read payload: %q", string(readResp[proto.HeaderSize:]))
 	}
-
 	requestID++
+
 	closeResp := mustGatewayRoundTrip(t, conn, buildGatewayRequest(proto.OpClose, requestID, sessionID, nil))
-	closeHeader := mustGatewayHeader(t, closeResp)
-	if closeHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("close status: %d", closeHeader.StatusCode)
+	if header := mustGatewayHeader(t, closeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("close status: %d", header.StatusCode)
 	}
 
 	cancel()
@@ -174,6 +165,36 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("storer runtime did not stop in time")
 	}
+}
+
+func authenticateGatewayConnection(t *testing.T, conn net.Conn, material auth.Material, requestID *uint64) uint64 {
+	t.Helper()
+
+	startResp := mustGatewayRoundTrip(t, conn, buildGatewayRequest(proto.OpAuthStart, *requestID, 0, []byte(material.DiskID)))
+	startHeader := mustGatewayHeader(t, startResp)
+	if startHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("auth start status: %d", startHeader.StatusCode)
+	}
+	startBody, err := proto.ParseAuthStartResponseBody(startResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse auth start: %v", err)
+	}
+
+	*requestID++
+	proof := auth.ComputeProof(material.AuthVerifier, startBody.Salt[:])
+	finishBody := proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof)
+	finishResp := mustGatewayRoundTrip(t, conn, buildGatewayRequest(proto.OpAuthFinish, *requestID, 0, finishBody))
+	finishHeader := mustGatewayHeader(t, finishResp)
+	if finishHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("auth finish status: %d", finishHeader.StatusCode)
+	}
+	authID, err := proto.ParseAuthFinishResponseBody(finishResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse auth finish: %v", err)
+	}
+
+	*requestID++
+	return authID
 }
 
 func reserveGatewayAddr(t *testing.T) string {

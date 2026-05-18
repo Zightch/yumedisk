@@ -64,13 +64,12 @@ func (r *StorerRuntime) runGatewayConnection(ctx context.Context, connectionID u
 	log.Printf("storer connected to gateway %s as connection %d", r.cfg.Storer.GatewayAddr, connectionID)
 
 	registerReq := proto.BuildStorerRegisterRequestBody(proto.StorerRegisterRequest{
-		GatewayToken:      r.cfg.Storer.GatewayToken,
-		DiskID:            r.core.DiskID(),
-		AuthVerifier:      r.core.AuthVerifier(),
-		DiskSizeBytes:     r.core.DiskSize(),
-		ReadOnly:          r.core.ReadOnly(),
-		MaxIOBytes:        r.core.SessionService().MaxIOBytes(),
-		SessionTTLSeconds: r.core.SessionService().TTLSeconds(),
+		GatewayToken:  r.cfg.Storer.GatewayToken,
+		DiskID:        r.core.DiskID(),
+		AuthVerifier:  r.core.AuthVerifier(),
+		DiskSizeBytes: r.core.DiskSize(),
+		ReadOnly:      r.core.ReadOnly(),
+		MaxIOBytes:    r.core.SessionService().MaxIOBytes(),
 	})
 	registerPayload := make([]byte, proto.HeaderSize+len(registerReq))
 	proto.EncodeHeader(proto.Header{

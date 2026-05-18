@@ -18,13 +18,14 @@ const (
 
 type authenticator struct {
 	routes       RouteSource
+	grants       *authGrantRegistry
 	tokenCodec   *auth.TokenCodec
 	challengeTTL time.Duration
 	sleep        func(time.Duration)
 	randomDelay  func() time.Duration
 }
 
-func newAuthenticator(routes RouteSource) (*authenticator, error) {
+func newAuthenticator(routes RouteSource, grants *authGrantRegistry) (*authenticator, error) {
 	tokenCodec, err := auth.NewRandomTokenCodec(32)
 	if err != nil {
 		return nil, err
@@ -32,6 +33,7 @@ func newAuthenticator(routes RouteSource) (*authenticator, error) {
 
 	a := &authenticator{
 		routes:       routes,
+		grants:       grants,
 		tokenCodec:   tokenCodec,
 		challengeTTL: defaultChallengeTTL,
 		sleep:        time.Sleep,
@@ -49,7 +51,7 @@ func (a *authenticator) handleAuthStart(state *ConnectionState, header proto.Hea
 	if err != nil {
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
-	if err := state.beginAuth(diskID); err != nil {
+	if err := state.beginAuth(); err != nil {
 		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
 	}
 
@@ -71,7 +73,7 @@ func (a *authenticator) handleAuthFinish(state *ConnectionState, header proto.He
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
 
-	if _, ok := state.pendingAuth(); !ok {
+	if !state.pendingAuth() {
 		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
 	}
 
@@ -106,11 +108,12 @@ func (a *authenticator) handleAuthFinish(state *ConnectionState, header proto.He
 		return proto.BuildErrorResponse(header, proto.StatusAuthFailed), nil
 	}
 
-	if err := state.finishAuth(challenge.DiskID); err != nil {
+	authID := a.grants.Issue(state.ID, challenge.DiskID, time.Now().Add(a.challengeTTL))
+	if err := state.finishAuth(); err != nil {
 		state.failAuth()
 		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
 	}
-	return proto.BuildSuccessResponse(header, proto.BuildAuthFinishResponseBody()), nil
+	return proto.BuildSuccessResponse(header, proto.BuildAuthFinishResponseBody(authID)), nil
 }
 
 func (a *authenticator) defaultRandomDelay() time.Duration {

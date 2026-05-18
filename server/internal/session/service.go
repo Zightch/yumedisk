@@ -50,14 +50,6 @@ func (s *Service) Open(connectionID uint64, diskID string) (Descriptor, error) {
 	return desc, nil
 }
 
-func (s *Service) Ping(sessionID uint64) (Descriptor, bool) {
-	desc, err := s.touch(sessionID)
-	if err != nil {
-		return Descriptor{}, false
-	}
-	return desc, true
-}
-
 func (s *Service) Close(sessionID uint64) {
 	s.manager.Close(sessionID)
 }

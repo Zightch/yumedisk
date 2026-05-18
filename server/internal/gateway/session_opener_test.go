@@ -13,98 +13,43 @@ import (
 	filestorage "yumedisk/server/internal/storage/file"
 )
 
-func TestSessionOpenPingAndClose(t *testing.T) {
-	t.Parallel()
-
-	handler, state, material := newSessionTestHandler(t)
-	state.markAuthenticated(material.DiskID)
-
-	openReq := buildRequest(proto.OpSessionOpen, 20, 0, []byte(material.DiskID))
-	openResp, err := handler.HandlePayload(state, openReq)
-	if err != nil {
-		t.Fatalf("session open: %v", err)
-	}
-	openHeader, err := proto.ParseHeader(openResp)
-	if err != nil {
-		t.Fatalf("parse open response header: %v", err)
-	}
-	if openHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected open status: %d", openHeader.StatusCode)
-	}
-	if openHeader.SessionID == 0 {
-		t.Fatal("expected non-zero session id")
-	}
-
-	pingReq := buildRequest(proto.OpPing, 21, openHeader.SessionID, proto.BuildPingResponseBody(12345))
-	pingResp, err := handler.HandlePayload(state, pingReq)
-	if err != nil {
-		t.Fatalf("ping: %v", err)
-	}
-	pingHeader, err := proto.ParseHeader(pingResp)
-	if err != nil {
-		t.Fatalf("parse ping response header: %v", err)
-	}
-	if pingHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected ping status: %d", pingHeader.StatusCode)
-	}
-
-	closeReq := buildRequest(proto.OpClose, 22, openHeader.SessionID, nil)
-	closeResp, err := handler.HandlePayload(state, closeReq)
-	if err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	closeHeader, err := proto.ParseHeader(closeResp)
-	if err != nil {
-		t.Fatalf("parse close response header: %v", err)
-	}
-	if closeHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected close status: %d", closeHeader.StatusCode)
-	}
-
-	pingAfterCloseResp, err := handler.HandlePayload(state, pingReq)
-	if err != nil {
-		t.Fatalf("ping after close: %v", err)
-	}
-	pingAfterCloseHeader, err := proto.ParseHeader(pingAfterCloseResp)
-	if err != nil {
-		t.Fatalf("parse ping-after-close response header: %v", err)
-	}
-	if pingAfterCloseHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("unexpected ping-after-close status: %d", pingAfterCloseHeader.StatusCode)
-	}
-}
-
-func TestReadAndWriteDataPlane(t *testing.T) {
+func TestSessionOpenDescribeReadWriteAndClose(t *testing.T) {
 	t.Parallel()
 
 	handler, state, material, rawPath := newSessionTestHandlerWithRaw(t, false)
-	state.markAuthenticated(material.DiskID)
+	authID := issueAuthIDForTest(t, handler, state, material)
+	sessionID := openSessionForTest(t, handler, state, authID)
 
-	sessionID := openSessionForTest(t, handler, state, material.DiskID)
+	describeResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionDescribe, 30, sessionID, nil))
+	if err != nil {
+		t.Fatalf("describe: %v", err)
+	}
+	describeHeader := mustParseGatewayHeader(t, describeResp)
+	if describeHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected describe status: %d", describeHeader.StatusCode)
+	}
+	diskSize, maxIOBytes, readOnly, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse describe body: %v", err)
+	}
+	if diskSize != 4096 || maxIOBytes != 60*1024 || readOnly {
+		t.Fatalf("unexpected describe body: size=%d maxIO=%d readOnly=%v", diskSize, maxIOBytes, readOnly)
+	}
 
-	writePayload := append(proto.BuildReadWriteBody(4, uint32(len([]byte("ABCD")))), []byte("ABCD")...)
-	writeReq := buildRequest(proto.OpWriteAt, 30, sessionID, writePayload)
-	writeResp, err := handler.HandlePayload(state, writeReq)
+	writePayload := append(proto.BuildReadWriteBody(4, 4), []byte("ABCD")...)
+	writeResp, err := handler.HandlePayload(state, buildRequest(proto.OpWriteAt, 31, sessionID, writePayload))
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	writeHeader, err := proto.ParseHeader(writeResp)
-	if err != nil {
-		t.Fatalf("parse write response header: %v", err)
-	}
-	if writeHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected write status: %d", writeHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, writeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected write status: %d", header.StatusCode)
 	}
 
-	readReq := buildRequest(proto.OpReadAt, 31, sessionID, proto.BuildReadBody(4, 4))
-	readResp, err := handler.HandlePayload(state, readReq)
+	readResp, err := handler.HandlePayload(state, buildRequest(proto.OpReadAt, 32, sessionID, proto.BuildReadBody(4, 4)))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	readHeader, err := proto.ParseHeader(readResp)
-	if err != nil {
-		t.Fatalf("parse read response header: %v", err)
-	}
+	readHeader := mustParseGatewayHeader(t, readResp)
 	if readHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected read status: %d", readHeader.StatusCode)
 	}
@@ -119,83 +64,59 @@ func TestReadAndWriteDataPlane(t *testing.T) {
 	if !bytes.Equal(raw[4:8], []byte("ABCD")) {
 		t.Fatalf("unexpected raw backend content: %q", string(raw[4:8]))
 	}
-}
 
-func TestWriteReadOnlyAndOutOfRangeErrors(t *testing.T) {
-	t.Parallel()
-
-	readOnlyHandler, readOnlyState, material, _ := newSessionTestHandlerWithRaw(t, true)
-	readOnlyState.markAuthenticated(material.DiskID)
-	readOnlySessionID := openSessionForTest(t, readOnlyHandler, readOnlyState, material.DiskID)
-
-	writePayload := append(proto.BuildReadWriteBody(0, 1), []byte("X")...)
-	writeReq := buildRequest(proto.OpWriteAt, 40, readOnlySessionID, writePayload)
-	writeResp, err := readOnlyHandler.HandlePayload(readOnlyState, writeReq)
+	closeResp, err := handler.HandlePayload(state, buildRequest(proto.OpClose, 33, sessionID, nil))
 	if err != nil {
-		t.Fatalf("write read-only: %v", err)
+		t.Fatalf("close: %v", err)
 	}
-	writeHeader, err := proto.ParseHeader(writeResp)
-	if err != nil {
-		t.Fatalf("parse write read-only response: %v", err)
-	}
-	if writeHeader.StatusCode != proto.StatusIOReadOnly {
-		t.Fatalf("unexpected read-only status: %d", writeHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, closeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected close status: %d", header.StatusCode)
 	}
 
-	readWriteHandler, readWriteState, material2, _ := newSessionTestHandlerWithRaw(t, false)
-	readWriteState.markAuthenticated(material2.DiskID)
-	sessionID := openSessionForTest(t, readWriteHandler, readWriteState, material2.DiskID)
-
-	outOfRangeReq := buildRequest(proto.OpReadAt, 41, sessionID, proto.BuildReadBody(4090, 16))
-	outOfRangeResp, err := readWriteHandler.HandlePayload(readWriteState, outOfRangeReq)
+	readAfterCloseResp, err := handler.HandlePayload(state, buildRequest(proto.OpReadAt, 34, sessionID, proto.BuildReadBody(0, 1)))
 	if err != nil {
-		t.Fatalf("read out-of-range: %v", err)
+		t.Fatalf("read after close: %v", err)
 	}
-	outOfRangeHeader, err := proto.ParseHeader(outOfRangeResp)
-	if err != nil {
-		t.Fatalf("parse out-of-range response: %v", err)
-	}
-	if outOfRangeHeader.StatusCode != proto.StatusIOOutOfRange {
-		t.Fatalf("unexpected out-of-range status: %d", outOfRangeHeader.StatusCode)
-	}
-
-	tooLargeReq := buildRequest(proto.OpReadAt, 42, sessionID, proto.BuildReadBody(0, 61*1024))
-	tooLargeResp, err := readWriteHandler.HandlePayload(readWriteState, tooLargeReq)
-	if err != nil {
-		t.Fatalf("read too-large: %v", err)
-	}
-	tooLargeHeader, err := proto.ParseHeader(tooLargeResp)
-	if err != nil {
-		t.Fatalf("parse too-large response: %v", err)
-	}
-	if tooLargeHeader.StatusCode != proto.StatusIOLarge {
-		t.Fatalf("unexpected too-large status: %d", tooLargeHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, readAfterCloseResp); header.StatusCode != proto.StatusSessionUnavailable {
+		t.Fatalf("unexpected read-after-close status: %d", header.StatusCode)
 	}
 }
 
-func TestSessionOpenRejectsSecondClientWhileDiskIsAlreadyOpened(t *testing.T) {
+func TestSessionOpenBusyKeepsAuthIDReusable(t *testing.T) {
 	t.Parallel()
 
 	handler, stateOne, material := newSessionTestHandler(t)
-	stateOne.markAuthenticated(material.DiskID)
-	firstSessionID := openSessionForTest(t, handler, stateOne, material.DiskID)
+	authIDOne := issueAuthIDForTest(t, handler, stateOne, material)
+	firstSessionID := openSessionForTest(t, handler, stateOne, authIDOne)
 	if firstSessionID == 0 {
 		t.Fatal("expected non-zero first session id")
 	}
 
 	stateTwo := handler.NewConnectionState(101)
-	stateTwo.markAuthenticated(material.DiskID)
-	openReq := buildRequest(proto.OpSessionOpen, 120, 0, []byte(material.DiskID))
-	openResp, err := handler.HandlePayload(stateTwo, openReq)
+	authIDTwo := issueAuthIDForTest(t, handler, stateTwo, material)
+
+	firstBusyResp, err := handler.HandlePayload(stateTwo, buildRequest(proto.OpSessionOpen, 40, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
 	if err != nil {
 		t.Fatalf("open session on second client: %v", err)
 	}
-	openHeader, err := proto.ParseHeader(openResp)
-	if err != nil {
-		t.Fatalf("parse second open response: %v", err)
+	if header := mustParseGatewayHeader(t, firstBusyResp); header.StatusCode != proto.StatusSessionBusy {
+		t.Fatalf("unexpected second open status: %d", header.StatusCode)
 	}
-	if openHeader.StatusCode != proto.StatusSessionBusy {
-		t.Fatalf("unexpected second open status: %d", openHeader.StatusCode)
+
+	closeResp, err := handler.HandlePayload(stateOne, buildRequest(proto.OpClose, 41, firstSessionID, nil))
+	if err != nil {
+		t.Fatalf("close first session: %v", err)
+	}
+	if header := mustParseGatewayHeader(t, closeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected close status: %d", header.StatusCode)
+	}
+
+	secondOpenResp, err := handler.HandlePayload(stateTwo, buildRequest(proto.OpSessionOpen, 42, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
+	if err != nil {
+		t.Fatalf("retry open after busy: %v", err)
+	}
+	if header := mustParseGatewayHeader(t, secondOpenResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected retry open status: %d", header.StatusCode)
 	}
 }
 
@@ -203,65 +124,46 @@ func TestSessionOpenReturnsUnavailableWhenRouteIsGone(t *testing.T) {
 	t.Parallel()
 
 	handler, state, material := newSessionTestHandler(t)
-	state.markAuthenticated(material.DiskID)
+	authID := issueAuthIDForTest(t, handler, state, material)
 	backend := handler.authenticator.routes.(*testGatewayBackend)
 	backend.DisconnectRoute()
 
-	openReq := buildRequest(proto.OpSessionOpen, 121, 0, []byte(material.DiskID))
-	openResp, err := handler.HandlePayload(state, openReq)
+	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 50, 0, proto.BuildSessionOpenRequestBody(authID)))
 	if err != nil {
 		t.Fatalf("open session without route: %v", err)
 	}
-	openHeader, err := proto.ParseHeader(openResp)
-	if err != nil {
-		t.Fatalf("parse open-without-route response: %v", err)
-	}
-	if openHeader.StatusCode != proto.StatusSessionUnavailable {
-		t.Fatalf("unexpected open-without-route status: %d", openHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, openResp); header.StatusCode != proto.StatusSessionUnavailable {
+		t.Fatalf("unexpected open-without-route status: %d", header.StatusCode)
 	}
 }
 
-func TestSessionPhaseViolationsReturnInvalidRequest(t *testing.T) {
+func TestSessionRequestValidationAndUnavailableSemantics(t *testing.T) {
 	t.Parallel()
 
 	handler, state, material := newSessionTestHandler(t)
 
-	openReq := buildRequest(proto.OpSessionOpen, 200, 0, []byte(material.DiskID))
-	openResp, err := handler.HandlePayload(state, openReq)
+	openWithoutAuthResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 60, 0, proto.BuildSessionOpenRequestBody(1)))
 	if err != nil {
-		t.Fatalf("open without auth: %v", err)
+		t.Fatalf("open without auth grant: %v", err)
 	}
-	openHeader, err := proto.ParseHeader(openResp)
-	if err != nil {
-		t.Fatalf("parse open without auth response: %v", err)
-	}
-	if openHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("unexpected open without auth status: %d", openHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, openWithoutAuthResp); header.StatusCode != proto.StatusAuthIDInvalid {
+		t.Fatalf("unexpected open without auth status: %d", header.StatusCode)
 	}
 
-	startReq := buildRequest(proto.OpAuthStart, 201, 0, []byte(material.DiskID))
-	startResp, err := handler.HandlePayload(state, startReq)
+	startResp, err := handler.HandlePayload(state, buildRequest(proto.OpAuthStart, 61, 0, []byte(material.DiskID)))
 	if err != nil {
 		t.Fatalf("auth start: %v", err)
 	}
-	startHeader, err := proto.ParseHeader(startResp)
-	if err != nil {
-		t.Fatalf("parse auth start response: %v", err)
-	}
-	if startHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected auth start status: %d", startHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, startResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected auth start status: %d", header.StatusCode)
 	}
 
-	pendingOpenResp, err := handler.HandlePayload(state, openReq)
+	openWhileAuthPendingResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 62, 0, proto.BuildSessionOpenRequestBody(1)))
 	if err != nil {
 		t.Fatalf("open while auth pending: %v", err)
 	}
-	pendingOpenHeader, err := proto.ParseHeader(pendingOpenResp)
-	if err != nil {
-		t.Fatalf("parse open while auth pending response: %v", err)
-	}
-	if pendingOpenHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("unexpected open while auth pending status: %d", pendingOpenHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, openWhileAuthPendingResp); header.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected open-while-auth-pending status: %d", header.StatusCode)
 	}
 
 	startBody, err := proto.ParseAuthStartResponseBody(startResp[proto.HeaderSize:])
@@ -269,80 +171,37 @@ func TestSessionPhaseViolationsReturnInvalidRequest(t *testing.T) {
 		t.Fatalf("parse auth start body: %v", err)
 	}
 	proof := auth.ComputeProof(material.AuthVerifier, startBody.Salt[:])
-	finishReq := buildRequest(proto.OpAuthFinish, 202, 0, proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof))
-	finishResp, err := handler.HandlePayload(state, finishReq)
+	finishResp, err := handler.HandlePayload(state, buildRequest(proto.OpAuthFinish, 63, 0, proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof)))
 	if err != nil {
 		t.Fatalf("auth finish: %v", err)
 	}
-	finishHeader, err := proto.ParseHeader(finishResp)
-	if err != nil {
-		t.Fatalf("parse auth finish response: %v", err)
+	if header := mustParseGatewayHeader(t, finishResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected auth finish status: %d", header.StatusCode)
 	}
-	if finishHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected auth finish status: %d", finishHeader.StatusCode)
+	authID, err := proto.ParseAuthFinishResponseBody(finishResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse auth finish body: %v", err)
 	}
 
-	sessionID := openSessionForTest(t, handler, state, material.DiskID)
-
-	secondOpenResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 203, 0, []byte(material.DiskID)))
-	if err != nil {
-		t.Fatalf("second open on same connection: %v", err)
-	}
-	secondOpenHeader, err := proto.ParseHeader(secondOpenResp)
-	if err != nil {
-		t.Fatalf("parse second open response: %v", err)
-	}
-	if secondOpenHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("unexpected second open status: %d", secondOpenHeader.StatusCode)
-	}
-
+	sessionID := openSessionForTest(t, handler, state, authID)
 	wrongSessionID := sessionID + 1
-	pingResp, err := handler.HandlePayload(state, buildRequest(proto.OpPing, 204, wrongSessionID, proto.BuildPingResponseBody(1)))
-	if err != nil {
-		t.Fatalf("ping with wrong session: %v", err)
-	}
-	pingHeader, err := proto.ParseHeader(pingResp)
-	if err != nil {
-		t.Fatalf("parse ping with wrong session response: %v", err)
-	}
-	if pingHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("unexpected ping wrong-session status: %d", pingHeader.StatusCode)
-	}
-
-	readResp, err := handler.HandlePayload(state, buildRequest(proto.OpReadAt, 205, wrongSessionID, proto.BuildReadBody(0, 1)))
-	if err != nil {
-		t.Fatalf("read with wrong session: %v", err)
-	}
-	readHeader, err := proto.ParseHeader(readResp)
-	if err != nil {
-		t.Fatalf("parse read with wrong session response: %v", err)
-	}
-	if readHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("unexpected read wrong-session status: %d", readHeader.StatusCode)
-	}
-
-	writeResp, err := handler.HandlePayload(state, buildRequest(proto.OpWriteAt, 206, wrongSessionID, append(proto.BuildReadWriteBody(0, 1), 'X')))
-	if err != nil {
-		t.Fatalf("write with wrong session: %v", err)
-	}
-	writeHeader, err := proto.ParseHeader(writeResp)
-	if err != nil {
-		t.Fatalf("parse write with wrong session response: %v", err)
-	}
-	if writeHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("unexpected write wrong-session status: %d", writeHeader.StatusCode)
-	}
-
-	closeResp, err := handler.HandlePayload(state, buildRequest(proto.OpClose, 207, wrongSessionID, nil))
-	if err != nil {
-		t.Fatalf("close with wrong session: %v", err)
-	}
-	closeHeader, err := proto.ParseHeader(closeResp)
-	if err != nil {
-		t.Fatalf("parse close with wrong session response: %v", err)
-	}
-	if closeHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("unexpected close wrong-session status: %d", closeHeader.StatusCode)
+	for _, tc := range []struct {
+		id   uint64
+		op   uint8
+		body []byte
+	}{
+		{64, proto.OpSessionDescribe, nil},
+		{65, proto.OpReadAt, proto.BuildReadBody(0, 1)},
+		{66, proto.OpWriteAt, append(proto.BuildReadWriteBody(0, 1), 'X')},
+		{67, proto.OpClose, nil},
+	} {
+		resp, err := handler.HandlePayload(state, buildRequest(tc.op, tc.id, wrongSessionID, tc.body))
+		if err != nil {
+			t.Fatalf("op %d with wrong session: %v", tc.op, err)
+		}
+		if header := mustParseGatewayHeader(t, resp); header.StatusCode != proto.StatusSessionUnavailable {
+			t.Fatalf("unexpected wrong-session status for op %d: %d", tc.op, header.StatusCode)
+		}
 	}
 }
 
@@ -354,15 +213,7 @@ func newSessionTestHandler(t *testing.T) (*Handler, *ConnectionState, auth.Mater
 func newSessionTestHandlerWithRaw(t *testing.T, readOnly bool) (*Handler, *ConnectionState, auth.Material, string) {
 	t.Helper()
 
-	claimCode, err := auth.GenerateClaimCode(64)
-	if err != nil {
-		t.Fatalf("generate claim code: %v", err)
-	}
-	material, err := auth.ParseClaimCode(claimCode)
-	if err != nil {
-		t.Fatalf("parse claim code: %v", err)
-	}
-
+	material := newTestMaterial(t)
 	tempDir := t.TempDir()
 	rawPath := filepath.Join(tempDir, "disk.raw")
 	if err := os.WriteFile(rawPath, make([]byte, 4096), 0o644); err != nil {
@@ -376,7 +227,7 @@ func newSessionTestHandlerWithRaw(t *testing.T, readOnly bool) (*Handler, *Conne
 	t.Cleanup(func() { _ = storage.Close() })
 
 	sessions := session.NewService(session.NewManager(), storage, 30*time.Second, 60*1024)
-	backend := newTestGatewayBackend(material, sessions)
+	backend := newTestGatewayBackend(material, sessions, storage.Size(), storage.ReadOnly())
 	handler, err := NewHandler(backend, backend)
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -387,18 +238,47 @@ func newSessionTestHandlerWithRaw(t *testing.T, readOnly bool) (*Handler, *Conne
 	return handler, state, material, rawPath
 }
 
-func openSessionForTest(t *testing.T, handler *Handler, state *ConnectionState, diskID string) uint64 {
+func issueAuthIDForTest(t *testing.T, handler *Handler, state *ConnectionState, material auth.Material) uint64 {
 	t.Helper()
 
-	openReq := buildRequest(proto.OpSessionOpen, 99, 0, []byte(diskID))
-	openResp, err := handler.HandlePayload(state, openReq)
+	startResp, err := handler.HandlePayload(state, buildRequest(proto.OpAuthStart, 10, 0, []byte(material.DiskID)))
+	if err != nil {
+		t.Fatalf("auth start: %v", err)
+	}
+	startHeader := mustParseGatewayHeader(t, startResp)
+	if startHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("auth start status: %d", startHeader.StatusCode)
+	}
+
+	startBody, err := proto.ParseAuthStartResponseBody(startResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse auth start body: %v", err)
+	}
+	proof := auth.ComputeProof(material.AuthVerifier, startBody.Salt[:])
+	finishResp, err := handler.HandlePayload(state, buildRequest(proto.OpAuthFinish, 11, 0, proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof)))
+	if err != nil {
+		t.Fatalf("auth finish: %v", err)
+	}
+	finishHeader := mustParseGatewayHeader(t, finishResp)
+	if finishHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("auth finish status: %d", finishHeader.StatusCode)
+	}
+
+	authID, err := proto.ParseAuthFinishResponseBody(finishResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse auth finish body: %v", err)
+	}
+	return authID
+}
+
+func openSessionForTest(t *testing.T, handler *Handler, state *ConnectionState, authID uint64) uint64 {
+	t.Helper()
+
+	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 99, 0, proto.BuildSessionOpenRequestBody(authID)))
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	openHeader, err := proto.ParseHeader(openResp)
-	if err != nil {
-		t.Fatalf("parse open response: %v", err)
-	}
+	openHeader := mustParseGatewayHeader(t, openResp)
 	if openHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("open session status: %d", openHeader.StatusCode)
 	}

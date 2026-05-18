@@ -36,8 +36,6 @@ func (h *dataPlaneHandler) HandlePayload(payload []byte) ([]byte, error) {
 		return h.handleSessionOpen(header, body)
 	case proto.OpLinkHeartbeat:
 		return h.handleLinkHeartbeat(header, body)
-	case proto.OpPing:
-		return h.handlePing(header, body)
 	case proto.OpClose:
 		return h.handleClose(header, body)
 	case proto.OpReadAt:
@@ -53,59 +51,26 @@ func (h *dataPlaneHandler) handleSessionOpen(header proto.Header, body []byte) (
 	if header.SessionID != 0 {
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
-
-	diskID, err := proto.ParseSessionOpenRequestBody(body)
-	if err != nil {
+	if len(body) != 0 {
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
-	if diskID != h.diskID {
-		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
-	}
 
-	desc, err := h.sessions.Open(h.connectionID, diskID)
+	desc, err := h.sessions.Open(h.connectionID, h.diskID)
 	if err != nil {
 		return h.mapSessionError(header, err), nil
 	}
-	bodyOut := proto.BuildSessionOpenResponseBody(desc.DiskSize, desc.MaxIOBytes, h.sessions.TTLSeconds(), desc.ReadOnly)
-	respHeader := proto.Header{
-		ProtocolVersion: header.ProtocolVersion,
-		HeaderLen:       header.HeaderLen,
-		OpCode:          header.OpCode,
-		Flags:           proto.FlagResponse,
-		StatusCode:      proto.StatusOK,
-		Reserved:        0,
-		RequestID:       header.RequestID,
-		SessionID:       desc.ID,
-	}
-	return proto.BuildResponse(respHeader, proto.StatusOK, bodyOut), nil
+	return proto.BuildResponseWithSessionID(header, proto.StatusOK, desc.ID, nil), nil
 }
 
 func (h *dataPlaneHandler) handleLinkHeartbeat(header proto.Header, body []byte) ([]byte, error) {
 	if header.SessionID != 0 {
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
-	nonce, err := proto.ParsePingRequestBody(body)
+	nonce, err := proto.ParseLinkHeartbeatBody(body)
 	if err != nil {
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
-	return proto.BuildSuccessResponse(header, proto.BuildPingResponseBody(nonce)), nil
-}
-
-func (h *dataPlaneHandler) handlePing(header proto.Header, body []byte) ([]byte, error) {
-	if header.SessionID == 0 {
-		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
-	}
-
-	nonce, err := proto.ParsePingRequestBody(body)
-	if err != nil {
-		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
-	}
-
-	_, ok := h.sessions.Ping(header.SessionID)
-	if !ok {
-		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
-	}
-	return proto.BuildSuccessResponse(header, proto.BuildPingResponseBody(nonce)), nil
+	return proto.BuildSuccessResponse(header, proto.BuildLinkHeartbeatBody(nonce)), nil
 }
 
 func (h *dataPlaneHandler) handleClose(header proto.Header, body []byte) ([]byte, error) {

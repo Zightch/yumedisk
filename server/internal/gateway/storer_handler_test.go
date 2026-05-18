@@ -8,7 +8,7 @@ import (
 	"yumedisk/server/internal/transport"
 )
 
-func TestStorerHandlerReturnsExplicitNotImplemented(t *testing.T) {
+func TestStorerHandlerRejectsWrongGatewayToken(t *testing.T) {
 	t.Parallel()
 
 	handler, err := NewStorerHandler(NewStorerRouteRegistry())
@@ -21,47 +21,15 @@ func TestStorerHandlerReturnsExplicitNotImplemented(t *testing.T) {
 	defer serverConn.Close()
 
 	storerConn := newStorerConnection(7, serverConn)
-
 	done := make(chan error, 1)
 	go func() {
 		done <- handler.ServeConnection(storerConn, "expected-token")
 	}()
 
-	reqBody := proto.BuildStorerRegisterRequestBody(proto.StorerRegisterRequest{
-		GatewayToken:      "wrong-token",
-		DiskID:            "DISK000000000001",
-		AuthVerifier:      [64]byte{1},
-		DiskSizeBytes:     4096,
-		MaxIOBytes:        1024,
-		SessionTTLSeconds: 30,
-	})
-	req := make([]byte, proto.HeaderSize+len(reqBody))
-	proto.EncodeHeader(proto.Header{
-		ProtocolVersion: proto.ProtocolVersion,
-		HeaderLen:       proto.HeaderSize,
-		OpCode:          proto.OpStorerRegister,
-		RequestID:       1,
-	}, req)
-	copy(req[proto.HeaderSize:], reqBody)
-	if err := transport.WriteFrame(clientConn, req); err != nil {
-		t.Fatalf("write register request: %v", err)
-	}
-
-	buffer := make([]byte, transport.MaxPayloadSize)
-	resp, err := transport.ReadFrameInto(clientConn, buffer)
-	if err != nil {
-		t.Fatalf("read register response: %v", err)
-	}
-	header, err := proto.ParseHeader(resp)
-	if err != nil {
-		t.Fatalf("parse register response: %v", err)
-	}
-	if header.StatusCode != proto.StatusAuthFailed {
-		t.Fatalf("unexpected register status: %d", header.StatusCode)
-	}
-
+	registerAndExpectStatus(t, clientConn, "wrong-token", "DISK000000000001", proto.StatusAuthFailed)
 	_ = clientConn.Close()
 	_ = serverConn.Close()
+	<-done
 }
 
 func TestStorerHandlerRejectsDuplicateDiskOnDifferentConnection(t *testing.T) {
@@ -125,30 +93,25 @@ func TestStorerHandlerRejectsWrongPhaseRequests(t *testing.T) {
 		done <- handler.ServeConnection(storerConn, "expected-token")
 	}()
 
-	pingReq := make([]byte, proto.HeaderSize+8)
+	heartbeatReq := make([]byte, proto.HeaderSize+proto.LinkHeartbeatBodySize)
 	proto.EncodeHeader(proto.Header{
 		ProtocolVersion: proto.ProtocolVersion,
 		HeaderLen:       proto.HeaderSize,
-		OpCode:          proto.OpPing,
+		OpCode:          proto.OpLinkHeartbeat,
 		RequestID:       1,
-		SessionID:       1,
-	}, pingReq)
-	copy(pingReq[proto.HeaderSize:], proto.BuildPingResponseBody(1))
-	if err := transport.WriteFrame(clientConn, pingReq); err != nil {
-		t.Fatalf("write pre-register ping: %v", err)
+	}, heartbeatReq)
+	copy(heartbeatReq[proto.HeaderSize:], proto.BuildLinkHeartbeatBody(1))
+	if err := transport.WriteFrame(clientConn, heartbeatReq); err != nil {
+		t.Fatalf("write pre-register heartbeat: %v", err)
 	}
 
 	buffer := make([]byte, transport.MaxPayloadSize)
-	pingResp, err := transport.ReadFrameInto(clientConn, buffer)
+	heartbeatResp, err := transport.ReadFrameInto(clientConn, buffer)
 	if err != nil {
-		t.Fatalf("read pre-register ping response: %v", err)
+		t.Fatalf("read pre-register heartbeat response: %v", err)
 	}
-	pingHeader, err := proto.ParseHeader(pingResp)
-	if err != nil {
-		t.Fatalf("parse pre-register ping response: %v", err)
-	}
-	if pingHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("unexpected pre-register ping status: %d", pingHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, heartbeatResp); header.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected pre-register heartbeat status: %d", header.StatusCode)
 	}
 
 	registerAndExpectStatus(t, clientConn, "expected-token", "DISK000000000001", proto.StatusOK)
@@ -163,12 +126,11 @@ func registerAndExpectStatus(t *testing.T, conn net.Conn, gatewayToken string, d
 	t.Helper()
 
 	reqBody := proto.BuildStorerRegisterRequestBody(proto.StorerRegisterRequest{
-		GatewayToken:      gatewayToken,
-		DiskID:            diskID,
-		AuthVerifier:      [64]byte{1},
-		DiskSizeBytes:     4096,
-		MaxIOBytes:        1024,
-		SessionTTLSeconds: 30,
+		GatewayToken:  gatewayToken,
+		DiskID:        diskID,
+		AuthVerifier:  [64]byte{1},
+		DiskSizeBytes: 4096,
+		MaxIOBytes:    1024,
 	})
 	req := make([]byte, proto.HeaderSize+len(reqBody))
 	proto.EncodeHeader(proto.Header{
@@ -187,11 +149,7 @@ func registerAndExpectStatus(t *testing.T, conn net.Conn, gatewayToken string, d
 	if err != nil {
 		t.Fatalf("read register response: %v", err)
 	}
-	header, err := proto.ParseHeader(resp)
-	if err != nil {
-		t.Fatalf("parse register response: %v", err)
-	}
-	if header.StatusCode != want {
+	if header := mustParseGatewayHeader(t, resp); header.StatusCode != want {
 		t.Fatalf("unexpected register status: got=%d want=%d", header.StatusCode, want)
 	}
 }

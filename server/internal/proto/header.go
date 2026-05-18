@@ -9,19 +9,21 @@ const (
 	ProtocolVersion = 1
 	HeaderSize      = 24
 	FlagResponse    = 1 << 0
+	FlagNotice      = 1 << 1
 )
 
 const (
-	OpAuthStart   = 0x01
-	OpAuthFinish  = 0x02
-	OpSessionOpen = 0x03
-	OpSessionCloseNotice = 0x04
-	OpStorerRegister = 0x20
-	OpLinkHeartbeat  = 0x21
-	OpReadAt      = 0x10
-	OpWriteAt     = 0x11
-	OpPing        = 0x12
-	OpClose       = 0x13
+	OpAuthStart          = 0x01
+	OpAuthFinish         = 0x02
+	OpSessionOpen        = 0x03
+	OpSessionDescribe    = 0x04
+	OpSessionCloseNotice = 0x05
+	OpReadAt             = 0x10
+	OpWriteAt            = 0x11
+	OpConnHeartbeat      = 0x12
+	OpClose              = 0x13
+	OpStorerRegister     = 0x20
+	OpLinkHeartbeat      = 0x21
 )
 
 const (
@@ -34,7 +36,8 @@ const (
 	StatusAuthFailed           = 0x1101
 	StatusAuthExpired          = 0x1102
 	StatusAuthChallengeInvalid = 0x1103
-	StatusAuthRequired         = 0x1104
+	StatusAuthIDInvalid        = 0x1104
+	StatusAuthIDExpired        = 0x1105
 	StatusSessionUnavailable   = 0x1201
 	StatusSessionBusy          = 0x1202
 	StatusIOOutOfRange         = 0x1301
@@ -48,9 +51,10 @@ var (
 	ErrProtocolVersion   = errors.New("unsupported protocol version")
 	ErrHeaderLength      = errors.New("unsupported header length")
 	ErrReservedNonZero   = errors.New("reserved field must be zero")
-	ErrResponseBitOn     = errors.New("request header has response bit set")
+	ErrInvalidFlags      = errors.New("header flags invalid")
 	ErrRequestStatusNon0 = errors.New("request status_code must be zero")
 	ErrRequestIDZero     = errors.New("request_id must be non-zero")
+	ErrNoticeRequestID   = errors.New("notice request_id must be zero")
 )
 
 type Header struct {
@@ -82,26 +86,59 @@ func ParseHeader(payload []byte) (Header, error) {
 }
 
 func ValidateRequestHeader(h Header) error {
+	if err := validateCommonHeader(h); err != nil {
+		return err
+	}
+	if h.Flags != 0 {
+		return ErrInvalidFlags
+	}
+	if h.StatusCode != 0 {
+		return ErrRequestStatusNon0
+	}
+	if h.RequestID == 0 {
+		return ErrRequestIDZero
+	}
+	return nil
+}
+
+func ValidateResponseHeader(h Header) error {
+	if err := validateCommonHeader(h); err != nil {
+		return err
+	}
+	if h.Flags != FlagResponse {
+		return ErrInvalidFlags
+	}
+	if h.RequestID == 0 {
+		return ErrRequestIDZero
+	}
+	return nil
+}
+
+func ValidateNoticeHeader(h Header) error {
+	if err := validateCommonHeader(h); err != nil {
+		return err
+	}
+	if h.Flags != FlagNotice {
+		return ErrInvalidFlags
+	}
+	if h.RequestID != 0 {
+		return ErrNoticeRequestID
+	}
+	return nil
+}
+
+func validateCommonHeader(h Header) error {
 	if h.ProtocolVersion != ProtocolVersion {
 		return ErrProtocolVersion
 	}
 	if h.HeaderLen != HeaderSize {
 		return ErrHeaderLength
 	}
-	if h.Flags&FlagResponse != 0 {
-		return ErrResponseBitOn
-	}
-	if h.Flags&^FlagResponse != 0 {
-		return ErrReservedNonZero
-	}
-	if h.StatusCode != 0 {
-		return ErrRequestStatusNon0
-	}
 	if h.Reserved != 0 {
 		return ErrReservedNonZero
 	}
-	if h.RequestID == 0 {
-		return ErrRequestIDZero
+	if h.Flags&^uint8(FlagResponse|FlagNotice) != 0 {
+		return ErrInvalidFlags
 	}
 	return nil
 }
@@ -126,6 +163,10 @@ func BuildSuccessResponse(req Header, body []byte) []byte {
 }
 
 func BuildResponse(req Header, status uint16, body []byte) []byte {
+	return BuildResponseWithSessionID(req, status, req.SessionID, body)
+}
+
+func BuildResponseWithSessionID(req Header, status uint16, sessionID uint64, body []byte) []byte {
 	payload := make([]byte, HeaderSize+len(body))
 	EncodeHeader(Header{
 		ProtocolVersion: ProtocolVersion,
@@ -135,7 +176,23 @@ func BuildResponse(req Header, status uint16, body []byte) []byte {
 		StatusCode:      status,
 		Reserved:        0,
 		RequestID:       req.RequestID,
-		SessionID:       req.SessionID,
+		SessionID:       sessionID,
+	}, payload)
+	copy(payload[HeaderSize:], body)
+	return payload
+}
+
+func BuildNotice(opCode uint8, sessionID uint64, body []byte) []byte {
+	payload := make([]byte, HeaderSize+len(body))
+	EncodeHeader(Header{
+		ProtocolVersion: ProtocolVersion,
+		HeaderLen:       HeaderSize,
+		OpCode:          opCode,
+		Flags:           FlagNotice,
+		StatusCode:      StatusOK,
+		Reserved:        0,
+		RequestID:       0,
+		SessionID:       sessionID,
 	}, payload)
 	copy(payload[HeaderSize:], body)
 	return payload

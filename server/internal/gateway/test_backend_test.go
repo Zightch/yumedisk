@@ -7,24 +7,23 @@ import (
 )
 
 type testGatewayBackend struct {
-	material auth.Material
 	sessions *session.Service
 	routes   *route.Registry
 }
 
-func newTestGatewayBackend(material auth.Material, sessions *session.Service) *testGatewayBackend {
+func newTestGatewayBackend(material auth.Material, sessions *session.Service, diskSize uint64, readOnly bool) *testGatewayBackend {
 	routes := route.NewRegistry()
 	_ = routes.Register(route.Entry{
-		DiskID:            material.DiskID,
-		AuthVerifier:      material.AuthVerifier,
-		RouteTarget:       "test://local",
-		ConnectionID:      0,
-		Connected:         true,
-		MaxIOBytes:        sessions.MaxIOBytes(),
-		SessionTTLSeconds: sessions.TTLSeconds(),
+		DiskID:        material.DiskID,
+		AuthVerifier:  material.AuthVerifier,
+		RouteTarget:   "test://local",
+		ConnectionID:  0,
+		Connected:     true,
+		DiskSizeBytes: diskSize,
+		ReadOnly:      readOnly,
+		MaxIOBytes:    sessions.MaxIOBytes(),
 	})
 	return &testGatewayBackend{
-		material: material,
 		sessions: sessions,
 		routes:   routes,
 	}
@@ -38,12 +37,12 @@ func (b *testGatewayBackend) DisconnectRoute() {
 	b.routes.DisconnectConnection(0)
 }
 
-func (b *testGatewayBackend) Open(connectionID uint64, diskID string) (session.Descriptor, error) {
-	return b.sessions.Open(connectionID, diskID)
-}
-
-func (b *testGatewayBackend) Ping(routeConnectionID uint64, sessionID uint64) (session.Descriptor, bool) {
-	return b.sessions.Ping(sessionID)
+func (b *testGatewayBackend) Open(connectionID uint64, entry route.Entry) (uint64, error) {
+	desc, err := b.sessions.Open(connectionID, entry.DiskID)
+	if err != nil {
+		return 0, err
+	}
+	return desc.ID, nil
 }
 
 func (b *testGatewayBackend) Close(routeConnectionID uint64, sessionID uint64) {

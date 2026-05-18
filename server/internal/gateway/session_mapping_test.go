@@ -2,34 +2,30 @@ package gateway
 
 import (
 	"testing"
+	"time"
 
 	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/route"
-	"yumedisk/server/internal/session"
 )
 
-func TestGatewaySessionMappingHidesUpstreamSessionID(t *testing.T) {
+func TestGatewaySessionMappingHidesUpstreamSessionIDAndUsesSnapshot(t *testing.T) {
 	t.Parallel()
 
-	diskID := "DISK000000000001"
+	const diskID = "DISK000000000001"
 	routes := &mappingRouteSource{
 		entry: route.Entry{
-			DiskID:       diskID,
-			RouteTarget:  "storer://conn-9",
-			ConnectionID: 9,
-			Connected:    true,
+			DiskID:        diskID,
+			RouteTarget:   "storer://conn-9",
+			ConnectionID:  9,
+			Connected:     true,
+			DiskSizeBytes: 4096,
+			ReadOnly:      false,
+			MaxIOBytes:    1024,
 		},
 	}
 	dataPlane := &mappingDataPlane{
-		openDesc: session.Descriptor{
-			ID:         77,
-			DiskID:     diskID,
-			DiskSize:   4096,
-			MaxIOBytes: 1024,
-			ReadOnly:   false,
-		},
-		pingOK:  true,
-		readOut: []byte("OK"),
+		openSessionID: 77,
+		readOut:       []byte("OK"),
 	}
 
 	handler, err := NewHandler(routes, dataPlane)
@@ -37,50 +33,44 @@ func TestGatewaySessionMappingHidesUpstreamSessionID(t *testing.T) {
 		t.Fatalf("new handler: %v", err)
 	}
 	state := handler.NewConnectionState(42)
-	state.markAuthenticated(diskID)
+	authID := handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
 
-	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, []byte(diskID)))
+	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, proto.BuildSessionOpenRequestBody(authID)))
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	openHeader, err := proto.ParseHeader(openResp)
-	if err != nil {
-		t.Fatalf("parse open response: %v", err)
-	}
+	openHeader := mustParseGatewayHeader(t, openResp)
 	if openHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected open status: %d", openHeader.StatusCode)
 	}
-	if openHeader.SessionID == 0 || openHeader.SessionID == dataPlane.openDesc.ID {
-		t.Fatalf("gateway session id leaked upstream id: got=%d upstream=%d", openHeader.SessionID, dataPlane.openDesc.ID)
+	if openHeader.SessionID == 0 || openHeader.SessionID == dataPlane.openSessionID {
+		t.Fatalf("gateway session id leaked upstream id: got=%d upstream=%d", openHeader.SessionID, dataPlane.openSessionID)
 	}
 
-	pingResp, err := handler.HandlePayload(state, buildRequest(proto.OpPing, 2, openHeader.SessionID, proto.BuildPingResponseBody(9)))
+	describeResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionDescribe, 2, openHeader.SessionID, nil))
 	if err != nil {
-		t.Fatalf("ping: %v", err)
+		t.Fatalf("describe: %v", err)
 	}
-	pingHeader, err := proto.ParseHeader(pingResp)
+	describeHeader := mustParseGatewayHeader(t, describeResp)
+	if describeHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected describe status: %d", describeHeader.StatusCode)
+	}
+	diskSize, maxIOBytes, readOnly, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
 	if err != nil {
-		t.Fatalf("parse ping response: %v", err)
+		t.Fatalf("parse describe body: %v", err)
 	}
-	if pingHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected ping status: %d", pingHeader.StatusCode)
-	}
-	if dataPlane.lastPingSessionID != dataPlane.openDesc.ID {
-		t.Fatalf("ping used wrong upstream session id: %d", dataPlane.lastPingSessionID)
+	if diskSize != routes.entry.DiskSizeBytes || maxIOBytes != routes.entry.MaxIOBytes || readOnly != routes.entry.ReadOnly {
+		t.Fatalf("unexpected describe snapshot: size=%d maxIO=%d readOnly=%v", diskSize, maxIOBytes, readOnly)
 	}
 
 	readResp, err := handler.HandlePayload(state, buildRequest(proto.OpReadAt, 3, openHeader.SessionID, proto.BuildReadBody(0, 2)))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	readHeader, err := proto.ParseHeader(readResp)
-	if err != nil {
-		t.Fatalf("parse read response: %v", err)
+	if header := mustParseGatewayHeader(t, readResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected read status: %d", header.StatusCode)
 	}
-	if readHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected read status: %d", readHeader.StatusCode)
-	}
-	if dataPlane.lastReadSessionID != dataPlane.openDesc.ID {
+	if dataPlane.lastReadSessionID != dataPlane.openSessionID {
 		t.Fatalf("read used wrong upstream session id: %d", dataPlane.lastReadSessionID)
 	}
 
@@ -89,14 +79,10 @@ func TestGatewaySessionMappingHidesUpstreamSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	writeHeader, err := proto.ParseHeader(writeResp)
-	if err != nil {
-		t.Fatalf("parse write response: %v", err)
+	if header := mustParseGatewayHeader(t, writeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected write status: %d", header.StatusCode)
 	}
-	if writeHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected write status: %d", writeHeader.StatusCode)
-	}
-	if dataPlane.lastWriteSessionID != dataPlane.openDesc.ID {
+	if dataPlane.lastWriteSessionID != dataPlane.openSessionID {
 		t.Fatalf("write used wrong upstream session id: %d", dataPlane.lastWriteSessionID)
 	}
 
@@ -104,14 +90,10 @@ func TestGatewaySessionMappingHidesUpstreamSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	closeHeader, err := proto.ParseHeader(closeResp)
-	if err != nil {
-		t.Fatalf("parse close response: %v", err)
+	if header := mustParseGatewayHeader(t, closeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected close status: %d", header.StatusCode)
 	}
-	if closeHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected close status: %d", closeHeader.StatusCode)
-	}
-	if dataPlane.lastCloseSessionID != dataPlane.openDesc.ID {
+	if dataPlane.lastCloseSessionID != dataPlane.openSessionID {
 		t.Fatalf("close used wrong upstream session id: %d", dataPlane.lastCloseSessionID)
 	}
 }
@@ -119,66 +101,53 @@ func TestGatewaySessionMappingHidesUpstreamSessionID(t *testing.T) {
 func TestGatewaySessionMappingIsReleasedOnConnectionClose(t *testing.T) {
 	t.Parallel()
 
-	diskID := "DISK000000000001"
+	const diskID = "DISK000000000001"
 	routes := &mappingRouteSource{
 		entry: route.Entry{
-			DiskID:       diskID,
-			RouteTarget:  "storer://conn-11",
-			ConnectionID: 11,
-			Connected:    true,
+			DiskID:        diskID,
+			RouteTarget:   "storer://conn-11",
+			ConnectionID:  11,
+			Connected:     true,
+			DiskSizeBytes: 4096,
+			MaxIOBytes:    1024,
 		},
 	}
-	dataPlane := &mappingDataPlane{
-		openDesc: session.Descriptor{
-			ID:         88,
-			DiskID:     diskID,
-			DiskSize:   4096,
-			MaxIOBytes: 1024,
-		},
-		pingOK: true,
-	}
+	dataPlane := &mappingDataPlane{openSessionID: 88}
 
 	handler, err := NewHandler(routes, dataPlane)
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
 	}
 	state := handler.NewConnectionState(55)
-	state.markAuthenticated(diskID)
+	authID := handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
 
-	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 10, 0, []byte(diskID)))
+	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 10, 0, proto.BuildSessionOpenRequestBody(authID)))
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	openHeader, err := proto.ParseHeader(openResp)
-	if err != nil {
-		t.Fatalf("parse open response: %v", err)
-	}
+	openHeader := mustParseGatewayHeader(t, openResp)
 
 	handler.CloseConnection(state.ID)
-	if dataPlane.lastCloseSessionID != dataPlane.openDesc.ID {
+	if dataPlane.lastCloseSessionID != dataPlane.openSessionID {
 		t.Fatalf("close connection did not release upstream session: %d", dataPlane.lastCloseSessionID)
 	}
 	if dataPlane.lastCloseConnectionID != state.ID {
 		t.Fatalf("close connection used wrong id: %d", dataPlane.lastCloseConnectionID)
 	}
 
-	pingResp, err := handler.HandlePayload(state, buildRequest(proto.OpPing, 11, openHeader.SessionID, proto.BuildPingResponseBody(1)))
+	readResp, err := handler.HandlePayload(state, buildRequest(proto.OpReadAt, 11, openHeader.SessionID, proto.BuildReadBody(0, 1)))
 	if err != nil {
-		t.Fatalf("ping after connection close: %v", err)
+		t.Fatalf("read after connection close: %v", err)
 	}
-	pingHeader, err := proto.ParseHeader(pingResp)
-	if err != nil {
-		t.Fatalf("parse ping-after-close response: %v", err)
-	}
-	if pingHeader.StatusCode != proto.StatusSessionUnavailable {
-		t.Fatalf("unexpected ping-after-close status: %d", pingHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, readResp); header.StatusCode != proto.StatusSessionUnavailable {
+		t.Fatalf("unexpected read-after-close status: %d", header.StatusCode)
 	}
 }
 
-func TestGatewayRouteDisconnectClosesClientConnection(t *testing.T) {
+func TestGatewayRouteDisconnectClosesClientSessionAndRevokesGrant(t *testing.T) {
 	t.Parallel()
 
-	diskID := "DISK000000000001"
+	const diskID = "DISK000000000001"
 	routes := &mappingRouteSource{
 		entry: route.Entry{
 			DiskID:       diskID,
@@ -187,40 +156,34 @@ func TestGatewayRouteDisconnectClosesClientConnection(t *testing.T) {
 			Connected:    true,
 		},
 	}
-	dataPlane := &mappingDataPlane{
-		openDesc: session.Descriptor{
-			ID:         91,
-			DiskID:     diskID,
-			DiskSize:   4096,
-			MaxIOBytes: 1024,
-		},
-		pingOK: true,
-	}
+	dataPlane := &mappingDataPlane{openSessionID: 91}
 
 	handler, err := NewHandler(routes, dataPlane)
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
 	}
 	state := handler.NewConnectionState(77)
-	state.markAuthenticated(diskID)
-	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, []byte(diskID)))
+	authID := handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
+	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, proto.BuildSessionOpenRequestBody(authID)))
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
-	openHeader, err := proto.ParseHeader(openResp)
-	if err != nil {
-		t.Fatalf("parse open response: %v", err)
-	}
+	openHeader := mustParseGatewayHeader(t, openResp)
 	if openHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected open status: %d", openHeader.StatusCode)
 	}
 
-	closed := handler.CloseRouteConnection(routes.entry.ConnectionID)
+	pendingAuthID := handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
+	closed := handler.CloseRouteConnection(routes.entry.ConnectionID, []string{diskID})
 	if len(closed) != 1 {
 		t.Fatalf("unexpected closed sessions count: %d", len(closed))
 	}
 	if closed[0].ClientConnection != state.ID {
 		t.Fatalf("unexpected client connection id: %d", closed[0].ClientConnection)
+	}
+
+	if _, status, ok := handler.grants.Lookup(pendingAuthID, state.ID); ok || status != proto.StatusAuthIDInvalid {
+		t.Fatalf("expected route disconnect to revoke auth grant, ok=%v status=%d", ok, status)
 	}
 }
 
@@ -236,26 +199,19 @@ func (s *mappingRouteSource) LookupRoute(diskID string) (route.Entry, bool) {
 }
 
 type mappingDataPlane struct {
-	openDesc              session.Descriptor
-	pingOK                bool
-	readOut               []byte
+	openSessionID         uint64
 	openErr               error
+	readOut               []byte
 	readErr               error
 	writeErr              error
-	lastPingSessionID     uint64
 	lastReadSessionID     uint64
 	lastWriteSessionID    uint64
 	lastCloseSessionID    uint64
 	lastCloseConnectionID uint64
 }
 
-func (p *mappingDataPlane) Open(uint64, string) (session.Descriptor, error) {
-	return p.openDesc, p.openErr
-}
-
-func (p *mappingDataPlane) Ping(routeConnectionID uint64, sessionID uint64) (session.Descriptor, bool) {
-	p.lastPingSessionID = sessionID
-	return p.openDesc, p.pingOK
+func (p *mappingDataPlane) Open(uint64, route.Entry) (uint64, error) {
+	return p.openSessionID, p.openErr
 }
 
 func (p *mappingDataPlane) Close(routeConnectionID uint64, sessionID uint64) {

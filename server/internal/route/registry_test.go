@@ -7,15 +7,14 @@ func TestRegistryRegisterAndLookupRoute(t *testing.T) {
 
 	registry := NewRegistry()
 	entry := Entry{
-		DiskID:            "DISK000000000001",
-		AuthVerifier:      [64]byte{1, 2, 3},
-		RouteTarget:       "embedded://whole",
-		ConnectionID:      7,
-		Connected:         true,
-		DiskSizeBytes:     4096,
-		ReadOnly:          false,
-		MaxIOBytes:        8192,
-		SessionTTLSeconds: 30,
+		DiskID:        "DISK000000000001",
+		AuthVerifier:  [64]byte{1, 2, 3},
+		RouteTarget:   "embedded://whole",
+		ConnectionID:  7,
+		Connected:     true,
+		DiskSizeBytes: 4096,
+		ReadOnly:      false,
+		MaxIOBytes:    8192,
 	}
 	if err := registry.Register(entry); err != nil {
 		t.Fatalf("register route: %v", err)
@@ -43,28 +42,29 @@ func TestRegistryRegisterAndLookupRoute(t *testing.T) {
 	if got.MaxIOBytes != entry.MaxIOBytes {
 		t.Fatalf("unexpected max io bytes: %d", got.MaxIOBytes)
 	}
-	if got.SessionTTLSeconds != entry.SessionTTLSeconds {
-		t.Fatalf("unexpected session ttl: %d", got.SessionTTLSeconds)
-	}
 }
 
-func TestRegistryDisconnectConnectionHidesRoute(t *testing.T) {
+func TestRegistryDisconnectConnectionHidesRouteAndReturnsEntries(t *testing.T) {
 	t.Parallel()
 
 	registry := NewRegistry()
-	if err := registry.Register(Entry{
+	entry := Entry{
 		DiskID:       "DISK000000000001",
 		AuthVerifier: [64]byte{9},
 		RouteTarget:  "storer://127.0.0.1:9836",
 		ConnectionID: 12,
 		Connected:    true,
-	}); err != nil {
+	}
+	if err := registry.Register(entry); err != nil {
 		t.Fatalf("register route: %v", err)
 	}
 
-	registry.DisconnectConnection(12)
+	disconnected := registry.DisconnectConnection(12)
+	if len(disconnected) != 1 || disconnected[0].DiskID != entry.DiskID {
+		t.Fatalf("unexpected disconnected entries: %+v", disconnected)
+	}
 
-	if _, ok := registry.LookupRoute("DISK000000000001"); ok {
+	if _, ok := registry.LookupRoute(entry.DiskID); ok {
 		t.Fatal("expected disconnected route to become unavailable")
 	}
 }

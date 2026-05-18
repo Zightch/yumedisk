@@ -6,67 +6,77 @@ import (
 )
 
 const (
-	SessionOpenRequestSize  = 16
-	SessionOpenResponseSize = 20
-	SessionFlagReadOnly     = 1 << 0
-	PingBodySize            = 8
-	SessionCloseNoticeSize  = 2
-	ReadWriteHeaderSize     = 12
+	SessionOpenRequestSize      = 8
+	SessionDescribeResponseSize = 16
+	SessionFlagReadOnly         = 1 << 0
+	LinkHeartbeatBodySize       = 8
+	SessionCloseNoticeSize      = 2
+	ReadWriteHeaderSize         = 12
 )
 
 var ErrSessionBody = errors.New("session body invalid")
 
 const (
-	SessionCloseReasonStorerLinkLost    = uint16(1)
-	SessionCloseReasonGatewayShutdown   = uint16(2)
-	SessionCloseReasonUpstreamHeartbeat = uint16(3)
-	SessionCloseReasonNormalClose       = uint16(5)
-	SessionCloseReasonProtocolError     = uint16(6)
+	SessionCloseReasonRouteLost               = uint16(1)
+	SessionCloseReasonGatewayShutdown         = uint16(2)
+	SessionCloseReasonUpstreamSessionClosed   = uint16(3)
+	SessionCloseReasonClientConnectionReplace = uint16(4)
+	SessionCloseReasonNormalCloseMirror       = uint16(5)
+	SessionCloseReasonProtocolError           = uint16(6)
 )
 
-func ParseSessionOpenRequestBody(body []byte) (string, error) {
+func ParseSessionOpenRequestBody(body []byte) (uint64, error) {
 	if len(body) != SessionOpenRequestSize {
-		return "", ErrSessionBody
+		return 0, ErrSessionBody
 	}
-	if !isAlphaNumericASCII(body) {
-		return "", ErrSessionBody
+	authID := binary.BigEndian.Uint64(body)
+	if authID == 0 {
+		return 0, ErrSessionBody
 	}
-	return string(body), nil
+	return authID, nil
 }
 
-func BuildSessionOpenResponseBody(diskSize uint64, maxIOBytes uint32, ttlSeconds uint32, readOnly bool) []byte {
-	body := make([]byte, SessionOpenResponseSize)
-	binary.BigEndian.PutUint64(body[0:8], diskSize)
-	binary.BigEndian.PutUint32(body[8:12], maxIOBytes)
-	binary.BigEndian.PutUint32(body[12:16], ttlSeconds)
-	if readOnly {
-		binary.BigEndian.PutUint16(body[16:18], SessionFlagReadOnly)
-	}
-	binary.BigEndian.PutUint16(body[18:20], 0)
+func BuildSessionOpenRequestBody(authID uint64) []byte {
+	body := make([]byte, SessionOpenRequestSize)
+	binary.BigEndian.PutUint64(body, authID)
 	return body
 }
 
-func ParseSessionOpenResponseBody(body []byte) (diskSize uint64, maxIOBytes uint32, ttlSeconds uint32, readOnly bool, err error) {
-	if len(body) != SessionOpenResponseSize {
-		return 0, 0, 0, false, ErrSessionBody
+func BuildSessionDescribeResponseBody(diskSize uint64, maxIOBytes uint32, readOnly bool) []byte {
+	body := make([]byte, SessionDescribeResponseSize)
+	binary.BigEndian.PutUint64(body[0:8], diskSize)
+	binary.BigEndian.PutUint32(body[8:12], maxIOBytes)
+	if readOnly {
+		binary.BigEndian.PutUint16(body[12:14], SessionFlagReadOnly)
+	}
+	binary.BigEndian.PutUint16(body[14:16], 0)
+	return body
+}
+
+func ParseSessionDescribeResponseBody(body []byte) (diskSize uint64, maxIOBytes uint32, readOnly bool, err error) {
+	if len(body) != SessionDescribeResponseSize {
+		return 0, 0, false, ErrSessionBody
 	}
 	diskSize = binary.BigEndian.Uint64(body[0:8])
 	maxIOBytes = binary.BigEndian.Uint32(body[8:12])
-	ttlSeconds = binary.BigEndian.Uint32(body[12:16])
-	flags := binary.BigEndian.Uint16(body[16:18])
+	flags := binary.BigEndian.Uint16(body[12:14])
+	reserved := binary.BigEndian.Uint16(body[14:16])
+	if reserved != 0 {
+		return 0, 0, false, ErrSessionBody
+	}
 	readOnly = flags&SessionFlagReadOnly != 0
-	return diskSize, maxIOBytes, ttlSeconds, readOnly, nil
+	return diskSize, maxIOBytes, readOnly, nil
 }
 
-func ParsePingRequestBody(body []byte) (uint64, error) {
-	if len(body) != PingBodySize {
+func ParseLinkHeartbeatBody(body []byte) (uint64, error) {
+	if len(body) != LinkHeartbeatBodySize {
 		return 0, ErrSessionBody
 	}
 	return binary.BigEndian.Uint64(body), nil
 }
 
-func BuildPingResponseBody(nonce uint64) []byte {
-	body := make([]byte, PingBodySize)
+func BuildLinkHeartbeatBody(nonce uint64) []byte {
+	body := make([]byte, LinkHeartbeatBodySize)
 	binary.BigEndian.PutUint64(body, nonce)
 	return body
 }

@@ -15,31 +15,18 @@ import (
 func TestAuthenticatorAuthStartAndFinishSuccess(t *testing.T) {
 	t.Parallel()
 
-	claimCode, err := auth.GenerateClaimCode(64)
-	if err != nil {
-		t.Fatalf("generate claim code: %v", err)
-	}
-	material, err := auth.ParseClaimCode(claimCode)
-	if err != nil {
-		t.Fatalf("parse claim code: %v", err)
-	}
-
+	material := newTestMaterial(t)
 	handler, err := newAuthHandler(t, material)
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
 	}
 
 	state := handler.NewConnectionState(42)
-	startReq := buildRequest(proto.OpAuthStart, 1, 0, []byte(material.DiskID))
-	startResp, err := handler.HandlePayload(state, startReq)
+	startResp, err := handler.HandlePayload(state, buildRequest(proto.OpAuthStart, 1, 0, []byte(material.DiskID)))
 	if err != nil {
 		t.Fatalf("auth start: %v", err)
 	}
-
-	startHeader, err := proto.ParseHeader(startResp)
-	if err != nil {
-		t.Fatalf("parse start response header: %v", err)
-	}
+	startHeader := mustParseGatewayHeader(t, startResp)
 	if startHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected auth start status: %d", startHeader.StatusCode)
 	}
@@ -50,37 +37,32 @@ func TestAuthenticatorAuthStartAndFinishSuccess(t *testing.T) {
 	}
 
 	proof := auth.ComputeProof(material.AuthVerifier, startBody.Salt[:])
-	finishBody := proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof)
-	finishReq := buildRequest(proto.OpAuthFinish, 2, 0, finishBody)
-	finishResp, err := handler.HandlePayload(state, finishReq)
+	finishResp, err := handler.HandlePayload(state, buildRequest(proto.OpAuthFinish, 2, 0, proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof)))
 	if err != nil {
 		t.Fatalf("auth finish: %v", err)
 	}
-
-	finishHeader, err := proto.ParseHeader(finishResp)
-	if err != nil {
-		t.Fatalf("parse finish response header: %v", err)
-	}
+	finishHeader := mustParseGatewayHeader(t, finishResp)
 	if finishHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected auth finish status: %d", finishHeader.StatusCode)
 	}
-	if !state.isAuthenticated(material.DiskID) {
-		t.Fatal("expected disk to become authenticated on connection state")
+
+	authID, err := proto.ParseAuthFinishResponseBody(finishResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse auth finish body: %v", err)
+	}
+	if authID == 0 {
+		t.Fatal("expected non-zero auth id")
+	}
+
+	if _, status, ok := handler.grants.Lookup(authID, state.ID); !ok || status != proto.StatusOK {
+		t.Fatalf("expected issued auth grant to be available, ok=%v status=%d", ok, status)
 	}
 }
 
 func TestAuthenticatorFakeDiskUsesUnifiedFailure(t *testing.T) {
 	t.Parallel()
 
-	claimCode, err := auth.GenerateClaimCode(64)
-	if err != nil {
-		t.Fatalf("generate claim code: %v", err)
-	}
-	material, err := auth.ParseClaimCode(claimCode)
-	if err != nil {
-		t.Fatalf("parse claim code: %v", err)
-	}
-
+	material := newTestMaterial(t)
 	handler, err := newAuthHandler(t, material)
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -88,8 +70,7 @@ func TestAuthenticatorFakeDiskUsesUnifiedFailure(t *testing.T) {
 
 	state := handler.NewConnectionState(7)
 	fakeDiskID := "ZZZZZZZZZZZZZZZZ"
-	startReq := buildRequest(proto.OpAuthStart, 11, 0, []byte(fakeDiskID))
-	startResp, err := handler.HandlePayload(state, startReq)
+	startResp, err := handler.HandlePayload(state, buildRequest(proto.OpAuthStart, 11, 0, []byte(fakeDiskID)))
 	if err != nil {
 		t.Fatalf("auth start: %v", err)
 	}
@@ -99,38 +80,21 @@ func TestAuthenticatorFakeDiskUsesUnifiedFailure(t *testing.T) {
 		t.Fatalf("parse auth start body: %v", err)
 	}
 
-	var fakeProof [proto.AuthProofSize]byte
-	finishBody := proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, fakeProof)
-	finishReq := buildRequest(proto.OpAuthFinish, 12, 0, finishBody)
-	finishResp, err := handler.HandlePayload(state, finishReq)
+	finishResp, err := handler.HandlePayload(state, buildRequest(proto.OpAuthFinish, 12, 0, proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, [proto.AuthProofSize]byte{})))
 	if err != nil {
 		t.Fatalf("auth finish: %v", err)
 	}
 
-	finishHeader, err := proto.ParseHeader(finishResp)
-	if err != nil {
-		t.Fatalf("parse finish response header: %v", err)
-	}
+	finishHeader := mustParseGatewayHeader(t, finishResp)
 	if finishHeader.StatusCode != proto.StatusAuthFailed {
 		t.Fatalf("unexpected fake disk auth finish status: %d", finishHeader.StatusCode)
-	}
-	if state.isAuthenticated(fakeDiskID) {
-		t.Fatal("fake disk must not become authenticated")
 	}
 }
 
 func TestAuthenticatorRejectsWrongPhaseRequests(t *testing.T) {
 	t.Parallel()
 
-	claimCode, err := auth.GenerateClaimCode(64)
-	if err != nil {
-		t.Fatalf("generate claim code: %v", err)
-	}
-	material, err := auth.ParseClaimCode(claimCode)
-	if err != nil {
-		t.Fatalf("parse claim code: %v", err)
-	}
-
+	material := newTestMaterial(t)
 	handler, err := newAuthHandler(t, material)
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
@@ -138,18 +102,12 @@ func TestAuthenticatorRejectsWrongPhaseRequests(t *testing.T) {
 
 	state := handler.NewConnectionState(88)
 
-	finishBody := proto.BuildAuthFinishRequestBody([]byte("token"), [proto.AuthProofSize]byte{})
-	finishReq := buildRequest(proto.OpAuthFinish, 1, 0, finishBody)
-	finishResp, err := handler.HandlePayload(state, finishReq)
+	finishResp, err := handler.HandlePayload(state, buildRequest(proto.OpAuthFinish, 1, 0, proto.BuildAuthFinishRequestBody([]byte("token"), [proto.AuthProofSize]byte{})))
 	if err != nil {
 		t.Fatalf("auth finish without start: %v", err)
 	}
-	finishHeader, err := proto.ParseHeader(finishResp)
-	if err != nil {
-		t.Fatalf("parse auth finish without start: %v", err)
-	}
-	if finishHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("unexpected auth finish without start status: %d", finishHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, finishResp); header.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected auth finish without start status: %d", header.StatusCode)
 	}
 
 	startReq := buildRequest(proto.OpAuthStart, 2, 0, []byte(material.DiskID))
@@ -157,24 +115,16 @@ func TestAuthenticatorRejectsWrongPhaseRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("auth start: %v", err)
 	}
-	startHeader, err := proto.ParseHeader(startResp)
-	if err != nil {
-		t.Fatalf("parse auth start response: %v", err)
-	}
-	if startHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected auth start status: %d", startHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, startResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected auth start status: %d", header.StatusCode)
 	}
 
 	restartResp, err := handler.HandlePayload(state, startReq)
 	if err != nil {
 		t.Fatalf("second auth start: %v", err)
 	}
-	restartHeader, err := proto.ParseHeader(restartResp)
-	if err != nil {
-		t.Fatalf("parse second auth start response: %v", err)
-	}
-	if restartHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("unexpected second auth start status: %d", restartHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, restartResp); header.StatusCode != proto.StatusInvalidRequest {
+		t.Fatalf("unexpected second auth start status: %d", header.StatusCode)
 	}
 
 	startBody, err := proto.ParseAuthStartResponseBody(startResp[proto.HeaderSize:])
@@ -182,30 +132,20 @@ func TestAuthenticatorRejectsWrongPhaseRequests(t *testing.T) {
 		t.Fatalf("parse auth start body: %v", err)
 	}
 	proof := auth.ComputeProof(material.AuthVerifier, startBody.Salt[:])
-	successFinishBody := proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof)
-	successFinishReq := buildRequest(proto.OpAuthFinish, 3, 0, successFinishBody)
-	successFinishResp, err := handler.HandlePayload(state, successFinishReq)
+	successFinishResp, err := handler.HandlePayload(state, buildRequest(proto.OpAuthFinish, 3, 0, proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof)))
 	if err != nil {
 		t.Fatalf("auth finish: %v", err)
 	}
-	successFinishHeader, err := proto.ParseHeader(successFinishResp)
-	if err != nil {
-		t.Fatalf("parse auth finish response: %v", err)
-	}
-	if successFinishHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected auth finish status: %d", successFinishHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, successFinishResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected auth finish status: %d", header.StatusCode)
 	}
 
 	postAuthStartResp, err := handler.HandlePayload(state, startReq)
 	if err != nil {
-		t.Fatalf("auth start after auth: %v", err)
+		t.Fatalf("auth start after auth finish: %v", err)
 	}
-	postAuthStartHeader, err := proto.ParseHeader(postAuthStartResp)
-	if err != nil {
-		t.Fatalf("parse auth start after auth: %v", err)
-	}
-	if postAuthStartHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("unexpected auth start after auth status: %d", postAuthStartHeader.StatusCode)
+	if header := mustParseGatewayHeader(t, postAuthStartResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected auth start after auth finish status: %d", header.StatusCode)
 	}
 }
 
@@ -215,14 +155,35 @@ func buildRequest(opCode uint8, requestID uint64, sessionID uint64, body []byte)
 		ProtocolVersion: proto.ProtocolVersion,
 		HeaderLen:       proto.HeaderSize,
 		OpCode:          opCode,
-		Flags:           0,
-		StatusCode:      0,
-		Reserved:        0,
 		RequestID:       requestID,
 		SessionID:       sessionID,
 	}, payload)
 	copy(payload[proto.HeaderSize:], body)
 	return payload
+}
+
+func mustParseGatewayHeader(t *testing.T, payload []byte) proto.Header {
+	t.Helper()
+
+	header, err := proto.ParseHeader(payload)
+	if err != nil {
+		t.Fatalf("parse header: %v", err)
+	}
+	return header
+}
+
+func newTestMaterial(t *testing.T) auth.Material {
+	t.Helper()
+
+	claimCode, err := auth.GenerateClaimCode(64)
+	if err != nil {
+		t.Fatalf("generate claim code: %v", err)
+	}
+	material, err := auth.ParseClaimCode(claimCode)
+	if err != nil {
+		t.Fatalf("parse claim code: %v", err)
+	}
+	return material
 }
 
 func newAuthHandler(t *testing.T, material auth.Material) (*Handler, error) {
@@ -241,7 +202,7 @@ func newAuthHandler(t *testing.T, material auth.Material) (*Handler, error) {
 	t.Cleanup(func() { _ = storage.Close() })
 
 	sessions := session.NewService(session.NewManager(), storage, 30*time.Second, 60*1024)
-	backend := newTestGatewayBackend(material, sessions)
+	backend := newTestGatewayBackend(material, sessions, storage.Size(), storage.ReadOnly())
 	handler, err := NewHandler(backend, backend)
 	if err != nil {
 		return nil, err

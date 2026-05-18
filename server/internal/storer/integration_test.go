@@ -3,7 +3,6 @@ package storer
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"net"
 	"os"
 	"path/filepath"
@@ -17,34 +16,16 @@ import (
 	"yumedisk/server/internal/transport"
 )
 
-func TestServerMinimalClosure(t *testing.T) {
+func TestWholeRuntimeMinimalClosure(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
-	rawPath := filepath.Join(tempDir, "disk.raw")
-	if err := os.WriteFile(rawPath, make([]byte, 4096), 0o644); err != nil {
-		t.Fatalf("write raw file: %v", err)
-	}
-
-	claimCode, err := auth.GenerateClaimCode(64)
-	if err != nil {
-		t.Fatalf("generate claim code: %v", err)
-	}
-	material, err := auth.ParseClaimCode(claimCode)
-	if err != nil {
-		t.Fatalf("parse claim code: %v", err)
-	}
-
+	rawPath, material := newRuntimeDisk(t)
 	cfg := config.StorerConfig{
 		Role:            config.StorerRoleWhole,
 		StorageFilePath: rawPath,
-		ClaimCode:       claimCode,
-		Whole: config.StorerWholeConfig{
-			ListenAddr: reserveLocalAddr(t),
-		},
-		Storer: config.StorerRemoteConfig{
-			GatewayAddr: config.DefaultStorerGatewayAddr,
-		},
+		ClaimCode:       material.ClaimCode,
+		Whole:           config.StorerWholeConfig{ListenAddr: reserveLocalAddr(t)},
+		Storer:          config.StorerRemoteConfig{GatewayAddr: config.DefaultStorerGatewayAddr},
 	}
 
 	runtime, err := NewRoleRuntime(cfg)
@@ -66,29 +47,12 @@ func TestServerMinimalClosure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial server: %v", err)
 	}
+	defer conn.Close()
 
 	requestID := uint64(1)
-	startResp := mustRoundTrip(t, conn, buildRequest(proto.OpAuthStart, requestID, 0, []byte(material.DiskID)))
-	startHeader := mustParseHeader(t, startResp)
-	if startHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("auth start status: %d", startHeader.StatusCode)
-	}
-	startBody, err := proto.ParseAuthStartResponseBody(startResp[proto.HeaderSize:])
-	if err != nil {
-		t.Fatalf("parse auth start response: %v", err)
-	}
+	authID := authenticateConnection(t, conn, material, &requestID)
 
-	requestID++
-	proof := auth.ComputeProof(material.AuthVerifier, startBody.Salt[:])
-	finishBody := proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof)
-	finishResp := mustRoundTrip(t, conn, buildRequest(proto.OpAuthFinish, requestID, 0, finishBody))
-	finishHeader := mustParseHeader(t, finishResp)
-	if finishHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("auth finish status: %d", finishHeader.StatusCode)
-	}
-
-	requestID++
-	openResp := mustRoundTrip(t, conn, buildRequest(proto.OpSessionOpen, requestID, 0, []byte(material.DiskID)))
+	openResp := mustRoundTrip(t, conn, buildRequest(proto.OpSessionOpen, requestID, 0, proto.BuildSessionOpenRequestBody(authID)))
 	openHeader := mustParseHeader(t, openResp)
 	if openHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("session open status: %d", openHeader.StatusCode)
@@ -97,16 +61,29 @@ func TestServerMinimalClosure(t *testing.T) {
 	if sessionID == 0 {
 		t.Fatal("expected non-zero session id")
 	}
-
 	requestID++
+
+	describeResp := mustRoundTrip(t, conn, buildRequest(proto.OpSessionDescribe, requestID, sessionID, nil))
+	describeHeader := mustParseHeader(t, describeResp)
+	if describeHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("describe status: %d", describeHeader.StatusCode)
+	}
+	diskSize, maxIOBytes, readOnly, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse describe response: %v", err)
+	}
+	if diskSize != 4096 || maxIOBytes != 60*1024 || readOnly {
+		t.Fatalf("unexpected describe response: size=%d maxIO=%d readOnly=%v", diskSize, maxIOBytes, readOnly)
+	}
+	requestID++
+
 	writePayload := append(proto.BuildReadWriteBody(8, 4), []byte("YUME")...)
 	writeResp := mustRoundTrip(t, conn, buildRequest(proto.OpWriteAt, requestID, sessionID, writePayload))
-	writeHeader := mustParseHeader(t, writeResp)
-	if writeHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("write status: %d", writeHeader.StatusCode)
+	if header := mustParseHeader(t, writeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("write status: %d", header.StatusCode)
 	}
-
 	requestID++
+
 	readResp := mustRoundTrip(t, conn, buildRequest(proto.OpReadAt, requestID, sessionID, proto.BuildReadBody(8, 4)))
 	readHeader := mustParseHeader(t, readResp)
 	if readHeader.StatusCode != proto.StatusOK {
@@ -115,25 +92,11 @@ func TestServerMinimalClosure(t *testing.T) {
 	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("YUME")) {
 		t.Fatalf("unexpected read payload: %q", string(readResp[proto.HeaderSize:]))
 	}
-
-	if err := conn.Close(); err != nil {
-		t.Fatalf("close conn: %v", err)
-	}
-	time.Sleep(150 * time.Millisecond)
-
-	conn2, err := net.Dial("tcp", cfg.Whole.ListenAddr)
-	if err != nil {
-		t.Fatalf("dial server second connection: %v", err)
-	}
-	defer conn2.Close()
-
 	requestID++
-	pingBody := make([]byte, 8)
-	binary.BigEndian.PutUint64(pingBody, 123)
-	pingResp := mustRoundTrip(t, conn2, buildRequest(proto.OpPing, requestID, sessionID, pingBody))
-	pingHeader := mustParseHeader(t, pingResp)
-	if pingHeader.StatusCode != proto.StatusInvalidRequest {
-		t.Fatalf("expected invalid request after disconnect, got %d", pingHeader.StatusCode)
+
+	closeResp := mustRoundTrip(t, conn, buildRequest(proto.OpClose, requestID, sessionID, nil))
+	if header := mustParseHeader(t, closeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("close status: %d", header.StatusCode)
 	}
 
 	cancel()
@@ -147,34 +110,16 @@ func TestServerMinimalClosure(t *testing.T) {
 	}
 }
 
-func TestServerRejectsSecondSessionOpenWhileDiskIsAlreadyOpened(t *testing.T) {
+func TestWholeRuntimeSecondClientBusyAndAuthIDReusable(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
-	rawPath := filepath.Join(tempDir, "disk.raw")
-	if err := os.WriteFile(rawPath, make([]byte, 4096), 0o644); err != nil {
-		t.Fatalf("write raw file: %v", err)
-	}
-
-	claimCode, err := auth.GenerateClaimCode(64)
-	if err != nil {
-		t.Fatalf("generate claim code: %v", err)
-	}
-	material, err := auth.ParseClaimCode(claimCode)
-	if err != nil {
-		t.Fatalf("parse claim code: %v", err)
-	}
-
+	rawPath, material := newRuntimeDisk(t)
 	cfg := config.StorerConfig{
 		Role:            config.StorerRoleWhole,
 		StorageFilePath: rawPath,
-		ClaimCode:       claimCode,
-		Whole: config.StorerWholeConfig{
-			ListenAddr: reserveLocalAddr(t),
-		},
-		Storer: config.StorerRemoteConfig{
-			GatewayAddr: config.DefaultStorerGatewayAddr,
-		},
+		ClaimCode:       material.ClaimCode,
+		Whole:           config.StorerWholeConfig{ListenAddr: reserveLocalAddr(t)},
+		Storer:          config.StorerRemoteConfig{GatewayAddr: config.DefaultStorerGatewayAddr},
 	}
 
 	runtime, err := NewRoleRuntime(cfg)
@@ -198,7 +143,13 @@ func TestServerRejectsSecondSessionOpenWhileDiskIsAlreadyOpened(t *testing.T) {
 	}
 	defer connOne.Close()
 
-	authenticateAndOpenSession(t, connOne, material)
+	requestIDOne := uint64(1)
+	authIDOne := authenticateConnection(t, connOne, material, &requestIDOne)
+	openRespOne := mustRoundTrip(t, connOne, buildRequest(proto.OpSessionOpen, requestIDOne, 0, proto.BuildSessionOpenRequestBody(authIDOne)))
+	openHeaderOne := mustParseHeader(t, openRespOne)
+	if openHeaderOne.StatusCode != proto.StatusOK {
+		t.Fatalf("first open status: %d", openHeaderOne.StatusCode)
+	}
 
 	connTwo, err := net.Dial("tcp", cfg.Whole.ListenAddr)
 	if err != nil {
@@ -206,12 +157,25 @@ func TestServerRejectsSecondSessionOpenWhileDiskIsAlreadyOpened(t *testing.T) {
 	}
 	defer connTwo.Close()
 
-	requestID := authenticateConnection(t, connTwo, material)
-	requestID++
-	openResp := mustRoundTrip(t, connTwo, buildRequest(proto.OpSessionOpen, requestID, 0, []byte(material.DiskID)))
-	openHeader := mustParseHeader(t, openResp)
-	if openHeader.StatusCode != proto.StatusSessionBusy {
-		t.Fatalf("expected session busy, got %d", openHeader.StatusCode)
+	requestIDTwo := uint64(1)
+	authIDTwo := authenticateConnection(t, connTwo, material, &requestIDTwo)
+	openRespTwo := mustRoundTrip(t, connTwo, buildRequest(proto.OpSessionOpen, requestIDTwo, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
+	openHeaderTwo := mustParseHeader(t, openRespTwo)
+	if openHeaderTwo.StatusCode != proto.StatusSessionBusy {
+		t.Fatalf("expected session busy, got %d", openHeaderTwo.StatusCode)
+	}
+
+	requestIDOne++
+	closeResp := mustRoundTrip(t, connOne, buildRequest(proto.OpClose, requestIDOne, openHeaderOne.SessionID, nil))
+	if header := mustParseHeader(t, closeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("close first session status: %d", header.StatusCode)
+	}
+
+	requestIDTwo++
+	retryOpenResp := mustRoundTrip(t, connTwo, buildRequest(proto.OpSessionOpen, requestIDTwo, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
+	retryOpenHeader := mustParseHeader(t, retryOpenResp)
+	if retryOpenHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("expected retry open success, got %d", retryOpenHeader.StatusCode)
 	}
 
 	cancel()
@@ -228,29 +192,13 @@ func TestServerRejectsSecondSessionOpenWhileDiskIsAlreadyOpened(t *testing.T) {
 func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
 	t.Parallel()
 
-	tempDir := t.TempDir()
-	rawPath := filepath.Join(tempDir, "disk.raw")
-	if err := os.WriteFile(rawPath, make([]byte, 4096), 0o644); err != nil {
-		t.Fatalf("write raw file: %v", err)
-	}
-
-	claimCode, err := auth.GenerateClaimCode(64)
-	if err != nil {
-		t.Fatalf("generate claim code: %v", err)
-	}
-	material, err := auth.ParseClaimCode(claimCode)
-	if err != nil {
-		t.Fatalf("parse claim code: %v", err)
-	}
-
+	rawPath, material := newRuntimeDisk(t)
 	gatewayAddr := reserveLocalAddr(t)
 	cfg := config.StorerConfig{
 		Role:            config.StorerRoleStorer,
 		StorageFilePath: rawPath,
-		ClaimCode:       claimCode,
-		Whole: config.StorerWholeConfig{
-			ListenAddr: config.DefaultWholeListenAddr,
-		},
+		ClaimCode:       material.ClaimCode,
+		Whole:           config.StorerWholeConfig{ListenAddr: config.DefaultWholeListenAddr},
 		Storer: config.StorerRemoteConfig{
 			GatewayAddr:  gatewayAddr,
 			GatewayToken: "gateway-token",
@@ -284,12 +232,11 @@ func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
 	defer conn.Close()
 
 	registerReq := proto.BuildStorerRegisterRequestBody(proto.StorerRegisterRequest{
-		GatewayToken:      "gateway-token",
-		DiskID:            material.DiskID,
-		AuthVerifier:      material.AuthVerifier,
-		DiskSizeBytes:     4096,
-		MaxIOBytes:        60 * 1024,
-		SessionTTLSeconds: 30,
+		GatewayToken:  "gateway-token",
+		DiskID:        material.DiskID,
+		AuthVerifier:  material.AuthVerifier,
+		DiskSizeBytes: 4096,
+		MaxIOBytes:    60 * 1024,
 	})
 	registerPayload := make([]byte, proto.HeaderSize+len(registerReq))
 	proto.EncodeHeader(proto.Header{
@@ -300,18 +247,16 @@ func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
 	}, registerPayload)
 	copy(registerPayload[proto.HeaderSize:], registerReq)
 	registerResp := mustRoundTrip(t, conn, registerPayload)
-	registerHeader := mustParseHeader(t, registerResp)
-	if registerHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("register status: %d", registerHeader.StatusCode)
+	if header := mustParseHeader(t, registerResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("register status: %d", header.StatusCode)
 	}
 
 	authResp := mustRoundTrip(t, conn, buildRequest(proto.OpAuthStart, 2, 0, []byte(material.DiskID)))
-	authHeader := mustParseHeader(t, authResp)
-	if authHeader.StatusCode != proto.StatusUnsupportedOp {
-		t.Fatalf("expected auth op to be unsupported, got %d", authHeader.StatusCode)
+	if header := mustParseHeader(t, authResp); header.StatusCode != proto.StatusUnsupportedOp {
+		t.Fatalf("expected auth op to be unsupported, got %d", header.StatusCode)
 	}
 
-	openResp := mustRoundTrip(t, conn, buildRequest(proto.OpSessionOpen, 3, 0, []byte(material.DiskID)))
+	openResp := mustRoundTrip(t, conn, buildRequest(proto.OpSessionOpen, 3, 0, nil))
 	openHeader := mustParseHeader(t, openResp)
 	if openHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("session open status: %d", openHeader.StatusCode)
@@ -323,9 +268,8 @@ func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
 
 	writePayload := append(proto.BuildReadWriteBody(16, 4), []byte("DATA")...)
 	writeResp := mustRoundTrip(t, conn, buildRequest(proto.OpWriteAt, 4, sessionID, writePayload))
-	writeHeader := mustParseHeader(t, writeResp)
-	if writeHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("write status: %d", writeHeader.StatusCode)
+	if header := mustParseHeader(t, writeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("write status: %d", header.StatusCode)
 	}
 
 	readResp := mustRoundTrip(t, conn, buildRequest(proto.OpReadAt, 5, sessionID, proto.BuildReadBody(16, 4)))
@@ -348,24 +292,30 @@ func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
 	}
 }
 
-func authenticateAndOpenSession(t *testing.T, conn net.Conn, material auth.Material) uint64 {
+func newRuntimeDisk(t *testing.T) (string, auth.Material) {
 	t.Helper()
 
-	requestID := authenticateConnection(t, conn, material)
-	requestID++
-	openResp := mustRoundTrip(t, conn, buildRequest(proto.OpSessionOpen, requestID, 0, []byte(material.DiskID)))
-	openHeader := mustParseHeader(t, openResp)
-	if openHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("session open status: %d", openHeader.StatusCode)
+	tempDir := t.TempDir()
+	rawPath := filepath.Join(tempDir, "disk.raw")
+	if err := os.WriteFile(rawPath, make([]byte, 4096), 0o644); err != nil {
+		t.Fatalf("write raw file: %v", err)
 	}
-	return openHeader.SessionID
+
+	claimCode, err := auth.GenerateClaimCode(64)
+	if err != nil {
+		t.Fatalf("generate claim code: %v", err)
+	}
+	material, err := auth.ParseClaimCode(claimCode)
+	if err != nil {
+		t.Fatalf("parse claim code: %v", err)
+	}
+	return rawPath, material
 }
 
-func authenticateConnection(t *testing.T, conn net.Conn, material auth.Material) uint64 {
+func authenticateConnection(t *testing.T, conn net.Conn, material auth.Material, requestID *uint64) uint64 {
 	t.Helper()
 
-	requestID := uint64(1)
-	startResp := mustRoundTrip(t, conn, buildRequest(proto.OpAuthStart, requestID, 0, []byte(material.DiskID)))
+	startResp := mustRoundTrip(t, conn, buildRequest(proto.OpAuthStart, *requestID, 0, []byte(material.DiskID)))
 	startHeader := mustParseHeader(t, startResp)
 	if startHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("auth start status: %d", startHeader.StatusCode)
@@ -375,15 +325,21 @@ func authenticateConnection(t *testing.T, conn net.Conn, material auth.Material)
 		t.Fatalf("parse auth start response: %v", err)
 	}
 
-	requestID++
+	*requestID++
 	proof := auth.ComputeProof(material.AuthVerifier, startBody.Salt[:])
 	finishBody := proto.BuildAuthFinishRequestBody(startBody.ChallengeToken, proof)
-	finishResp := mustRoundTrip(t, conn, buildRequest(proto.OpAuthFinish, requestID, 0, finishBody))
+	finishResp := mustRoundTrip(t, conn, buildRequest(proto.OpAuthFinish, *requestID, 0, finishBody))
 	finishHeader := mustParseHeader(t, finishResp)
 	if finishHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("auth finish status: %d", finishHeader.StatusCode)
 	}
-	return requestID
+	authID, err := proto.ParseAuthFinishResponseBody(finishResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse auth finish response: %v", err)
+	}
+
+	*requestID++
+	return authID
 }
 
 func waitForTCP(t *testing.T, addr string) {
@@ -449,9 +405,6 @@ func buildRequest(opCode uint8, requestID uint64, sessionID uint64, body []byte)
 		ProtocolVersion: proto.ProtocolVersion,
 		HeaderLen:       proto.HeaderSize,
 		OpCode:          opCode,
-		Flags:           0,
-		StatusCode:      0,
-		Reserved:        0,
 		RequestID:       requestID,
 		SessionID:       sessionID,
 	}, payload)

@@ -1,7 +1,7 @@
 package storer
 
 import (
-	"yumedisk/server/internal/session"
+	"yumedisk/server/internal/route"
 )
 
 type localGatewayBackend struct {
@@ -12,12 +12,12 @@ func newLocalGatewayBackend(core *Core) *localGatewayBackend {
 	return &localGatewayBackend{core: core}
 }
 
-func (b *localGatewayBackend) Open(connectionID uint64, diskID string) (session.Descriptor, error) {
-	return b.core.SessionService().Open(connectionID, diskID)
-}
-
-func (b *localGatewayBackend) Ping(routeConnectionID uint64, sessionID uint64) (session.Descriptor, bool) {
-	return b.core.SessionService().Ping(sessionID)
+func (b *localGatewayBackend) Open(connectionID uint64, entry route.Entry) (uint64, error) {
+	desc, err := b.core.SessionService().Open(connectionID, entry.DiskID)
+	if err != nil {
+		return 0, err
+	}
+	return desc.ID, nil
 }
 
 func (b *localGatewayBackend) Close(routeConnectionID uint64, sessionID uint64) {

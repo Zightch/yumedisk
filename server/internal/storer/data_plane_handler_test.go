@@ -17,7 +17,7 @@ func TestDataPlaneHandlerOpenReadWriteAndClose(t *testing.T) {
 	core := newTestCore(t)
 	handler := newDataPlaneHandler(17, core.DiskID(), core.SessionService())
 
-	openResp, err := handler.HandlePayload(buildRequest(proto.OpSessionOpen, 1, 0, []byte(core.DiskID())))
+	openResp, err := handler.HandlePayload(buildRequest(proto.OpSessionOpen, 1, 0, nil))
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
@@ -31,9 +31,8 @@ func TestDataPlaneHandlerOpenReadWriteAndClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	writeHeader := mustParseHeader(t, writeResp)
-	if writeHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected write status: %d", writeHeader.StatusCode)
+	if header := mustParseHeader(t, writeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected write status: %d", header.StatusCode)
 	}
 
 	readResp, err := handler.HandlePayload(buildRequest(proto.OpReadAt, 3, openHeader.SessionID, proto.BuildReadBody(4, 4)))
@@ -52,34 +51,31 @@ func TestDataPlaneHandlerOpenReadWriteAndClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	closeHeader := mustParseHeader(t, closeResp)
-	if closeHeader.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected close status: %d", closeHeader.StatusCode)
+	if header := mustParseHeader(t, closeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected close status: %d", header.StatusCode)
 	}
 }
 
-func TestDataPlaneHandlerRejectsWrongDiskAndAuthOps(t *testing.T) {
+func TestDataPlaneHandlerRejectsBadOpenBodyAndAuthOps(t *testing.T) {
 	t.Parallel()
 
 	core := newTestCore(t)
 	handler := newDataPlaneHandler(18, core.DiskID(), core.SessionService())
 
-	openResp, err := handler.HandlePayload(buildRequest(proto.OpSessionOpen, 1, 0, []byte("DISK000000000001")))
+	openResp, err := handler.HandlePayload(buildRequest(proto.OpSessionOpen, 1, 0, []byte("unexpected")))
 	if err != nil {
-		t.Fatalf("open wrong disk: %v", err)
+		t.Fatalf("open with body: %v", err)
 	}
-	openHeader := mustParseHeader(t, openResp)
-	if openHeader.StatusCode != proto.StatusSessionUnavailable {
-		t.Fatalf("unexpected wrong-disk status: %d", openHeader.StatusCode)
+	if header := mustParseHeader(t, openResp); header.StatusCode != proto.StatusBadBody {
+		t.Fatalf("unexpected open-with-body status: %d", header.StatusCode)
 	}
 
 	authResp, err := handler.HandlePayload(buildRequest(proto.OpAuthStart, 2, 0, []byte(core.DiskID())))
 	if err != nil {
 		t.Fatalf("auth start: %v", err)
 	}
-	authHeader := mustParseHeader(t, authResp)
-	if authHeader.StatusCode != proto.StatusUnsupportedOp {
-		t.Fatalf("unexpected auth-op status: %d", authHeader.StatusCode)
+	if header := mustParseHeader(t, authResp); header.StatusCode != proto.StatusUnsupportedOp {
+		t.Fatalf("unexpected auth-op status: %d", header.StatusCode)
 	}
 }
 
@@ -110,9 +106,7 @@ func testStorerConfig(rawPath, claimCode string) config.StorerConfig {
 		Role:            config.StorerRoleStorer,
 		StorageFilePath: rawPath,
 		ClaimCode:       claimCode,
-		Whole: config.StorerWholeConfig{
-			ListenAddr: config.DefaultWholeListenAddr,
-		},
+		Whole:           config.StorerWholeConfig{ListenAddr: config.DefaultWholeListenAddr},
 		Storer: config.StorerRemoteConfig{
 			GatewayAddr:  config.DefaultStorerGatewayAddr,
 			GatewayToken: "gateway-token",

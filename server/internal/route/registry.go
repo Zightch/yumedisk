@@ -8,15 +8,14 @@ import (
 var ErrDiskAlreadyRegistered = errors.New("disk id already registered on another connection")
 
 type Entry struct {
-	DiskID            string
-	AuthVerifier      [64]byte
-	RouteTarget       string
-	ConnectionID      uint64
-	Connected         bool
-	DiskSizeBytes     uint64
-	ReadOnly          bool
-	MaxIOBytes        uint32
-	SessionTTLSeconds uint32
+	DiskID        string
+	AuthVerifier  [64]byte
+	RouteTarget   string
+	ConnectionID  uint64
+	Connected     bool
+	DiskSizeBytes uint64
+	ReadOnly      bool
+	MaxIOBytes    uint32
 }
 
 type Registry struct {
@@ -61,14 +60,17 @@ func (r *Registry) LookupRoute(diskID string) (Entry, bool) {
 	return entry, true
 }
 
-func (r *Registry) DisconnectConnection(connectionID uint64) {
+func (r *Registry) DisconnectConnection(connectionID uint64) []Entry {
 	r.mu.Lock()
+	var disconnected []Entry
 	for diskID, entry := range r.items {
 		if entry.ConnectionID != connectionID {
 			continue
 		}
 		entry.Connected = false
 		r.items[diskID] = entry
+		disconnected = append(disconnected, entry)
 	}
 	r.mu.Unlock()
+	return disconnected
 }

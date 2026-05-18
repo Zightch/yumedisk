@@ -219,14 +219,7 @@ func (r *Runtime) notifyClientSessionClosed(session gatewaySession, reason uint1
 	}
 
 	payload := make([]byte, proto.HeaderSize+proto.SessionCloseNoticeSize)
-	proto.EncodeHeader(proto.Header{
-		ProtocolVersion: proto.ProtocolVersion,
-		HeaderLen:       proto.HeaderSize,
-		OpCode:          proto.OpSessionCloseNotice,
-		RequestID:       1,
-		SessionID:       session.ID,
-	}, payload)
-	copy(payload[proto.HeaderSize:], proto.BuildSessionCloseNoticeBody(reason))
+	copy(payload, proto.BuildNotice(proto.OpSessionCloseNotice, session.ID, proto.BuildSessionCloseNoticeBody(reason)))
 
 	client.write.Lock()
 	err := transport.WriteFrame(client.conn, payload)
@@ -235,11 +228,10 @@ func (r *Runtime) notifyClientSessionClosed(session gatewaySession, reason uint1
 		_ = client.conn.Close()
 		return
 	}
-	client.state.clearSession(session.ID)
 }
 
-func (r *Runtime) CloseRouteConnection(routeConnectionID uint64) {
-	for _, session := range r.clientHandler.CloseRouteConnection(routeConnectionID) {
-		r.notifyClientSessionClosed(session, proto.SessionCloseReasonStorerLinkLost)
+func (r *Runtime) CloseRouteConnection(routeConnectionID uint64, diskIDs []string) {
+	for _, session := range r.clientHandler.CloseRouteConnection(routeConnectionID, diskIDs) {
+		r.notifyClientSessionClosed(session, proto.SessionCloseReasonRouteLost)
 	}
 }
