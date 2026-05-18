@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync/atomic"
 
+	"yumedisk/server/internal/bootstrap"
 	"yumedisk/server/internal/config"
 	"yumedisk/server/internal/gateway"
 	"yumedisk/server/internal/transport"
@@ -27,7 +29,10 @@ func NewWholeRuntime(cfg config.StorerConfig, core *Core) (*WholeRuntime, error)
 		return nil, errors.New("whole runtime requires non-nil core")
 	}
 
-	backend := newLocalGatewayBackend(core)
+	backend, err := newLocalGatewayBackend(core)
+	if err != nil {
+		return nil, err
+	}
 	gatewayHandler, err := gateway.NewHandler(backend, backend)
 	if err != nil {
 		return nil, err
@@ -69,15 +74,23 @@ func (r *WholeRuntime) Run(ctx context.Context) error {
 			return fmt.Errorf("accept connection: %w", err)
 		}
 
-		connectionID := r.nextConn.Add(1)
-		state := r.gateway.NewConnectionState(connectionID)
-		go r.serveAcceptedConnection(ctx, state, conn)
+		go r.serveAcceptedConnection(ctx, conn)
 	}
 }
 
-func (r *WholeRuntime) serveAcceptedConnection(ctx context.Context, state *gateway.ConnectionState, conn net.Conn) {
-	defer r.gateway.CloseConnection(state.ID)
+func (r *WholeRuntime) serveAcceptedConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	if err := bootstrap.AcceptClient(conn); err != nil {
+		if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+			log.Printf("whole client bootstrap rejected from %s: %v", conn.RemoteAddr(), err)
+		}
+		return
+	}
+
+	connectionID := r.nextConn.Add(1)
+	state := r.gateway.NewConnectionState(connectionID)
+
+	defer r.gateway.CloseConnection(state.ID)
 
 	log.Printf("connection %d accepted from %s", state.ID, conn.RemoteAddr())
 

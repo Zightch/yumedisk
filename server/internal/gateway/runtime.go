@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"yumedisk/server/internal/bootstrap"
 	"yumedisk/server/internal/config"
 	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/transport"
@@ -127,9 +129,7 @@ func (r *Runtime) serveClientListener(ctx context.Context, listener net.Listener
 			return fmt.Errorf("accept client connection: %w", err)
 		}
 
-		connectionID := r.nextConn.Add(1)
-		state := r.clientHandler.NewConnectionState(connectionID)
-		go r.serveClientConnection(ctx, state, conn)
+		go r.serveClientConnection(ctx, conn)
 	}
 }
 
@@ -153,7 +153,18 @@ func (r *Runtime) serveStorerListener(ctx context.Context, listener net.Listener
 	}
 }
 
-func (r *Runtime) serveClientConnection(ctx context.Context, state *ConnectionState, conn net.Conn) {
+func (r *Runtime) serveClientConnection(ctx context.Context, conn net.Conn) {
+	defer conn.Close()
+	if err := bootstrap.AcceptClient(conn); err != nil {
+		if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+			log.Printf("gateway client bootstrap rejected from %s: %v", conn.RemoteAddr(), err)
+		}
+		return
+	}
+
+	connectionID := r.nextConn.Add(1)
+	state := r.clientHandler.NewConnectionState(connectionID)
+
 	r.clientConnMu.Lock()
 	r.clientConns[state.ID] = &clientConnection{
 		conn:  conn,
@@ -166,7 +177,6 @@ func (r *Runtime) serveClientConnection(ctx context.Context, state *ConnectionSt
 		delete(r.clientConns, state.ID)
 		r.clientConnMu.Unlock()
 	}()
-	defer conn.Close()
 
 	log.Printf("gateway client connection %d accepted from %s", state.ID, conn.RemoteAddr())
 

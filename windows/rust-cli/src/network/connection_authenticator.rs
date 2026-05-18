@@ -188,6 +188,7 @@ mod tests {
     use crate::network::ProtocolHeader;
     use crate::network::ProtocolStatusCode;
     use crate::network::TransportEndpoint;
+    use crate::network::expect_client_hello;
     use crate::network::transport_client::MAX_FRAME_PAYLOAD_BYTES;
     use crate::network::transport_client::read_frame_into;
     use crate::network::transport_client::write_frame;
@@ -204,6 +205,7 @@ mod tests {
 
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept should succeed");
+            expect_client_hello(&mut stream);
             let mut buffer = vec![0u8; MAX_FRAME_PAYLOAD_BYTES];
 
             let auth_start = read_frame_into(&mut stream, &mut buffer)
@@ -284,6 +286,7 @@ mod tests {
 
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept should succeed");
+            expect_client_hello(&mut stream);
             let mut buffer = vec![0u8; MAX_FRAME_PAYLOAD_BYTES];
 
             let auth_start = read_frame_into(&mut stream, &mut buffer)

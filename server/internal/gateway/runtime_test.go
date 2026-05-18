@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"yumedisk/server/internal/bootstrap"
 	"yumedisk/server/internal/config"
 )
 
@@ -42,6 +43,9 @@ func TestGatewayRuntimeListensOnClientAndStorerPorts(t *testing.T) {
 	clientConn, err := net.Dial("tcp", cfg.Client.ListenAddr)
 	if err != nil {
 		t.Fatalf("dial client listener: %v", err)
+	}
+	if _, err := bootstrap.ConnectClient(clientConn); err != nil {
+		t.Fatalf("client hello: %v", err)
 	}
 	_ = clientConn.Close()
 

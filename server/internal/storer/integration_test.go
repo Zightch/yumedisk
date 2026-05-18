@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"yumedisk/server/internal/auth"
+	"yumedisk/server/internal/bootstrap"
 	"yumedisk/server/internal/config"
 	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/transport"
@@ -48,6 +49,7 @@ func TestWholeRuntimeMinimalClosure(t *testing.T) {
 		t.Fatalf("dial server: %v", err)
 	}
 	defer conn.Close()
+	mustHello(t, conn)
 
 	requestID := uint64(1)
 	authID := authenticateConnection(t, conn, material, &requestID)
@@ -142,6 +144,7 @@ func TestWholeRuntimeSecondClientBusyAndAuthIDReusable(t *testing.T) {
 		t.Fatalf("dial first client: %v", err)
 	}
 	defer connOne.Close()
+	mustHello(t, connOne)
 
 	requestIDOne := uint64(1)
 	authIDOne := authenticateConnection(t, connOne, material, &requestIDOne)
@@ -156,6 +159,7 @@ func TestWholeRuntimeSecondClientBusyAndAuthIDReusable(t *testing.T) {
 		t.Fatalf("dial second client: %v", err)
 	}
 	defer connTwo.Close()
+	mustHello(t, connTwo)
 
 	requestIDTwo := uint64(1)
 	authIDTwo := authenticateConnection(t, connTwo, material, &requestIDTwo)
@@ -410,4 +414,16 @@ func buildRequest(opCode uint8, requestID uint64, sessionID uint64, body []byte)
 	}, payload)
 	copy(payload[proto.HeaderSize:], body)
 	return payload
+}
+
+func mustHello(t *testing.T, conn net.Conn) {
+	t.Helper()
+
+	response, err := bootstrap.ConnectClient(conn)
+	if err != nil {
+		t.Fatalf("hello bootstrap: %v", err)
+	}
+	if len(response.ServerCapabilities) != 0 {
+		t.Fatalf("expected empty server capabilities, got %d bytes", len(response.ServerCapabilities))
+	}
 }

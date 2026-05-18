@@ -9,8 +9,12 @@ use std::sync::atomic::Ordering;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
 use std::thread;
+use std::time::Duration;
 
+use super::ConnHeartbeatRequest;
+use super::ConnHeartbeatResponse;
 use super::error::NetworkClientError;
+use super::hello_client::perform_client_hello;
 use super::protocol_client::ClientOperationCode;
 use super::protocol_client::SessionCloseNotice;
 use super::protocol_client::parse_header;
@@ -18,6 +22,16 @@ use super::protocol_client::parse_request_header;
 use super::transport_client::TransportClient;
 use super::transport_client::TransportEndpoint;
 use super::transport_client::TransportError;
+
+#[cfg(not(test))]
+const CONN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const CONN_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(50);
+
+#[cfg(not(test))]
+const CONN_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
+#[cfg(test)]
+const CONN_HEARTBEAT_TIMEOUT: Duration = Duration::from_millis(150);
 
 pub struct GatewayConnection {
     endpoint: TransportEndpoint,
@@ -28,6 +42,8 @@ pub struct GatewayConnection {
     session_notice_handler: Mutex<Option<Arc<dyn Fn(SessionCloseNotice) + Send + Sync>>>,
     lifecycle: Mutex<ConnectionLifecycle>,
     receive_loop_started: AtomicBool,
+    heartbeat_loop_started: AtomicBool,
+    disconnect_started: AtomicBool,
 }
 
 impl fmt::Debug for GatewayConnection {
@@ -72,6 +88,13 @@ impl GatewayResponseFuture {
             .recv()
             .unwrap_or(Err(NetworkClientError::SessionUnavailable))
     }
+
+    pub fn recv_timeout(self, timeout: Duration) -> Result<Vec<u8>, NetworkClientError> {
+        match self.response_rx.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(_) => Err(NetworkClientError::SessionUnavailable),
+        }
+    }
 }
 
 impl GatewayConnection {
@@ -85,6 +108,8 @@ impl GatewayConnection {
             session_notice_handler: Mutex::new(None),
             lifecycle: Mutex::new(ConnectionLifecycle::default()),
             receive_loop_started: AtomicBool::new(false),
+            heartbeat_loop_started: AtomicBool::new(false),
+            disconnect_started: AtomicBool::new(false),
         })
     }
 
@@ -97,8 +122,14 @@ impl GatewayConnection {
     }
 
     pub fn connect(self: &Arc<Self>) -> Result<(), NetworkClientError> {
-        self.transport.connect().map_err(map_transport_error)?;
+        let mut stream = self.transport.open_stream().map_err(map_transport_error)?;
+        perform_client_hello(&mut stream)
+            .map_err(|error| NetworkClientError::Transport(error.to_string()))?;
+        self.transport
+            .connect_with_stream(stream)
+            .map_err(map_transport_error)?;
         self.start_receive_loop();
+        self.start_heartbeat_loop();
         Ok(())
     }
 
@@ -285,6 +316,14 @@ impl GatewayConnection {
     }
 
     fn handle_disconnect(&self, error: NetworkClientError) {
+        if self
+            .disconnect_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+        let _ = self.transport.close();
         if let Some(handler) = self
             .disconnect_handler
             .lock()
@@ -320,6 +359,53 @@ impl GatewayConnection {
                         connection.handle_disconnect(map_transport_error(error));
                         return;
                     }
+                }
+            }
+        });
+    }
+
+    fn start_heartbeat_loop(self: &Arc<Self>) {
+        if self
+            .heartbeat_loop_started
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
+
+        let connection = Arc::clone(self);
+        thread::spawn(move || {
+            loop {
+                thread::sleep(CONN_HEARTBEAT_INTERVAL);
+                if !connection.is_connected() {
+                    return;
+                }
+
+                let request_id = connection.allocate_request_id();
+                let payload = match ConnHeartbeatRequest.encode_request(request_id) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        connection.handle_disconnect(NetworkClientError::Protocol(error));
+                        return;
+                    }
+                };
+                let future = match connection.send_request(payload) {
+                    Ok(future) => future,
+                    Err(error) => {
+                        connection.handle_disconnect(error);
+                        return;
+                    }
+                };
+                let response = match future.recv_timeout(CONN_HEARTBEAT_TIMEOUT) {
+                    Ok(response) => response,
+                    Err(error) => {
+                        connection.handle_disconnect(error);
+                        return;
+                    }
+                };
+                if let Err(error) = ConnHeartbeatResponse::decode_response(&response, request_id) {
+                    connection.handle_disconnect(NetworkClientError::Protocol(error));
+                    return;
                 }
             }
         });
@@ -413,6 +499,7 @@ mod tests {
     use crate::network::ProtocolHeader;
     use crate::network::ProtocolStatusCode;
     use crate::network::TransportEndpoint;
+    use crate::network::expect_client_hello;
     use crate::network::transport_client::MAX_FRAME_PAYLOAD_BYTES;
     use crate::network::transport_client::read_frame_into;
     use crate::network::transport_client::write_frame;
@@ -465,6 +552,7 @@ mod tests {
 
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept should succeed");
+            expect_client_hello(&mut stream);
             let mut buffer = vec![0u8; MAX_FRAME_PAYLOAD_BYTES];
 
             let first = read_frame_into(&mut stream, &mut buffer)
@@ -541,7 +629,8 @@ mod tests {
         let address = listener.local_addr().expect("local_addr should succeed");
 
         let server = thread::spawn(move || {
-            let (stream, _) = listener.accept().expect("accept should succeed");
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            expect_client_hello(&mut stream);
             drop(stream);
         });
 
@@ -577,7 +666,8 @@ mod tests {
         let address = listener.local_addr().expect("local_addr should succeed");
 
         let server = thread::spawn(move || {
-            let (_stream, _) = listener.accept().expect("accept should succeed");
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            expect_client_hello(&mut stream);
             thread::sleep(std::time::Duration::from_millis(200));
         });
 
@@ -606,7 +696,8 @@ mod tests {
         let address = listener.local_addr().expect("local_addr should succeed");
 
         let server = thread::spawn(move || {
-            let (stream, _) = listener.accept().expect("accept should succeed");
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            expect_client_hello(&mut stream);
             drop(stream);
         });
 
@@ -620,6 +711,78 @@ mod tests {
         disconnect_rx
             .recv_timeout(Duration::from_millis(200))
             .expect("disconnect handler should be called");
+
+        server.join().expect("server should join");
+    }
+
+    #[test]
+    fn gateway_connection_sends_periodic_conn_heartbeat() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
+        let address = listener.local_addr().expect("local_addr should succeed");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            expect_client_hello(&mut stream);
+            let mut buffer = vec![0u8; MAX_FRAME_PAYLOAD_BYTES];
+            let request = read_frame_into(&mut stream, &mut buffer)
+                .expect("read heartbeat should succeed")
+                .to_vec();
+            let header =
+                crate::network::parse_request_header(&request).expect("parse heartbeat header");
+            assert_eq!(header.op_code, ClientOperationCode::ConnHeartbeat);
+            assert!(request[crate::network::HEADER_SIZE..].is_empty());
+
+            let response = ProtocolHeader {
+                protocol_version: PROTOCOL_VERSION,
+                header_len: crate::network::HEADER_SIZE as u8,
+                op_code: ClientOperationCode::ConnHeartbeat,
+                flags: FLAG_RESPONSE,
+                status_code: ProtocolStatusCode::Ok,
+                reserved: 0,
+                request_id: header.request_id,
+                session_id: 0,
+            }
+            .encode(&[]);
+            write_frame(&mut stream, &response).expect("write heartbeat response should succeed");
+        });
+
+        let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
+        connection.connect().expect("connect should succeed");
+        thread::sleep(Duration::from_millis(120));
+        let _ = connection.close();
+
+        server.join().expect("server should join");
+    }
+
+    #[test]
+    fn gateway_connection_disconnects_when_conn_heartbeat_times_out() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
+        let address = listener.local_addr().expect("local_addr should succeed");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            expect_client_hello(&mut stream);
+            let mut buffer = vec![0u8; MAX_FRAME_PAYLOAD_BYTES];
+            let request = read_frame_into(&mut stream, &mut buffer)
+                .expect("read heartbeat should succeed")
+                .to_vec();
+            let header =
+                crate::network::parse_request_header(&request).expect("parse heartbeat header");
+            assert_eq!(header.op_code, ClientOperationCode::ConnHeartbeat);
+            thread::sleep(Duration::from_millis(300));
+        });
+
+        let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
+        let (disconnect_tx, disconnect_rx) = mpsc::channel();
+        connection.set_disconnect_handler(Some(Arc::new(move || {
+            let _ = disconnect_tx.send(());
+        })));
+        connection.connect().expect("connect should succeed");
+
+        disconnect_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("disconnect handler should fire after heartbeat timeout");
+        assert!(!connection.is_connected());
 
         server.join().expect("server should join");
     }

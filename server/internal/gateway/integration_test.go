@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"yumedisk/server/internal/auth"
+	"yumedisk/server/internal/bootstrap"
 	"yumedisk/server/internal/config"
 	"yumedisk/server/internal/gateway"
 	"yumedisk/server/internal/proto"
@@ -86,6 +87,7 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 		t.Fatalf("dial gateway: %v", err)
 	}
 	defer conn.Close()
+	mustGatewayHello(t, conn)
 
 	requestID := uint64(1)
 	authID := authenticateGatewayConnection(t, conn, material, &requestID)
@@ -265,4 +267,16 @@ func buildGatewayRequest(opCode uint8, requestID uint64, sessionID uint64, body 
 	}, payload)
 	copy(payload[proto.HeaderSize:], body)
 	return payload
+}
+
+func mustGatewayHello(t *testing.T, conn net.Conn) {
+	t.Helper()
+
+	response, err := bootstrap.ConnectClient(conn)
+	if err != nil {
+		t.Fatalf("hello bootstrap: %v", err)
+	}
+	if len(response.ServerCapabilities) != 0 {
+		t.Fatalf("expected empty server capabilities, got %d bytes", len(response.ServerCapabilities))
+	}
 }

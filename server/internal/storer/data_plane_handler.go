@@ -10,12 +10,14 @@ import (
 type dataPlaneHandler struct {
 	connectionID uint64
 	sessions     *session.Service
+	watchdog     *linkHeartbeatWatchdog
 }
 
-func newDataPlaneHandler(connectionID uint64, sessions *session.Service) *dataPlaneHandler {
+func newDataPlaneHandler(connectionID uint64, sessions *session.Service, watchdog *linkHeartbeatWatchdog) *dataPlaneHandler {
 	return &dataPlaneHandler{
 		connectionID: connectionID,
 		sessions:     sessions,
+		watchdog:     watchdog,
 	}
 }
 
@@ -67,6 +69,9 @@ func (h *dataPlaneHandler) handleLinkHeartbeat(header proto.Header, body []byte)
 	nonce, err := proto.ParseLinkHeartbeatBody(body)
 	if err != nil {
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
+	}
+	if h.watchdog != nil {
+		h.watchdog.Mark()
 	}
 	return proto.BuildSuccessResponse(header, proto.BuildLinkHeartbeatBody(nonce)), nil
 }

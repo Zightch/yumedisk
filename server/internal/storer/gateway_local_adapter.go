@@ -4,23 +4,26 @@ import (
 	"yumedisk/server/internal/route"
 )
 
+const wholeRouteConnectionID uint64 = 1
+
 type localGatewayBackend struct {
-	core  *Core
-	entry route.Entry
+	core   *Core
+	routes *route.Registry
 }
 
-func newLocalGatewayBackend(core *Core) *localGatewayBackend {
-	return &localGatewayBackend{
-		core:  core,
-		entry: core.RouteEntry("embedded://whole", 0),
+func newLocalGatewayBackend(core *Core) (*localGatewayBackend, error) {
+	routes := route.NewRegistry()
+	if err := routes.Register(core.RouteEntry("embedded://whole", wholeRouteConnectionID)); err != nil {
+		return nil, err
 	}
+	return &localGatewayBackend{
+		core:   core,
+		routes: routes,
+	}, nil
 }
 
 func (b *localGatewayBackend) LookupRoute(diskID string) (route.Entry, bool) {
-	if diskID != b.entry.DiskID {
-		return route.Entry{}, false
-	}
-	return b.entry, true
+	return b.routes.LookupRoute(diskID)
 }
 
 func (b *localGatewayBackend) Open(connectionID uint64, entry route.Entry) (uint64, error) {

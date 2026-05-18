@@ -485,6 +485,7 @@ mod tests {
     use crate::network::DiskSession;
     use crate::network::GatewayConnection;
     use crate::network::TransportEndpoint;
+    use crate::network::expect_client_hello;
     use std::collections::BTreeMap;
     use std::collections::BTreeSet;
     use std::net::TcpListener;
@@ -520,7 +521,8 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
         let address = listener.local_addr().expect("local addr should succeed");
         let server = thread::spawn(move || {
-            let (_stream, _) = listener.accept().expect("accept should succeed");
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            expect_client_hello(&mut stream);
             thread::sleep(Duration::from_millis(200));
         });
 

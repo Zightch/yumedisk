@@ -21,13 +21,13 @@ type storerConnection struct {
 	writeMu sync.Mutex
 
 	nextRequestID atomic.Uint64
+	registered    atomic.Bool
 
 	pendingMu sync.Mutex
 	pending   map[uint64]chan []byte
 
-	lastSeenUnixNano atomic.Int64
-	heartbeatStop    chan struct{}
-	heartbeatOnce    sync.Once
+	heartbeatStop chan struct{}
+	heartbeatOnce sync.Once
 }
 
 func newStorerConnection(id uint64, conn net.Conn) *storerConnection {
@@ -40,6 +40,10 @@ func newStorerConnection(id uint64, conn net.Conn) *storerConnection {
 }
 
 func (c *storerConnection) roundTrip(payload []byte) ([]byte, error) {
+	return c.roundTripWithTimeout(payload, 0)
+}
+
+func (c *storerConnection) roundTripWithTimeout(payload []byte, timeout time.Duration) ([]byte, error) {
 	header, err := proto.ParseHeader(payload)
 	if err != nil {
 		return nil, err
@@ -62,17 +66,34 @@ func (c *storerConnection) roundTrip(payload []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	resp, ok := <-respCh
-	if !ok {
-		return nil, errors.New("storer connection closed")
+	if timeout <= 0 {
+		resp, ok := <-respCh
+		if !ok {
+			return nil, errors.New("storer connection closed")
+		}
+		return resp, nil
 	}
-	return resp, nil
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case resp, ok := <-respCh:
+		if !ok {
+			return nil, errors.New("storer connection closed")
+		}
+		return resp, nil
+	case <-timer.C:
+		c.pendingMu.Lock()
+		delete(c.pending, header.RequestID)
+		c.pendingMu.Unlock()
+		return nil, errors.New("storer heartbeat timeout")
+	}
 }
 
 func (c *storerConnection) serve(ctx context.Context, routes *route.Registry, gatewayToken string) error {
 	buffer := make([]byte, transport.MaxPayloadSize)
 	registered := false
-	c.markSeen()
 	defer c.stopHeartbeat()
 
 	for {
@@ -88,7 +109,6 @@ func (c *storerConnection) serve(ctx context.Context, routes *route.Registry, ga
 		if err != nil {
 			return err
 		}
-		c.markSeen()
 		if header.Flags&proto.FlagResponse == 0 {
 			if header.OpCode != proto.OpStorerRegister {
 				resp := proto.BuildErrorResponse(header, proto.StatusInvalidRequest)
@@ -127,6 +147,7 @@ func (c *storerConnection) serve(ctx context.Context, routes *route.Registry, ga
 				continue
 			}
 			registered = true
+			c.registered.Store(true)
 			resp := proto.BuildSuccessResponse(header, nil)
 			_ = transport.WriteFrame(c.conn, resp)
 			continue
@@ -171,10 +192,6 @@ func (c *storerConnection) nextNonZeroRequestID() uint64 {
 	return id
 }
 
-func (c *storerConnection) markSeen() {
-	c.lastSeenUnixNano.Store(time.Now().UnixNano())
-}
-
 func (c *storerConnection) startHeartbeat(interval time.Duration, timeout time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -183,12 +200,7 @@ func (c *storerConnection) startHeartbeat(interval time.Duration, timeout time.D
 		for {
 			select {
 			case <-ticker.C:
-				lastSeen := time.Unix(0, c.lastSeenUnixNano.Load())
-				if !lastSeen.IsZero() && time.Since(lastSeen) >= timeout {
-					_ = c.conn.Close()
-					return
-				}
-				if !lastSeen.IsZero() && time.Since(lastSeen) < interval {
+				if !c.registered.Load() {
 					continue
 				}
 				nonce++
@@ -203,7 +215,7 @@ func (c *storerConnection) startHeartbeat(interval time.Duration, timeout time.D
 					RequestID:       1,
 				}, payload)
 				copy(payload[proto.HeaderSize:], proto.BuildLinkHeartbeatBody(nonce))
-				if _, err := c.roundTrip(payload); err != nil {
+				if _, err := c.roundTripWithTimeout(payload, timeout); err != nil {
 					_ = c.conn.Close()
 					return
 				}

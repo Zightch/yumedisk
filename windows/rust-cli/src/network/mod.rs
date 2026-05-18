@@ -3,6 +3,7 @@ mod crypto_win32;
 mod disk_session;
 mod error;
 mod gateway_connection;
+mod hello_client;
 mod network_media;
 mod protocol_client;
 mod session_describer;
@@ -15,6 +16,8 @@ pub use disk_session::DiskSession;
 pub use error::NetworkClientError;
 pub use gateway_connection::GatewayConnection;
 pub use gateway_connection::GatewayResponseFuture;
+#[cfg(test)]
+pub(crate) use hello_client::expect_client_hello;
 pub use network_media::NetworkMedia;
 pub use protocol_client::ABSOLUTE_MAX_IO_BYTES;
 pub use protocol_client::AuthFinishRequest;

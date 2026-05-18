@@ -121,15 +121,30 @@ impl TransportClient {
     }
 
     pub fn connect(&self) -> Result<(), TransportError> {
+        let stream = self.open_stream()?;
+        self.connect_with_stream(stream)
+    }
+
+    pub fn open_stream(&self) -> Result<TcpStream, TransportError> {
         self.endpoint.validate()?;
 
+        let state = self.state.lock().expect("transport state poisoned");
+        if matches!(&*state, TransportState::Connected(_)) {
+            return Err(TransportError::AlreadyConnected);
+        }
+        drop(state);
+
+        let stream = TcpStream::connect(self.endpoint.address()).map_err(TransportError::Io)?;
+        stream.set_nodelay(true).map_err(TransportError::Io)?;
+        Ok(stream)
+    }
+
+    pub fn connect_with_stream(&self, stream: TcpStream) -> Result<(), TransportError> {
+        stream.set_nodelay(true).map_err(TransportError::Io)?;
         let mut state = self.state.lock().expect("transport state poisoned");
         if matches!(&*state, TransportState::Connected(_)) {
             return Err(TransportError::AlreadyConnected);
         }
-
-        let stream = TcpStream::connect(self.endpoint.address()).map_err(TransportError::Io)?;
-        stream.set_nodelay(true).map_err(TransportError::Io)?;
         let stream = Arc::new(stream);
 
         let (outgoing_tx, outgoing_rx) = mpsc::sync_channel(OUTBOUND_QUEUE_CAPACITY);
@@ -427,5 +442,30 @@ mod tests {
 
         transport.close().expect("close should succeed");
         server.join().expect("server thread should join");
+    }
+
+    #[test]
+    fn transport_client_can_attach_a_preconnected_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
+        let address = listener.local_addr().expect("local addr should succeed");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            write_frame(&mut stream, b"attached").expect("server write should succeed");
+        });
+
+        let transport = TransportClient::new(TransportEndpoint::new(address.to_string()));
+        let stream = transport.open_stream().expect("open_stream should succeed");
+        transport
+            .connect_with_stream(stream)
+            .expect("connect_with_stream should succeed");
+
+        let payload = transport
+            .recv_payload()
+            .expect("recv payload should succeed");
+        assert_eq!(payload, b"attached");
+
+        transport.close().expect("close should succeed");
+        server.join().expect("server should join");
     }
 }

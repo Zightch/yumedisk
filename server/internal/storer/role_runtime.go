@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"sync/atomic"
+	"time"
 
 	"yumedisk/server/internal/config"
 	"yumedisk/server/internal/proto"
@@ -15,6 +16,8 @@ import (
 type Runtime interface {
 	Run(ctx context.Context) error
 }
+
+const storerLinkHeartbeatTimeout = 15 * time.Second
 
 type StorerRuntime struct {
 	cfg      config.StorerConfig
@@ -46,7 +49,8 @@ func (r *StorerRuntime) Run(ctx context.Context) error {
 	}
 
 	connectionID := r.nextConn.Add(1)
-	handler := newDataPlaneHandler(connectionID, r.core.SessionService())
+	watchdog := newLinkHeartbeatWatchdog(storerLinkHeartbeatTimeout)
+	handler := newDataPlaneHandler(connectionID, r.core.SessionService(), watchdog)
 	runErr := r.runGatewayConnection(ctx, connectionID, conn, handler)
 	if ctx.Err() != nil {
 		return nil
@@ -94,6 +98,14 @@ func (r *StorerRuntime) runGatewayConnection(ctx context.Context, connectionID u
 	if registerHeader.StatusCode != proto.StatusOK {
 		return fmt.Errorf("register rejected: status=%d", registerHeader.StatusCode)
 	}
+	if handler.watchdog != nil {
+		handler.watchdog.Mark()
+	}
+	var watchdogErr <-chan error
+	if handler.watchdog != nil {
+		watchdogErr = handler.watchdog.Start(conn)
+		defer handler.watchdog.Stop()
+	}
 
 	runtime := transport.NewRuntime(conn, handler)
 	done := make(chan error, 1)
@@ -106,6 +118,10 @@ func (r *StorerRuntime) runGatewayConnection(ctx context.Context, connectionID u
 		_ = runtime.Close()
 		<-done
 		return nil
+	case err := <-watchdogErr:
+		_ = runtime.Close()
+		<-done
+		return err
 	case err := <-done:
 		return err
 	}
