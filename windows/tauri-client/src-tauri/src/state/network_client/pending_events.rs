@@ -73,4 +73,12 @@ impl PendingNetworkSignals {
         invalidations.dedup();
         invalidations
     }
+
+    #[cfg(test)]
+    pub fn push_event(&self, event: NetworkClientEvent) {
+        self.pending_events
+            .lock()
+            .expect("network pending events poisoned")
+            .push(event);
+    }
 }

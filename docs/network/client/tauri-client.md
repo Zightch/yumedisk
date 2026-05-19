@@ -96,6 +96,44 @@ DiskRuntime
 
 这里固定的是“多 connection + 每 connection 独立 lane”的模型，不写死线程实现方式。
 
+### 当前代码落点
+
+当前实现已经按职责拆成以下几层：
+
+- `src-tauri/src/state/network_client/`
+  - `mod.rs`
+    - `NetworkClientState` 对外唯一真状态对象
+  - `connection_pool.rs`
+    - connection 复用与 idle cleanup 判定
+  - `opened_sessions.rs`
+    - live `disksession` 表
+  - `drafts.rs`
+    - draft 表与 `draft_id` 分配
+  - `pending_events.rs`
+    - `SessionCloseNotice` / disconnect / media invalidation 暂存队列
+- `src-tauri/src/network/`
+  - `validation.rs`
+    - 边界输入校验
+  - `uniqueness.rs`
+    - `(server_addr, remote_disk_id)` 唯一键检查
+  - `gateway_ops.rs`
+    - connect / auth / open / describe 最小网络操作
+  - `cleanup.rs`
+    - session close、runtime invalidation、draft session cleanup
+  - `event_reconciler.rs`
+    - drain 事件并把 `NetworkClientState`、`DiskRuntimeStore`、`BackendRust` 收束一致
+  - `draft_flow.rs`
+    - 创建网络盘对话框的 draft 生命周期
+  - `runtime_flow.rs`
+    - mount / eject / delete / rescan 的正式 runtime 生命周期
+- `src-tauri/src/commands/`
+  - `network_disk.rs`
+    - 网络盘 draft command 薄桥接
+  - `disk.rs`
+    - 普通盘 command 与 network runtime flow 分派
+- `src-tauri/src/lib.rs`
+  - 后台 watcher 定时调用 `event_reconciler`
+
 ## `DiskRuntime` 与 `NetworkMedia`
 
 网络盘 `DiskRuntime` 最小字段固定为：
@@ -139,6 +177,27 @@ DiskRuntime
 - 认证
 - 自动重连
 - 重扫
+
+### 当前前端代码落点
+
+创建网络盘 feature 当前已收成：
+
+- `src/features/createNetworkDisk/CreateNetworkDiskDialog.vue`
+  - 对话框壳与组合
+- `src/features/createNetworkDisk/useNetworkDraftFlow.ts`
+  - 本地交互态与 invoke 编排
+- `src/features/createNetworkDisk/NetworkDraftForm.vue`
+  - 服务器地址、磁盘名、领盘码输入区
+- `src/features/createNetworkDisk/NetworkDraftList.vue`
+  - draft 列表区
+- `src/features/createNetworkDisk/networkDraftError.ts`
+  - 错误码到中文文案映射
+
+固定口径仍然是：
+
+- 后端 draft 才是真状态
+- 前端只持有当前对话框交互态
+- 前端不复制一套独立网络运行态
 
 ## 创建网络盘对话框主链
 

@@ -160,6 +160,11 @@ impl NetworkClientState {
     pub fn cleanup_connection_if_idle(&mut self, server_addr: &str) {
         self.connection_pool.cleanup_connection_if_idle(server_addr);
     }
+
+    #[cfg(test)]
+    pub(crate) fn push_test_event(&self, event: NetworkClientEvent) {
+        self.pending_signals.push_event(event);
+    }
 }
 
 impl NetworkCreateDraft {
