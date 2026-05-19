@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"yumedisk/server/internal/config"
+	gatewayclient "yumedisk/server/internal/gateway/client"
 	storerruntime "yumedisk/server/internal/gateway/storer"
 	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/transport"
@@ -16,7 +17,7 @@ import (
 
 type Runtime struct {
 	cfg           config.GatewayConfig
-	clientHandler *Handler
+	clientHandler *gatewayclient.Handler
 	storerRoutes  *storerruntime.Registry
 	nextConn      atomic.Uint64
 
@@ -36,7 +37,7 @@ const (
 
 func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
 	storerRoutes := storerruntime.NewRegistry()
-	clientHandler, err := NewHandler(storerRoutes, storerRoutes)
+	clientHandler, err := gatewayclient.NewHandler(storerRoutes, storerRoutes)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +83,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 
 	go func() {
-		report(ServeClientListener(
+		report(gatewayclient.ServeClientListener(
 			ctx,
 			clientListener,
 			"client",
@@ -119,16 +120,16 @@ func (r *Runtime) StorerListenAddr() string {
 }
 
 func (r *Runtime) serveClientConnection(ctx context.Context, connectionID uint64, conn net.Conn) {
-	ServeAcceptedClientConnection(ctx, conn, r.clientHandler, connectionID, ClientConnectionHooks{
+	gatewayclient.ServeAcceptedClientConnection(ctx, conn, r.clientHandler, connectionID, gatewayclient.ClientConnectionHooks{
 		LogPrefix: "gateway client",
-		OnConnected: func(conn net.Conn, state *ConnectionState) {
+		OnConnected: func(conn net.Conn, state *gatewayclient.ConnectionState) {
 			r.clientConnMu.Lock()
 			r.clientConns[state.ID] = &clientConnection{
 				conn: conn,
 			}
 			r.clientConnMu.Unlock()
 		},
-		OnClosed: func(state *ConnectionState) {
+		OnClosed: func(state *gatewayclient.ConnectionState) {
 			r.clientConnMu.Lock()
 			delete(r.clientConns, state.ID)
 			r.clientConnMu.Unlock()
@@ -136,16 +137,16 @@ func (r *Runtime) serveClientConnection(ctx context.Context, connectionID uint64
 	})
 }
 
-func (r *Runtime) NotifySessionClosed(session gatewaySessionRecord, reason uint16) {
+func (r *Runtime) NotifySessionClosed(sessionID uint64, clientConnectionID uint64, reason uint16) {
 	r.clientConnMu.RLock()
-	client := r.clientConns[session.Runtime.ClientConnectionID]
+	client := r.clientConns[clientConnectionID]
 	r.clientConnMu.RUnlock()
 	if client == nil {
 		return
 	}
 
 	payload := make([]byte, proto.HeaderSize+proto.SessionCloseNoticeSize)
-	copy(payload, proto.BuildNotice(proto.OpSessionCloseNotice, session.ID, proto.BuildSessionCloseNoticeBody(reason)))
+	copy(payload, proto.BuildNotice(proto.OpSessionCloseNotice, sessionID, proto.BuildSessionCloseNoticeBody(reason)))
 
 	client.write.Lock()
 	err := transport.WriteFrame(client.conn, payload)

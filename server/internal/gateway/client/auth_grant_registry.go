@@ -1,4 +1,4 @@
-package gateway
+package client
 
 import (
 	"sync"
@@ -86,6 +86,22 @@ func (r *authGrantRegistry) Consume(id uint64) (authGrant, bool) {
 	}
 	r.removeLocked(id)
 	return item, true
+}
+
+func (r *authGrantRegistry) LookupDisk(id uint64, connectionID uint64) (string, uint16, bool) {
+	item, status, ok := r.Lookup(id, connectionID)
+	if !ok {
+		return "", status, false
+	}
+	return item.DiskID, status, true
+}
+
+func (r *authGrantRegistry) ConsumeDisk(id uint64) (string, bool) {
+	item, ok := r.Consume(id)
+	if !ok {
+		return "", false
+	}
+	return item.DiskID, true
 }
 
 func (r *authGrantRegistry) CloseConnection(connectionID uint64) {

@@ -8,13 +8,13 @@ import (
 	"sync/atomic"
 
 	"yumedisk/server/internal/config"
-	gatewayruntime "yumedisk/server/internal/gateway"
+	gatewayclient "yumedisk/server/internal/gateway/client"
 	storegateway "yumedisk/server/internal/storer/gateway"
 )
 
 type WholeRuntime struct {
 	cfg      config.StorerConfig
-	gateway  *gatewayruntime.Handler
+	gateway  *gatewayclient.Handler
 	nextConn atomic.Uint64
 }
 
@@ -30,7 +30,7 @@ func NewWholeRuntime(cfg config.StorerConfig, core *Core) (*WholeRuntime, error)
 	if err != nil {
 		return nil, err
 	}
-	gatewayHandler, err := gatewayruntime.NewHandler(backend, backend)
+	gatewayHandler, err := gatewayclient.NewHandler(backend, backend)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +52,7 @@ func (r *WholeRuntime) Run(ctx context.Context) error {
 	}
 	defer listener.Close()
 
-	return gatewayruntime.ServeClientListener(
+	return gatewayclient.ServeClientListener(
 		ctx,
 		listener,
 		"client",
@@ -62,7 +62,7 @@ func (r *WholeRuntime) Run(ctx context.Context) error {
 }
 
 func (r *WholeRuntime) serveAcceptedConnection(ctx context.Context, connectionID uint64, conn net.Conn) {
-	gatewayruntime.ServeAcceptedClientConnection(ctx, conn, r.gateway, connectionID, gatewayruntime.ClientConnectionHooks{
+	gatewayclient.ServeAcceptedClientConnection(ctx, conn, r.gateway, connectionID, gatewayclient.ClientConnectionHooks{
 		LogPrefix: "whole client",
 	})
 }

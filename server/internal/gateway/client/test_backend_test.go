@@ -1,4 +1,4 @@
-package gateway
+package client
 
 import (
 	"yumedisk/server/internal/auth"

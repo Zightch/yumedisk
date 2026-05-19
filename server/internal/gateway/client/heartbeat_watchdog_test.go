@@ -1,10 +1,11 @@
-package gateway
+package client
 
 import (
 	"net"
 	"testing"
 	"time"
 
+	clientsession "yumedisk/server/internal/gateway/client/session"
 	"yumedisk/server/internal/proto"
 )
 
@@ -34,7 +35,7 @@ func TestConnHeartbeatMarksClientWatchdog(t *testing.T) {
 	t.Parallel()
 
 	handler := &Handler{
-		sessionOpener: newSessionOpener(nil, nil, newAuthGrantRegistry()),
+		sessionOpener: clientsession.NewOpener(nil, nil, newAuthGrantRegistry()),
 		grants:        newAuthGrantRegistry(),
 	}
 	state := handler.NewConnectionState(17)

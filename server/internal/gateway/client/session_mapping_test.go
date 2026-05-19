@@ -1,4 +1,4 @@
-package gateway
+package client
 
 import (
 	"sync"
@@ -181,8 +181,8 @@ func TestGatewayRouteDisconnectClosesClientSessionAndRevokesGrant(t *testing.T) 
 	if len(closed) != 1 {
 		t.Fatalf("unexpected closed sessions count: %d", len(closed))
 	}
-	if closed[0].Runtime.ClientConnectionID != state.ID {
-		t.Fatalf("unexpected client connection id: %d", closed[0].Runtime.ClientConnectionID)
+	if closed[0].ClientConnectionID != state.ID {
+		t.Fatalf("unexpected client connection id: %d", closed[0].ClientConnectionID)
 	}
 	if notifier.count() != 0 {
 		t.Fatalf("manual closeRouteConnectionSessions should not emit notices")
@@ -210,8 +210,11 @@ func TestGatewayRouteDisconnectClosesClientSessionAndRevokesGrant(t *testing.T) 
 	if record.reason != proto.SessionCloseReasonRouteLost {
 		t.Fatalf("unexpected close reason: %d", record.reason)
 	}
-	if record.session.ID != openHeader.SessionID {
-		t.Fatalf("unexpected closed session id: %d", record.session.ID)
+	if record.sessionID != openHeader.SessionID {
+		t.Fatalf("unexpected closed session id: %d", record.sessionID)
+	}
+	if record.clientConnectionID != state.ID {
+		t.Fatalf("unexpected closed client connection id: %d", record.clientConnectionID)
 	}
 	if _, status, ok := handler.grants.Lookup(pendingAuthID, state.ID); ok || status != proto.StatusAuthIDInvalid {
 		t.Fatalf("expected notifier path to revoke auth grant, ok=%v status=%d", ok, status)
@@ -269,13 +272,18 @@ type recordingSessionCloseNotifier struct {
 }
 
 type sessionCloseRecord struct {
-	session gatewaySessionRecord
-	reason  uint16
+	sessionID          uint64
+	clientConnectionID uint64
+	reason             uint16
 }
 
-func (n *recordingSessionCloseNotifier) NotifySessionClosed(session gatewaySessionRecord, reason uint16) {
+func (n *recordingSessionCloseNotifier) NotifySessionClosed(sessionID uint64, clientConnectionID uint64, reason uint16) {
 	n.mu.Lock()
-	n.records = append(n.records, sessionCloseRecord{session: session, reason: reason})
+	n.records = append(n.records, sessionCloseRecord{
+		sessionID:          sessionID,
+		clientConnectionID: clientConnectionID,
+		reason:             reason,
+	})
 	n.mu.Unlock()
 }
 
