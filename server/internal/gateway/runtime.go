@@ -2,15 +2,14 @@ package gateway
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"yumedisk/server/internal/config"
+	storerruntime "yumedisk/server/internal/gateway/storer"
 	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/transport"
 )
@@ -18,8 +17,7 @@ import (
 type Runtime struct {
 	cfg           config.GatewayConfig
 	clientHandler *Handler
-	storerHandler *StorerHandler
-	routes        *StorerRouteRegistry
+	storerRoutes  *storerruntime.Registry
 	nextConn      atomic.Uint64
 
 	clientConnMu sync.RWMutex
@@ -37,24 +35,19 @@ const (
 )
 
 func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
-	routes := NewStorerRouteRegistry()
-	clientHandler, err := NewHandler(routes, routes)
-	if err != nil {
-		return nil, err
-	}
-	storerHandler, err := NewStorerHandler(routes)
+	storerRoutes := storerruntime.NewRegistry()
+	clientHandler, err := NewHandler(storerRoutes, storerRoutes)
 	if err != nil {
 		return nil, err
 	}
 	runtime := &Runtime{
 		cfg:           cfg,
 		clientHandler: clientHandler,
-		storerHandler: storerHandler,
-		routes:        routes,
+		storerRoutes:  storerRoutes,
 		clientConns:   make(map[uint64]*clientConnection),
 	}
 	clientHandler.SetSessionCloseNotifier(runtime)
-	routes.SetDisconnectHandler(clientHandler)
+	storerRoutes.SetDisconnectHandler(clientHandler)
 	return runtime, nil
 }
 
@@ -98,7 +91,15 @@ func (r *Runtime) Run(ctx context.Context) error {
 		))
 	}()
 	go func() {
-		report(r.serveStorerListener(ctx, storerListener))
+		report(storerruntime.ServeListener(
+			ctx,
+			storerListener,
+			func() uint64 { return r.nextConn.Add(1) },
+			r.storerRoutes,
+			r.cfg.Storer.GatewayToken,
+			storerHeartbeatInterval,
+			storerHeartbeatTimeout,
+		))
 	}()
 
 	select {
@@ -117,26 +118,6 @@ func (r *Runtime) StorerListenAddr() string {
 	return r.cfg.Storer.ListenAddr
 }
 
-func (r *Runtime) serveStorerListener(ctx context.Context, listener net.Listener) error {
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Temporary() {
-				log.Printf("temporary storer accept error: %v", err)
-				continue
-			}
-			return fmt.Errorf("accept storer connection: %w", err)
-		}
-
-		connectionID := r.nextConn.Add(1)
-		go r.serveStorerConnection(ctx, connectionID, conn)
-	}
-}
-
 func (r *Runtime) serveClientConnection(ctx context.Context, connectionID uint64, conn net.Conn) {
 	ServeAcceptedClientConnection(ctx, conn, r.clientHandler, connectionID, ClientConnectionHooks{
 		LogPrefix: "gateway client",
@@ -153,30 +134,6 @@ func (r *Runtime) serveClientConnection(ctx context.Context, connectionID uint64
 			r.clientConnMu.Unlock()
 		},
 	})
-}
-
-func (r *Runtime) serveStorerConnection(ctx context.Context, connectionID uint64, conn net.Conn) {
-	defer r.routes.DisconnectConnection(connectionID)
-	defer conn.Close()
-
-	log.Printf("gateway storer connection %d accepted from %s", connectionID, conn.RemoteAddr())
-
-	storerConn := r.routes.AttachConnection(connectionID, conn)
-	storerConn.startHeartbeat(storerHeartbeatInterval, storerHeartbeatTimeout)
-	done := make(chan error, 1)
-	go func() {
-		done <- storerConn.serve(ctx, r.routes.routes, r.cfg.Storer.GatewayToken)
-	}()
-
-	select {
-	case <-ctx.Done():
-		_ = conn.Close()
-		<-done
-	case err := <-done:
-		if err != nil && !errors.Is(err, net.ErrClosed) {
-			log.Printf("gateway storer connection %d runtime: %v", connectionID, err)
-		}
-	}
 }
 
 func (r *Runtime) NotifySessionClosed(session gatewaySessionRecord, reason uint16) {

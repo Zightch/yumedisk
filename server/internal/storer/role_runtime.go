@@ -4,13 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net"
 	"sync/atomic"
 	"time"
 
 	"yumedisk/server/internal/config"
-	"yumedisk/server/internal/proto"
-	"yumedisk/server/internal/transport"
+	storegateway "yumedisk/server/internal/storer/gateway"
 )
 
 type Runtime interface {
@@ -20,9 +18,8 @@ type Runtime interface {
 const storerLinkHeartbeatTimeout = 15 * time.Second
 
 type StorerRuntime struct {
-	cfg      config.StorerConfig
-	core     *Core
-	nextConn atomic.Uint64
+	linkRuntime *storegateway.LinkRuntime
+	nextConn    atomic.Uint64
 }
 
 func NewStorerRuntime(cfg config.StorerConfig, core *Core) (*StorerRuntime, error) {
@@ -33,25 +30,31 @@ func NewStorerRuntime(cfg config.StorerConfig, core *Core) (*StorerRuntime, erro
 		return nil, fmt.Errorf("storer runtime requires non-nil core")
 	}
 
+	linkRuntime, err := storegateway.NewLinkRuntime(
+		cfg.Storer.GatewayAddr,
+		storegateway.RegisterInfo{
+			GatewayToken:  cfg.Storer.GatewayToken,
+			DiskID:        core.DiskID(),
+			AuthVerifier:  core.AuthVerifier(),
+			DiskSizeBytes: core.DiskSize(),
+			ReadOnly:      core.ReadOnly(),
+			MaxIOBytes:    core.SessionService().MaxIOBytes(),
+		},
+		core.SessionService(),
+		storerLinkHeartbeatTimeout,
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return &StorerRuntime{
-		cfg:  cfg,
-		core: core,
+		linkRuntime: linkRuntime,
 	}, nil
 }
 
 func (r *StorerRuntime) Run(ctx context.Context) error {
-	conn, err := net.Dial("tcp", r.cfg.Storer.GatewayAddr)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil
-		}
-		return fmt.Errorf("dial gateway %s: %w", r.cfg.Storer.GatewayAddr, err)
-	}
-
 	connectionID := r.nextConn.Add(1)
-	watchdog := newLinkHeartbeatWatchdog(storerLinkHeartbeatTimeout)
-	handler := newDataPlaneHandler(connectionID, r.core.SessionService(), watchdog)
-	runErr := r.runGatewayConnection(ctx, connectionID, conn, handler)
+	runErr := r.linkRuntime.Run(ctx, connectionID)
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -59,72 +62,6 @@ func (r *StorerRuntime) Run(ctx context.Context) error {
 		log.Printf("storer gateway connection %d ended: %v", connectionID, runErr)
 	}
 	return runErr
-}
-
-func (r *StorerRuntime) runGatewayConnection(ctx context.Context, connectionID uint64, conn net.Conn, handler *dataPlaneHandler) error {
-	defer r.core.SessionService().CloseConnection(connectionID)
-	defer conn.Close()
-
-	log.Printf("storer connected to gateway %s as connection %d", r.cfg.Storer.GatewayAddr, connectionID)
-
-	registerReq := proto.BuildStorerRegisterRequestBody(proto.StorerRegisterRequest{
-		GatewayToken:  r.cfg.Storer.GatewayToken,
-		DiskID:        r.core.DiskID(),
-		AuthVerifier:  r.core.AuthVerifier(),
-		DiskSizeBytes: r.core.DiskSize(),
-		ReadOnly:      r.core.ReadOnly(),
-		MaxIOBytes:    r.core.SessionService().MaxIOBytes(),
-	})
-	registerPayload := make([]byte, proto.HeaderSize+len(registerReq))
-	proto.EncodeHeader(proto.Header{
-		ProtocolVersion: proto.ProtocolVersion,
-		HeaderLen:       proto.HeaderSize,
-		OpCode:          proto.OpStorerRegister,
-		RequestID:       1,
-	}, registerPayload)
-	copy(registerPayload[proto.HeaderSize:], registerReq)
-	if err := transport.WriteFrame(conn, registerPayload); err != nil {
-		return fmt.Errorf("write register request: %w", err)
-	}
-	buffer := make([]byte, transport.MaxPayloadSize)
-	registerResp, err := transport.ReadFrameInto(conn, buffer)
-	if err != nil {
-		return fmt.Errorf("read register response: %w", err)
-	}
-	registerHeader, err := proto.ParseHeader(registerResp)
-	if err != nil {
-		return fmt.Errorf("parse register response: %w", err)
-	}
-	if registerHeader.StatusCode != proto.StatusOK {
-		return fmt.Errorf("register rejected: status=%d", registerHeader.StatusCode)
-	}
-	if handler.watchdog != nil {
-		handler.watchdog.Mark()
-	}
-	var watchdogErr <-chan error
-	if handler.watchdog != nil {
-		watchdogErr = handler.watchdog.Start(conn)
-		defer handler.watchdog.Stop()
-	}
-
-	runtime := transport.NewRuntime(conn, handler)
-	done := make(chan error, 1)
-	go func() {
-		done <- runtime.Run()
-	}()
-
-	select {
-	case <-ctx.Done():
-		_ = runtime.Close()
-		<-done
-		return nil
-	case err := <-watchdogErr:
-		_ = runtime.Close()
-		<-done
-		return err
-	case err := <-done:
-		return err
-	}
 }
 
 type RoleRuntime struct {

@@ -1,7 +1,6 @@
-package gateway
+package storer
 
 import (
-	"net"
 	"sync"
 
 	"yumedisk/server/internal/proto"
@@ -9,48 +8,43 @@ import (
 	"yumedisk/server/internal/session"
 )
 
-type StorerRouteRegistry struct {
-	routes *route.Registry
-
-	handlerMu sync.RWMutex
-	handler   routeDisconnectHandler
-
-	connections *storerConnectionRegistry
-}
-
-type routeDisconnectHandler interface {
+type DisconnectHandler interface {
 	CloseRouteConnection(routeConnectionID uint64, diskIDs []string)
 }
 
-func NewStorerRouteRegistry() *StorerRouteRegistry {
-	return &StorerRouteRegistry{
+type Registry struct {
+	routes *route.Registry
+
+	handlerMu sync.RWMutex
+	handler   DisconnectHandler
+
+	connections *connectionRegistry
+}
+
+func NewRegistry() *Registry {
+	return &Registry{
 		routes:      route.NewRegistry(),
-		connections: newStorerConnectionRegistry(),
+		connections: newConnectionRegistry(),
 	}
 }
 
-func (r *StorerRouteRegistry) SetDisconnectHandler(handler routeDisconnectHandler) {
+func (r *Registry) SetDisconnectHandler(handler DisconnectHandler) {
 	r.handlerMu.Lock()
 	r.handler = handler
 	r.handlerMu.Unlock()
 }
 
-func (r *StorerRouteRegistry) LookupRoute(diskID string) (route.Entry, bool) {
+func (r *Registry) LookupRoute(diskID string) (route.Entry, bool) {
 	return r.routes.LookupRoute(diskID)
 }
 
-func (r *StorerRouteRegistry) Register(entry route.Entry) error {
+func (r *Registry) Register(entry route.Entry) error {
 	return r.routes.Register(entry)
 }
 
-func (r *StorerRouteRegistry) AttachConnection(connectionID uint64, conn net.Conn) *storerConnection {
-	return r.connections.Attach(connectionID, conn)
-}
-
-func (r *StorerRouteRegistry) DisconnectConnection(connectionID uint64) {
+func (r *Registry) DisconnectConnection(connectionID uint64) {
 	disconnected := r.routes.DisconnectConnection(connectionID)
 	conn := r.connections.Remove(connectionID)
-
 	if conn != nil {
 		conn.closePending()
 	}
@@ -58,21 +52,19 @@ func (r *StorerRouteRegistry) DisconnectConnection(connectionID uint64) {
 	r.handlerMu.RLock()
 	handler := r.handler
 	r.handlerMu.RUnlock()
-	if handler != nil {
-		diskIDs := make([]string, 0, len(disconnected))
-		for _, entry := range disconnected {
-			diskIDs = append(diskIDs, entry.DiskID)
-		}
-		handler.CloseRouteConnection(connectionID, diskIDs)
+	if handler == nil {
+		return
 	}
+
+	diskIDs := make([]string, 0, len(disconnected))
+	for _, entry := range disconnected {
+		diskIDs = append(diskIDs, entry.DiskID)
+	}
+	handler.CloseRouteConnection(connectionID, diskIDs)
 }
 
-func (r *StorerRouteRegistry) connection(connectionID uint64) (*storerConnection, bool) {
-	return r.connections.Lookup(connectionID)
-}
-
-func (r *StorerRouteRegistry) Open(clientConnectionID uint64, entry route.Entry) (uint64, error) {
-	conn, ok := r.connection(entry.ConnectionID)
+func (r *Registry) Open(_ uint64, entry route.Entry) (uint64, error) {
+	conn, ok := r.connections.Lookup(entry.ConnectionID)
 	if !ok {
 		return 0, session.ErrSessionUnavailable
 	}
@@ -102,13 +94,13 @@ func (r *StorerRouteRegistry) Open(clientConnectionID uint64, entry route.Entry)
 	return header.SessionID, nil
 }
 
-func (r *StorerRouteRegistry) Close(routeConnectionID uint64, sessionID uint64) {
+func (r *Registry) Close(routeConnectionID uint64, sessionID uint64) {
 	_, _ = r.roundTripData(routeConnectionID, proto.OpClose, sessionID, nil)
 }
 
-func (r *StorerRouteRegistry) CloseConnection(uint64) {}
+func (r *Registry) CloseConnection(uint64) {}
 
-func (r *StorerRouteRegistry) Read(routeConnectionID uint64, sessionID uint64, offset uint64, length uint32) ([]byte, error) {
+func (r *Registry) Read(routeConnectionID uint64, sessionID uint64, offset uint64, length uint32) ([]byte, error) {
 	resp, err := r.roundTripData(routeConnectionID, proto.OpReadAt, sessionID, proto.BuildReadBody(offset, length))
 	if err != nil {
 		return nil, session.ErrSessionUnavailable
@@ -125,7 +117,7 @@ func (r *StorerRouteRegistry) Read(routeConnectionID uint64, sessionID uint64, o
 	return data, nil
 }
 
-func (r *StorerRouteRegistry) Write(routeConnectionID uint64, sessionID uint64, offset uint64, data []byte) error {
+func (r *Registry) Write(routeConnectionID uint64, sessionID uint64, offset uint64, data []byte) error {
 	body := append(proto.BuildReadWriteBody(offset, uint32(len(data))), data...)
 	resp, err := r.roundTripData(routeConnectionID, proto.OpWriteAt, sessionID, body)
 	if err != nil {
@@ -141,8 +133,8 @@ func (r *StorerRouteRegistry) Write(routeConnectionID uint64, sessionID uint64, 
 	return nil
 }
 
-func (r *StorerRouteRegistry) roundTripData(routeConnectionID uint64, opCode uint8, sessionID uint64, body []byte) ([]byte, error) {
-	conn, ok := r.connection(routeConnectionID)
+func (r *Registry) roundTripData(routeConnectionID uint64, opCode uint8, sessionID uint64, body []byte) ([]byte, error) {
+	conn, ok := r.connections.Lookup(routeConnectionID)
 	if !ok {
 		return nil, session.ErrSessionUnavailable
 	}

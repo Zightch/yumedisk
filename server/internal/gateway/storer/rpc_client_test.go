@@ -1,4 +1,4 @@
-package gateway
+package storer
 
 import (
 	"net"
@@ -9,14 +9,14 @@ import (
 	"yumedisk/server/internal/transport"
 )
 
-func TestStorerConnectionRoundTripTimesOutWithoutResponse(t *testing.T) {
+func TestConnectionRoundTripTimesOutWithoutResponse(t *testing.T) {
 	t.Parallel()
 
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
 	defer clientConn.Close()
 
-	conn := newStorerConnection(7, serverConn)
+	conn := newConnection(7, serverConn)
 	payload := make([]byte, proto.HeaderSize+proto.LinkHeartbeatBodySize)
 	proto.EncodeHeader(proto.Header{
 		ProtocolVersion: proto.ProtocolVersion,

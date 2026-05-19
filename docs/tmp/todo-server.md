@@ -38,94 +38,65 @@
 - 第 6 点“删除优先原则”
 - 第 7 点“测试覆盖原则”
 
-## 3. 当前结构问题
+## 3. 当前进度与剩余问题
 
-当前 `server` 已经比前一版清楚很多，但从结构重构角度看，至少还有下面几类问题没有收完。
+当前 `server` 已经完成了一轮真正的结构下沉，不再停留在旧的平铺前缀阶段。
 
-### 3.1 gateway 的 route-facing 栈还没有完全分层
+### 3.1 已完成
 
-当前 `gateway` 的 storer 侧链路里，下面这些职责还没有彻底拆开：
+- `gateway` 的 storer-facing 实现已收进 `server/internal/gateway/storer/`
+- `gateway.Runtime` 已删掉 `StorerHandler`，不再直接操纵 storer register / heartbeat / round-trip 细节
+- storer listener 已从 `gateway/runtime.go` 手写 accept loop 抽离为独立壳
+- `role=storer` 的 gateway 主动连接链已收进 `server/internal/storer/gateway/`
+- `role=whole` 的本地固定路由适配也已收进 `server/internal/storer/gateway/`
 
-- route 真状态
-- 活跃 storer 连接表
-- register 闸口
-- request/response round-trip
-- gateway 主动 heartbeat
-- route 断开后的 session 清理与 notice 传播
+### 3.2 剩余问题一：gateway client-facing 仍然平铺
 
-目前它们仍然集中缠在：
+当前 `gateway` 的 client-facing 侧虽然职责已经比 route-facing 清楚，但文件仍然平铺在：
 
-- `server/internal/gateway/storer_routes.go`
-- `server/internal/gateway/storer_connection.go`
-- `server/internal/gateway/runtime.go`
+- `handler.go`
+- `authenticator.go`
+- `session_opener.go`
+- `session_registry.go`
+- `auth_grant_registry.go`
+- `client_connection_runtime.go`
+- `client_heartbeat_watchdog.go`
 
-这说明当前 route-facing 结构还停留在“registry + connection helper + runtime 拼起来”的阶段，还没有真正摊成底层组件。
+这组对象已经共享稳定语义前缀，本轮后续应继续按原则第 5 点收成 `gateway/client/` 子目录，而不是继续长期平铺。
 
-### 3.2 存在已经失去必要性的空壳层
+### 3.3 剩余问题二：gateway/storer.Registry 仍然偏厚
 
-当前 `server/internal/gateway/storer_handler.go` 与 `gateway.Runtime` 里的 `storerHandler` 已经不是必要层：
+当前 `server/internal/gateway/storer/Registry` 已经比旧版清楚很多，但它仍然同时承担：
 
-- 构造了 `StorerHandler`
-- 但真正运行时并没有通过它承接 accepted storer connection
-- 代码实际直接走的是 `AttachConnection -> storerConn.serve(...)`
+- route 真状态接入
+- 活跃 storer link 索引
+- SessionDataPlane 适配
+- route disconnect 后的 session close 传播
 
-这类结构不符合第 5 点和第 6 点：
+这说明 route-facing 结构已经从“完全混在 runtime”进到“中层已出现”，但还没有完全拆到 `data_plane` 与 `disconnect_notifier` 级别。
 
-- 不是稳定中层
-- 也不是明确底层能力
-- 而是留下来的过渡壳
+### 3.4 剩余问题三：storer 顶层与 core 边界还能继续收
 
-当前倾向不是继续强化这个壳，而是删除或重建为真正有职责的中层。
+当前 `role_runtime.go` 已经退回到装配层很多，但 `storer` 顶层仍然还保留：
 
-### 3.3 gateway runtime 还承担了过多 route-facing 细节
+- role 分发
+- top-level runtime 选择
+- `Core` 的直接传递
 
-`server/internal/gateway/runtime.go` 当前同时承担：
+而 `Core` 本身也还同时承接：
 
-- 顶层程序运行时
-- listener 管理
-- storer accepted connection 生命周期
-- storer heartbeat 启停
-- storer register 入口调度
-- client session close notice 的写回
+- 本地文件后端
+- 认证材料
+- session service
+- route entry 描述辅助
 
-这里的问题不是文件行数，而是运行时层还在直接碰太多下层细节。
+后续还需要再审视 `Core` 是否继续细分为更稳定的低层组件，避免它重新变成“大宿主”。
 
-按第 5 点，顶层 runtime 应该只做：
+### 3.5 剩余问题四：whole/client-facing 仍可继续按组件目录化
 
-- 顶层装配
-- listener 启停
-- accepted connection 分发
-- 对外统一入口
+当前 `whole_runtime.go` 已经复用新的本地 gateway 适配，但 whole 的 client-facing 入口仍然直接依赖顶层 `gateway.Handler` 与 `ServeClientListener(...)`。
 
-而不应继续下沉到 route-facing 链路内部流程。
-
-### 3.4 storer 侧运行时也还偏厚
-
-`server/internal/storer/role_runtime.go` 当前同时承担：
-
-- `role=storer` 顶层入口
-- dial gateway
-- register 报文构造与发送
-- watchdog 管理
-- transport runtime 启停
-- 本地 session connection cleanup
-
-语义上它能工作，但层次上仍然把“顶层装配”和“单条 gateway link 运行时”揉在一起。
-
-### 3.5 listener 层只收了一半
-
-当前 client listener 已经抽成了共享能力：
-
-- `ServeClientListener(...)`
-
-但 storer listener 仍然保留在 `gateway/runtime.go` 手写 accept loop。
-
-这不是功能错误，但说明当前 listener 层的提炼还没有完全一致。
-
-注意：
-
-- 这里不是说一定要做“一个万能 listener”
-- 而是要保证 listener 壳这一层本身的职责边界清楚，不再混入业务处理
+这本身没有行为问题，但如果后续 `gateway/client/` 继续成组扩张，whole 侧的依赖入口也需要跟着收敛，避免再次回到“知道太多下层文件”的状态。
 
 ## 4. 本轮重构目标
 
@@ -277,7 +248,7 @@ server/internal/
       link_runtime.go                # role=storer 的单条对 gateway 链路运行时
       register_client.go             # storer -> gateway register 主动发起
       data_plane_handler.go          # storer 侧数据面协议闸口
-    link_heartbeat_watchdog.go       # storer 被动喂狗 watchdog
+      link_heartbeat_watchdog.go     # storer 被动喂狗 watchdog
 ```
 
 说明：
@@ -326,6 +297,10 @@ server/internal/
 
 - 不先改顶层 runtime，先把 route-facing 底层组件摊开。
 
+当前状态：
+
+- 已完成
+
 本阶段要拆开的最小组件至少包括：
 
 - pending request table
@@ -337,8 +312,8 @@ server/internal/
 
 当前重点：
 
-- 把 `storer_connection.go` 里混在一起的职责拆开
-- 把 `storer_routes.go` 里“路由表 + 活连接表 + RPC + 故障传播”拆开
+- 把旧的 storer 单连接实现里混在一起的职责拆开
+- 把旧的 gateway route-facing 混合层里“路由表 + 活连接表 + RPC + 故障传播”拆开
 
 固定要求：
 
@@ -348,14 +323,19 @@ server/internal/
 
 阶段完成标准：
 
-- `storer_connection.go` 不再是 register / heartbeat / round-trip / serve loop 的混合体
-- `storer_routes.go` 不再同时承担 route state、link state 和 data plane 逻辑
+- 旧的 storer 单连接实现不再是 register / heartbeat / round-trip / serve loop 的混合体
+- 旧的 route-facing 混合层不再同时承担 route state、link state 和 data plane 逻辑
 
 ### 8.3 Phase 2：重建 gateway 的 route-facing 中层
 
 目标：
 
 - 在底层能力拆开后，重新拼出稳定的 route-facing 中层，而不是继续让顶层 runtime 直接驱动细节。
+
+当前状态：
+
+- 已完成第一轮：accepted storer link runtime 与 storer listener 壳已独立
+- 下一轮重点是继续把 `Registry` 内的 `data_plane` / `disconnect_notifier` 继续拆薄
 
 本阶段要形成的中层至少包括：
 
@@ -389,6 +369,10 @@ server/internal/
 
 - 让 `gateway.Runtime` 真正回到顶层 runtime 定位。
 
+当前状态：
+
+- 已完成第一轮：`StorerHandler` 已删除，storer accept / serve 细节已移出 `gateway.Runtime`
+
 任务：
 
 - 删除未使用或已失去必要性的 `StorerHandler`
@@ -415,6 +399,10 @@ server/internal/
 目标：
 
 - 让 `role=storer` 的主动连 gateway 链也按同样分层摊开。
+
+当前状态：
+
+- 已完成第一轮：主动连接、register、watchdog、data plane 已下沉到 `server/internal/storer/gateway/`
 
 本阶段要拆开的对象至少包括：
 

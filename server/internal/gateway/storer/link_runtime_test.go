@@ -1,29 +1,26 @@
-package gateway
+package storer
 
 import (
+	"context"
 	"net"
 	"testing"
+	"time"
 
 	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/transport"
 )
 
-func TestStorerHandlerRejectsWrongGatewayToken(t *testing.T) {
+func TestLinkRuntimeRejectsWrongGatewayToken(t *testing.T) {
 	t.Parallel()
-
-	handler, err := NewStorerHandler(NewStorerRouteRegistry())
-	if err != nil {
-		t.Fatalf("new storer handler: %v", err)
-	}
 
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	storerConn := newStorerConnection(7, serverConn)
+	runtime := newLinkRuntime(7, serverConn, NewRegistry(), "expected-token", time.Hour, time.Hour)
 	done := make(chan error, 1)
 	go func() {
-		done <- handler.ServeConnection(storerConn, "expected-token")
+		done <- runtime.Serve(context.Background())
 	}()
 
 	registerAndExpectStatus(t, clientConn, "wrong-token", "DISK000000000001", proto.StatusAuthFailed)
@@ -32,25 +29,20 @@ func TestStorerHandlerRejectsWrongGatewayToken(t *testing.T) {
 	<-done
 }
 
-func TestStorerHandlerRejectsDuplicateDiskOnDifferentConnection(t *testing.T) {
+func TestLinkRuntimeRejectsDuplicateDiskOnDifferentConnection(t *testing.T) {
 	t.Parallel()
 
-	registry := NewStorerRouteRegistry()
-	handler, err := NewStorerHandler(registry)
-	if err != nil {
-		t.Fatalf("new storer handler: %v", err)
-	}
-
+	registry := NewRegistry()
 	const gatewayToken = "expected-token"
 	const diskID = "DISK000000000001"
 
 	serverConnOne, clientConnOne := net.Pipe()
 	defer clientConnOne.Close()
 	defer serverConnOne.Close()
-	storerConnOne := newStorerConnection(7, serverConnOne)
+	runtimeOne := newLinkRuntime(7, serverConnOne, registry, gatewayToken, time.Hour, time.Hour)
 	doneOne := make(chan error, 1)
 	go func() {
-		doneOne <- handler.ServeConnection(storerConnOne, gatewayToken)
+		doneOne <- runtimeOne.Serve(context.Background())
 	}()
 
 	registerAndExpectStatus(t, clientConnOne, gatewayToken, diskID, proto.StatusOK)
@@ -58,10 +50,10 @@ func TestStorerHandlerRejectsDuplicateDiskOnDifferentConnection(t *testing.T) {
 	serverConnTwo, clientConnTwo := net.Pipe()
 	defer clientConnTwo.Close()
 	defer serverConnTwo.Close()
-	storerConnTwo := newStorerConnection(8, serverConnTwo)
+	runtimeTwo := newLinkRuntime(8, serverConnTwo, registry, gatewayToken, time.Hour, time.Hour)
 	doneTwo := make(chan error, 1)
 	go func() {
-		doneTwo <- handler.ServeConnection(storerConnTwo, gatewayToken)
+		doneTwo <- runtimeTwo.Serve(context.Background())
 	}()
 
 	registerAndExpectStatus(t, clientConnTwo, gatewayToken, diskID, proto.StatusInvalidRequest)
@@ -75,22 +67,17 @@ func TestStorerHandlerRejectsDuplicateDiskOnDifferentConnection(t *testing.T) {
 	<-doneOne
 }
 
-func TestStorerHandlerRejectsWrongPhaseRequests(t *testing.T) {
+func TestLinkRuntimeRejectsWrongPhaseRequests(t *testing.T) {
 	t.Parallel()
-
-	handler, err := NewStorerHandler(NewStorerRouteRegistry())
-	if err != nil {
-		t.Fatalf("new storer handler: %v", err)
-	}
 
 	serverConn, clientConn := net.Pipe()
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	storerConn := newStorerConnection(9, serverConn)
+	runtime := newLinkRuntime(9, serverConn, NewRegistry(), "expected-token", time.Hour, time.Hour)
 	done := make(chan error, 1)
 	go func() {
-		done <- handler.ServeConnection(storerConn, "expected-token")
+		done <- runtime.Serve(context.Background())
 	}()
 
 	heartbeatReq := make([]byte, proto.HeaderSize+proto.LinkHeartbeatBodySize)
@@ -110,7 +97,7 @@ func TestStorerHandlerRejectsWrongPhaseRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read pre-register heartbeat response: %v", err)
 	}
-	if header := mustParseGatewayHeader(t, heartbeatResp); header.StatusCode != proto.StatusInvalidRequest {
+	if header := mustParseStorerHeader(t, heartbeatResp); header.StatusCode != proto.StatusInvalidRequest {
 		t.Fatalf("unexpected pre-register heartbeat status: %d", header.StatusCode)
 	}
 
@@ -149,7 +136,17 @@ func registerAndExpectStatus(t *testing.T, conn net.Conn, gatewayToken string, d
 	if err != nil {
 		t.Fatalf("read register response: %v", err)
 	}
-	if header := mustParseGatewayHeader(t, resp); header.StatusCode != want {
+	if header := mustParseStorerHeader(t, resp); header.StatusCode != want {
 		t.Fatalf("unexpected register status: got=%d want=%d", header.StatusCode, want)
 	}
+}
+
+func mustParseStorerHeader(t *testing.T, payload []byte) proto.Header {
+	t.Helper()
+
+	header, err := proto.ParseHeader(payload)
+	if err != nil {
+		t.Fatalf("parse header: %v", err)
+	}
+	return header
 }

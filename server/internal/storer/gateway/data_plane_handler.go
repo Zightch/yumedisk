@@ -1,4 +1,4 @@
-package storer
+package gateway
 
 import (
 	"fmt"
