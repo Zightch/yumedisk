@@ -4,14 +4,22 @@ mod commands;
 mod single_instance;
 mod state;
 
+use std::thread;
+use std::time::Duration;
+
+use crate::backend::network_service;
+use crate::backend::persistence_service;
+use crate::state::client_state::ClientState;
 use tauri::image::Image;
 use tauri::menu::{MenuBuilder, MenuEvent, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 
 const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_OPEN_ID: &str = "tray-open-main-window";
 const TRAY_EXIT_ID: &str = "tray-exit-app";
+const NETWORK_RUNTIME_CHANGED_EVENT: &str = "network-runtime-changed";
+const NETWORK_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
@@ -72,6 +80,42 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+fn spawn_network_event_watcher(app: AppHandle) {
+    thread::spawn(move || loop {
+        thread::sleep(NETWORK_EVENT_POLL_INTERVAL);
+
+        let Some(state) = app.try_state::<ClientState>() else {
+            continue;
+        };
+        if state.is_exiting() {
+            break;
+        }
+
+        let changed = {
+            let mut disk_catalog = state
+                .disk_catalog
+                .lock()
+                .expect("disk catalog mutex should not be poisoned");
+            let changed = network_service::sync_pending_events(
+                &state.backend,
+                disk_catalog.runtime_store_mut(),
+                &state.network_client,
+            );
+            if changed {
+                let _ = persistence_service::save_client_state(
+                    &state.backend,
+                    disk_catalog.runtime_store(),
+                );
+            }
+            changed
+        };
+
+        if changed {
+            let _ = app.emit(NETWORK_RUNTIME_CHANGED_EVENT, ());
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let single_instance_guard = match single_instance::initialize() {
@@ -91,6 +135,7 @@ pub fn run() {
                 &single_instance_guard,
                 show_main_window,
             );
+            spawn_network_event_watcher(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

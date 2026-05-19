@@ -68,6 +68,11 @@ CliHost
 - `WriteAt`
 - `Close`
 
+它不负责：
+
+- `ConnHeartbeat`
+- connection 保活
+
 ### `NetworkMedia`
 
 表示真正挂到 backend 的网络盘介质视图，固定显式持有：

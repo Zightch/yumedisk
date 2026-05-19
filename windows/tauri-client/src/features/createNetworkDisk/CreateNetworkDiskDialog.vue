@@ -410,7 +410,18 @@ function formatBytes(value: number): string {
         <div class="app-dialog__content network-dialog__content">
           <section class="network-dialog__section">
             <el-form class="app-dialog-form" label-position="top">
-              <el-form-item label="服务器地址">
+              <el-form-item>
+                <template #label>
+                  <div class="network-dialog__server-label">
+                    <span class="network-dialog__server-label-text">服务器地址</span>
+                    <span
+                      class="network-dialog__status-badge network-dialog__status-badge--compact"
+                      :class="connectionStatusClass"
+                    >
+                      {{ connectionStatusText }}
+                    </span>
+                  </div>
+                </template>
                 <div class="network-dialog__server-row">
                   <el-input
                     v-model="form.serverAddr"
@@ -418,7 +429,7 @@ function formatBytes(value: number): string {
                     :disabled="testing || submitting || adding || removingRemoteDiskId !== null"
                   />
                   <el-button
-                    class="network-dialog__test-button"
+                    class="network-dialog__test-button network-dialog__utility-button"
                     type="primary"
                     :loading="testing"
                     :disabled="submitting || adding || removingRemoteDiskId !== null"
@@ -429,14 +440,9 @@ function formatBytes(value: number): string {
                 </div>
               </el-form-item>
             </el-form>
-
-            <div class="network-dialog__status">
-              <span class="network-dialog__status-label">连接状态</span>
-              <span class="network-dialog__status-badge" :class="connectionStatusClass">
-                {{ connectionStatusText }}
-              </span>
-            </div>
           </section>
+
+          <el-divider class="network-dialog__divider" />
 
           <section class="network-dialog__section">
             <el-form class="app-dialog-form" label-position="top">
@@ -459,7 +465,7 @@ function formatBytes(value: number): string {
 
             <div class="network-dialog__actions">
               <el-button
-                class="network-dialog__action-button"
+                class="network-dialog__action-button network-dialog__utility-button"
                 type="primary"
                 :loading="adding"
                 :disabled="!canAddItem || testing || submitting || removingRemoteDiskId !== null"
@@ -568,41 +574,42 @@ function formatBytes(value: number): string {
   gap: 12px;
 }
 
+.network-dialog__server-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.network-dialog__server-label-text {
+  min-width: 0;
+}
+
 .network-dialog__server-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
+  width: 100%;
 }
 
-.network-dialog__test-button {
-  min-width: 104px;
-  border-radius: 8px;
-}
-
-.network-dialog__status {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.network-dialog__status-label {
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  opacity: 0.72;
+.network-dialog__server-row .el-input {
+  min-width: 0;
 }
 
 .network-dialog__status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 180px;
   padding: 6px 12px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .network-dialog__status-badge--idle {
@@ -620,14 +627,51 @@ function formatBytes(value: number): string {
   color: #4ade80;
 }
 
+.network-dialog__status-badge--compact {
+  padding: 3px 8px;
+  max-width: 140px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.network-dialog__utility-button.el-button {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: none;
+  --el-button-bg-color: var(--accent-soft);
+  --el-button-border-color: var(--accent-border);
+  --el-button-text-color: var(--text-primary);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--accent-soft) 82%, var(--accent) 18%);
+  --el-button-hover-border-color: color-mix(in srgb, var(--accent-border) 82%, white 18%);
+  --el-button-hover-text-color: var(--text-primary);
+  --el-button-active-bg-color: color-mix(in srgb, var(--accent-soft) 72%, var(--accent) 28%);
+  --el-button-active-border-color: color-mix(in srgb, var(--accent-border) 76%, white 12%);
+  --el-button-active-text-color: var(--text-primary);
+  --el-button-disabled-bg-color: rgba(255, 255, 255, 0.05);
+  --el-button-disabled-border-color: var(--border-soft);
+  --el-button-disabled-text-color: var(--text-muted);
+}
+
+.network-dialog__test-button {
+  min-width: 92px;
+  justify-self: end;
+}
+
+.network-dialog__divider {
+  margin: 8px 0 0;
+}
+
 .network-dialog__actions {
   display: flex;
   justify-content: flex-end;
+  margin-top: 2px;
 }
 
 .network-dialog__action-button {
-  min-width: 104px;
-  border-radius: 8px;
+  min-width: 84px;
 }
 
 .network-dialog__section--list {

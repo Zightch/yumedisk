@@ -1,4 +1,5 @@
-import { nextTick, onMounted, ref } from "vue";
+import { listen } from "@tauri-apps/api/event";
+import { nextTick, onMounted, onUnmounted, ref } from "vue";
 import type { HomeDiskListItem, HomeDiskListSnapshot } from "../../entities/disk/model";
 import type { AppSessionPhase, AppSessionSnapshot } from "../../entities/appSession/model";
 import {
@@ -36,6 +37,7 @@ export function useHomeBootstrap() {
   const appSessionSnapshot = ref<AppSessionSnapshot | null>(null);
   const initialAutoMountCompleted = ref(false);
   const actionLoadingDiskId = ref<string | null>(null);
+  let stopNetworkRuntimeListener: (() => void) | null = null;
 
   function applyHomeDiskListSnapshot(snapshot: HomeDiskListSnapshot): void {
     runtimeDisks.value = snapshot.disks;
@@ -207,6 +209,16 @@ export function useHomeBootstrap() {
 
   onMounted(() => {
     void bootstrapHomePage();
+    void listen("network-runtime-changed", () => {
+      void loadHomeDiskList({ showLoading: false });
+    }).then((unlisten) => {
+      stopNetworkRuntimeListener = unlisten;
+    });
+  });
+
+  onUnmounted(() => {
+    stopNetworkRuntimeListener?.();
+    stopNetworkRuntimeListener = null;
   });
 
   return {

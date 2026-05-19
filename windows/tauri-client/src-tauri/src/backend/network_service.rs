@@ -93,74 +93,97 @@ pub fn sync_pending_events(
     backend: &BackendContext,
     runtime_store: &mut DiskRuntimeStore,
     network_client_mutex: &Mutex<NetworkClientState>,
-) {
+) -> bool {
     let events = {
         let network_client = lock_network_client(network_client_mutex);
         network_client.drain_events()
     };
+    let invalidations = {
+        let network_client = lock_network_client(network_client_mutex);
+        network_client.drain_media_invalidations()
+    };
 
+    let mut changed = false;
     for event in events {
-        match event {
+        changed |= match event {
             NetworkClientEvent::SessionClosed {
                 server_addr,
                 session_id,
             } => {
-                let (opened_session, draft_sessions) = {
+                let opened_session_key = {
+                    let network_client = lock_network_client(network_client_mutex);
+                    network_client.find_opened_session_by_session_id(&server_addr, session_id)
+                };
+                if let Some(key) = opened_session_key.as_ref() {
+                    invalidate_runtime_by_key(
+                        backend,
+                        runtime_store,
+                        network_client_mutex,
+                        key,
+                        NETWORK_SESSION_MISSING_REASON,
+                    );
+                }
+
+                let draft_sessions = {
                     let mut network_client = lock_network_client(network_client_mutex);
-                    let opened_session = network_client
-                        .find_opened_session_by_session_id(&server_addr, session_id)
-                        .and_then(|key| network_client.remove_opened_session(&key));
-                    let draft_sessions = remove_draft_sessions_by_session_id(
+                    remove_draft_sessions_by_session_id(
                         &mut network_client,
                         &server_addr,
                         session_id,
-                    );
-                    network_client.release_connection_after_session_close(&server_addr);
-                    (opened_session, draft_sessions)
+                    )
                 };
-
-                if let Some(opened_session) = opened_session {
-                    invalidate_runtime_by_key(
-                        backend,
-                        runtime_store,
-                        &opened_session.key,
-                        NETWORK_SESSION_MISSING_REASON,
-                    );
-                    let _ = close_session_for_cleanup(&opened_session.session);
-                }
                 for draft_session in draft_sessions {
                     let _ = close_session_for_cleanup(&draft_session.session);
                 }
+                {
+                    let mut network_client = lock_network_client(network_client_mutex);
+                    network_client.release_connection_after_session_close(&server_addr);
+                }
+                true
             }
             NetworkClientEvent::ConnectionLost { server_addr } => {
-                let (opened_sessions, draft_sessions) = {
-                    let mut network_client = lock_network_client(network_client_mutex);
-                    let opened_sessions = network_client
-                        .opened_session_keys_for_server(&server_addr)
-                        .into_iter()
-                        .filter_map(|key| network_client.remove_opened_session(&key))
-                        .collect::<Vec<_>>();
-                    let draft_sessions =
-                        remove_all_draft_sessions_for_server(&mut network_client, &server_addr);
-                    network_client.cleanup_connection_if_idle(&server_addr);
-                    (opened_sessions, draft_sessions)
+                let opened_session_keys = {
+                    let network_client = lock_network_client(network_client_mutex);
+                    network_client.opened_session_keys_for_server(&server_addr)
                 };
 
-                for opened_session in opened_sessions {
+                for key in opened_session_keys {
                     invalidate_runtime_by_key(
                         backend,
                         runtime_store,
-                        &opened_session.key,
+                        network_client_mutex,
+                        &key,
                         NETWORK_CONNECTION_UNAVAILABLE_REASON,
                     );
-                    let _ = close_session_for_cleanup(&opened_session.session);
                 }
+
+                let draft_sessions = {
+                    let mut network_client = lock_network_client(network_client_mutex);
+                    remove_all_draft_sessions_for_server(&mut network_client, &server_addr)
+                };
                 for draft_session in draft_sessions {
                     let _ = close_session_for_cleanup(&draft_session.session);
                 }
+                {
+                    let mut network_client = lock_network_client(network_client_mutex);
+                    network_client.cleanup_connection_if_idle(&server_addr);
+                }
+                true
             }
-        }
+        };
     }
+
+    for local_disk_id in invalidations {
+        changed |= invalidate_runtime_by_local_disk_id(
+            backend,
+            runtime_store,
+            network_client_mutex,
+            &local_disk_id,
+            NETWORK_SESSION_MISSING_REASON,
+        );
+    }
+
+    changed
 }
 
 pub fn test_connection(
@@ -429,6 +452,12 @@ pub fn mount_network_disk(
         opened_session.session.clone(),
         opened_session.metadata,
     )
+    .map(|media| {
+        media.with_invalidation_handler({
+            let network_client = lock_network_client(network_client_mutex);
+            network_client.media_invalidation_handler(local_disk_id.to_string())
+        })
+    })
     .map_err(map_mount_error)?;
     let disk_config = DiskConfig {
         disk_size_bytes: opened_session.metadata.disk_size_bytes,
@@ -774,9 +803,18 @@ fn map_draft_snapshot(draft: &NetworkCreateDraft) -> NetworkCreateDraftSnapshot 
 fn invalidate_runtime_by_key(
     backend: &BackendContext,
     runtime_store: &mut DiskRuntimeStore,
+    network_client_mutex: &Mutex<NetworkClientState>,
     key: &NetworkDiskKey,
     reason: &str,
 ) {
+    let opened_session = {
+        let mut network_client = lock_network_client(network_client_mutex);
+        network_client.remove_opened_session(key)
+    };
+    if let Some(opened_session) = opened_session {
+        let _ = close_session_for_cleanup(&opened_session.session);
+    }
+
     for runtime in runtime_store.runtimes_mut() {
         let matches_key = runtime.server_addr() == Some(key.server_addr.as_str())
             && runtime.remote_disk_id() == Some(key.remote_disk_id.as_str());
@@ -794,6 +832,31 @@ fn invalidate_runtime_by_key(
         }
         runtime.set_network_invalid(reason.to_string());
     }
+}
+
+fn invalidate_runtime_by_local_disk_id(
+    backend: &BackendContext,
+    runtime_store: &mut DiskRuntimeStore,
+    network_client_mutex: &Mutex<NetworkClientState>,
+    local_disk_id: &str,
+    reason: &str,
+) -> bool {
+    let Some((server_addr, remote_disk_id)) = runtime_store
+        .find_runtime(local_disk_id)
+        .and_then(|runtime| runtime.network_key())
+    else {
+        return false;
+    };
+
+    let key = NetworkDiskKey::new(server_addr, remote_disk_id);
+    invalidate_runtime_by_key(backend, runtime_store, network_client_mutex, &key, reason);
+
+    {
+        let mut network_client = lock_network_client(network_client_mutex);
+        network_client.release_connection_after_session_close(&key.server_addr);
+    }
+
+    true
 }
 
 fn set_network_runtime_unmounted(

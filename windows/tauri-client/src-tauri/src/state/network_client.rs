@@ -66,6 +66,7 @@ pub struct NetworkClientState {
     opened_disk_sessions: HashMap<NetworkDiskKey, OpenedNetworkDiskSession>,
     network_create_drafts: HashMap<String, NetworkCreateDraft>,
     pending_events: Arc<Mutex<Vec<NetworkClientEvent>>>,
+    pending_media_invalidations: Arc<Mutex<Vec<String>>>,
     next_draft_number: u64,
 }
 
@@ -76,6 +77,7 @@ impl Default for NetworkClientState {
             opened_disk_sessions: HashMap::new(),
             network_create_drafts: HashMap::new(),
             pending_events: Arc::new(Mutex::new(Vec::new())),
+            pending_media_invalidations: Arc::new(Mutex::new(Vec::new())),
             next_draft_number: 1,
         }
     }
@@ -212,6 +214,32 @@ impl NetworkClientState {
         events.drain(..).collect()
     }
 
+    pub fn media_invalidation_handler(
+        &self,
+        local_disk_id: impl Into<String>,
+    ) -> Arc<dyn Fn() + Send + Sync> {
+        let pending_media_invalidations = Arc::clone(&self.pending_media_invalidations);
+        let local_disk_id = local_disk_id.into();
+
+        Arc::new(move || {
+            if let Ok(mut invalidations) = pending_media_invalidations.lock() {
+                invalidations.push(local_disk_id.clone());
+            }
+        })
+    }
+
+    pub fn drain_media_invalidations(&self) -> Vec<String> {
+        let mut invalidations = self
+            .pending_media_invalidations
+            .lock()
+            .expect("network media invalidations poisoned")
+            .drain(..)
+            .collect::<Vec<_>>();
+        invalidations.sort();
+        invalidations.dedup();
+        invalidations
+    }
+
     pub fn release_connection_after_session_close(&mut self, server_addr: &str) {
         let should_close = self
             .connection_pool
@@ -257,5 +285,28 @@ impl NetworkCreateDraft {
 
     pub fn remove_item(&mut self, remote_disk_id: &str) -> Option<NetworkDraftItem> {
         self.items.remove(remote_disk_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NetworkClientState;
+
+    #[test]
+    fn media_invalidations_drain_once_and_deduplicate() {
+        let network_client = NetworkClientState::default();
+
+        let invalidate_disk_two = network_client.media_invalidation_handler("disk-2");
+        let invalidate_disk_one = network_client.media_invalidation_handler("disk-1");
+
+        invalidate_disk_two();
+        invalidate_disk_one();
+        invalidate_disk_two();
+
+        assert_eq!(
+            network_client.drain_media_invalidations(),
+            vec!["disk-1".to_string(), "disk-2".to_string()]
+        );
+        assert!(network_client.drain_media_invalidations().is_empty());
     }
 }

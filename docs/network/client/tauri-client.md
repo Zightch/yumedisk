@@ -83,6 +83,7 @@ DiskRuntime
 - 已打开 `disksession` 复用
 - draft 生命周期
 - `SessionCloseNotice` / disconnect 收束
+- `NetworkMedia` 终态错误失效队列
 - 网络盘重扫任务汇总与分发
 
 它固定是多 connection 全局协调层，不是单个 connection 管理器。
@@ -119,6 +120,18 @@ DiskRuntime
 - `remote_disk_id`
 - `DiskSession`
 - `SessionDescribe` 返回的 metadata
+
+`DiskSession` 在这里仍只负责：
+
+- `SessionDescribe`
+- `ReadAt`
+- `WriteAt`
+- `Close`
+
+它不负责：
+
+- `ConnHeartbeat`
+- connection 保活
 
 `NetworkMedia` 不负责：
 
@@ -283,6 +296,7 @@ find DiskRuntime by local_disk_id
 当前 `tauri-client` 采用的具体策略是：
 
 - 已挂载或未挂载网络盘收到 `SessionCloseNotice` 或 connection 死亡后，直接转为 `invalid`
+- `NetworkMedia` 读写遇到终态错误时，只上报失效事件，再由后台收束器统一转为 `invalid`
 - 若当前已挂载，则先 eject
 - 清理对应 live `disksession`
 - 清理挂载侧 `NetworkMedia`
