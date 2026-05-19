@@ -3,7 +3,8 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::api_error::ApiError;
-use crate::backend::network_service;
+use crate::network::draft_flow;
+use crate::network::event_reconciler;
 use crate::state::client_state::ClientState;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,7 +65,7 @@ pub struct NetworkDraftSnapshotDto {
 }
 
 fn map_network_draft_snapshot(
-    snapshot: network_service::NetworkCreateDraftSnapshot,
+    snapshot: draft_flow::NetworkCreateDraftSnapshot,
 ) -> NetworkDraftSnapshotDto {
     NetworkDraftSnapshotDto {
         draft_id: snapshot.draft_id,
@@ -88,7 +89,7 @@ pub fn test_network_connection(
     state: State<'_, ClientState>,
     request: TestNetworkConnectionRequestDto,
 ) -> Result<(), ApiError> {
-    network_service::test_connection(&state.network_client, &request.server_addr)
+    draft_flow::test_connection(&state.network_client, &request.server_addr)
 }
 
 #[tauri::command]
@@ -96,9 +97,9 @@ pub fn create_network_draft(
     state: State<'_, ClientState>,
     request: CreateNetworkDraftRequestDto,
 ) -> Result<NetworkDraftSnapshotDto, ApiError> {
-    network_service::create_network_draft(
+    draft_flow::create_network_draft(
         &state.network_client,
-        network_service::CreateNetworkDraftRequest {
+        draft_flow::CreateNetworkDraftRequest {
             server_addr: request.server_addr,
         },
     )
@@ -114,16 +115,16 @@ pub fn add_network_draft_item(
         .disk_catalog
         .lock()
         .expect("disk catalog mutex should not be poisoned");
-    network_service::sync_pending_events(
+    event_reconciler::sync_pending_events(
         &state.backend,
         disk_catalog.runtime_store_mut(),
         &state.network_client,
     );
 
-    network_service::add_network_draft_item(
+    draft_flow::add_network_draft_item(
         disk_catalog.runtime_store(),
         &state.network_client,
-        network_service::AddNetworkDraftItemRequest {
+        draft_flow::AddNetworkDraftItemRequest {
             draft_id: request.draft_id,
             disk_name: request.disk_name,
             claim_code: request.claim_code,
@@ -137,9 +138,9 @@ pub fn remove_network_draft_item(
     state: State<'_, ClientState>,
     request: RemoveNetworkDraftItemRequestDto,
 ) -> Result<NetworkDraftSnapshotDto, ApiError> {
-    network_service::remove_network_draft_item(
+    draft_flow::remove_network_draft_item(
         &state.network_client,
-        network_service::RemoveNetworkDraftItemRequest {
+        draft_flow::RemoveNetworkDraftItemRequest {
             draft_id: request.draft_id,
             remote_disk_id: request.remote_disk_id,
         },
@@ -156,17 +157,17 @@ pub fn submit_network_draft(
         .disk_catalog
         .lock()
         .expect("disk catalog mutex should not be poisoned");
-    network_service::sync_pending_events(
+    event_reconciler::sync_pending_events(
         &state.backend,
         disk_catalog.runtime_store_mut(),
         &state.network_client,
     );
 
-    network_service::submit_network_draft(
+    draft_flow::submit_network_draft(
         &state.backend,
         disk_catalog.runtime_store_mut(),
         &state.network_client,
-        network_service::SubmitNetworkDraftRequest {
+        draft_flow::SubmitNetworkDraftRequest {
             draft_id: request.draft_id,
         },
     )
@@ -177,9 +178,9 @@ pub fn dispose_network_draft(
     state: State<'_, ClientState>,
     request: DisposeNetworkDraftRequestDto,
 ) -> Result<(), ApiError> {
-    network_service::dispose_network_draft(
+    draft_flow::dispose_network_draft(
         &state.network_client,
-        network_service::DisposeNetworkDraftRequest {
+        draft_flow::DisposeNetworkDraftRequest {
             draft_id: request.draft_id,
         },
     )

@@ -1,14 +1,15 @@
 mod api_error;
 mod backend;
 mod commands;
+mod network;
 mod single_instance;
 mod state;
 
 use std::thread;
 use std::time::Duration;
 
-use crate::backend::network_service;
 use crate::backend::persistence_service;
+use crate::network::event_reconciler;
 use crate::state::client_state::ClientState;
 use tauri::image::Image;
 use tauri::menu::{MenuBuilder, MenuEvent, MenuItem};
@@ -96,7 +97,7 @@ fn spawn_network_event_watcher(app: AppHandle) {
                 .disk_catalog
                 .lock()
                 .expect("disk catalog mutex should not be poisoned");
-            let changed = network_service::sync_pending_events(
+            let changed = event_reconciler::sync_pending_events(
                 &state.backend,
                 disk_catalog.runtime_store_mut(),
                 &state.network_client,

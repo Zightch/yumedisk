@@ -13,8 +13,8 @@ use crate::api_error::ApiError;
 use crate::backend::memory_media::DenseMemoryMedia;
 use crate::backend::memory_media::DenseMemoryMediaError;
 use crate::backend::memory_media::SparseMemoryMedia;
-use crate::backend::network_service;
 use crate::backend::persistence_service;
+use crate::network::runtime_flow;
 use crate::state::disk_runtime::DiskMediaConfig;
 use crate::state::disk_runtime::DiskRuntime;
 use crate::state::disk_runtime::DiskRuntimeSnapshot;
@@ -323,7 +323,7 @@ pub fn mount_disk(
         })?
         .is_network()
     {
-        return network_service::mount_network_disk(
+        return runtime_flow::mount_network_disk(
             backend,
             runtime_store,
             network_client_mutex,
@@ -412,7 +412,7 @@ pub fn eject_disk(
         })?
         .is_network()
     {
-        return network_service::eject_network_disk(backend, runtime_store, local_disk_id);
+        return runtime_flow::eject_network_disk(backend, runtime_store, local_disk_id);
     }
 
     let runtime = runtime_store
@@ -472,7 +472,7 @@ pub fn prepare_deleted_runtime(
     _network_client_mutex: &Mutex<NetworkClientState>,
 ) -> Result<(), ApiError> {
     if removed_runtime.runtime.is_network() {
-        return network_service::prepare_deleted_network_runtime(
+        return runtime_flow::prepare_deleted_network_runtime(
             backend,
             removed_runtime,
             _network_client_mutex,
@@ -582,7 +582,7 @@ pub fn rescan_runtime_disks(
         }
     }
 
-    network_service::rescan_network_runtimes(runtime_store, network_client_mutex);
+    runtime_flow::rescan_network_runtimes(runtime_store, network_client_mutex);
     query_home_disk_list(backend, runtime_store)
 }
 

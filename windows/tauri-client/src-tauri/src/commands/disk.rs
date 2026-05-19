@@ -4,8 +4,8 @@ use tauri::State;
 
 use crate::api_error::ApiError;
 use crate::backend::disk_service;
-use crate::backend::network_service;
 use crate::backend::persistence_service;
+use crate::network::event_reconciler;
 use crate::state::client_state::ClientState;
 use crate::state::disk_catalog::DiskCatalogState;
 use crate::state::disk_catalog::PendingDiskDeletion;
@@ -330,7 +330,7 @@ fn build_home_disk_list_response(
 }
 
 fn sync_network_runtime_state(state: &ClientState, disk_catalog: &mut DiskCatalogState) {
-    network_service::sync_pending_events(
+    event_reconciler::sync_pending_events(
         &state.backend,
         disk_catalog.runtime_store_mut(),
         &state.network_client,
