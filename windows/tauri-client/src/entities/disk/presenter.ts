@@ -19,6 +19,10 @@ export function formatDiskCapacityText(disk: HomeDiskListItem): string {
 }
 
 export function formatDiskSummaryText(disk: HomeDiskListItem): string {
+  if (disk.media.kind === "network") {
+    return formatDiskKindText(disk);
+  }
+
   return `${formatDiskKindText(disk)} · ${formatDiskCapacityText(disk)}`;
 }
 

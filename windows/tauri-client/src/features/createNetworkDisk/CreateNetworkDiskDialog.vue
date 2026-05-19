@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { Delete } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { computed, reactive, ref, watch } from "vue";
 import type { NetworkDraftItem } from "../../entities/disk/model";
@@ -471,6 +470,15 @@ function formatBytes(value: number): string {
             </div>
           </section>
 
+          <el-alert
+            v-if="errorText"
+            class="app-dialog__alert"
+            :title="errorText"
+            type="error"
+            :closable="false"
+            show-icon
+          />
+
           <section class="network-dialog__section network-dialog__section--list">
             <div class="network-dialog__section-header">
               <h4 class="network-dialog__section-title">待提交磁盘</h4>
@@ -491,45 +499,26 @@ function formatBytes(value: number): string {
                   :key="item.remoteDiskId"
                   class="network-draft-card"
                 >
-                  <div class="network-draft-card__main">
-                    <div class="network-draft-card__topline">
-                      <h5 class="network-draft-card__title">{{ item.diskName }}</h5>
-                      <span v-if="item.readOnly" class="network-draft-card__tag">只读</span>
-                    </div>
+                  <div class="network-draft-card__identity">
+                    <h5 class="network-draft-card__title">{{ item.diskName }}</h5>
+                    <p class="network-draft-card__disk-id">{{ item.remoteDiskId }}</p>
+                  </div>
 
-                    <p class="network-draft-card__summary">
-                      {{ item.serverAddr }} · {{ item.remoteDiskId }}
-                    </p>
-                    <p class="network-draft-card__detail">
-                      {{ formatBytes(item.capacityBytes) }}
-                    </p>
+                  <div class="network-draft-card__capacity">
+                    {{ formatBytes(item.capacityBytes) }}
                   </div>
 
                   <el-button
                     class="network-draft-card__remove"
-                    text
-                    circle
-                    aria-label="移除"
                     :loading="removingRemoteDiskId === item.remoteDiskId"
                     @click="handleRemoveDraftItem(item.remoteDiskId)"
                   >
-                    <el-icon>
-                      <Delete />
-                    </el-icon>
+                    删除
                   </el-button>
                 </article>
               </div>
             </el-scrollbar>
           </section>
-
-          <el-alert
-            v-if="errorText"
-            class="app-dialog__alert"
-            :title="errorText"
-            type="error"
-            :closable="false"
-            show-icon
-          />
 
           <div class="app-dialog__footer app-dialog__footer--embedded">
             <el-button
@@ -538,7 +527,7 @@ function formatBytes(value: number): string {
             >
               取消
             </el-button>
-              <el-button
+            <el-button
               class="app-dialog__button"
               type="primary"
               :loading="submitting"
@@ -588,6 +577,7 @@ function formatBytes(value: number): string {
 
 .network-dialog__test-button {
   min-width: 104px;
+  border-radius: 8px;
 }
 
 .network-dialog__status {
@@ -637,6 +627,7 @@ function formatBytes(value: number): string {
 
 .network-dialog__action-button {
   min-width: 104px;
+  border-radius: 8px;
 }
 
 .network-dialog__section--list {
@@ -683,52 +674,43 @@ function formatBytes(value: number): string {
 
 .network-draft-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 140px) auto;
+  gap: 16px;
   align-items: start;
-  padding: 14px 16px;
+  padding: 14px 18px;
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.network-draft-card__main {
-  min-width: 0;
-}
-
-.network-draft-card__topline {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.network-draft-card__identity {
   min-width: 0;
 }
 
 .network-draft-card__title {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 700;
 }
 
-.network-draft-card__tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(59, 130, 246, 0.16);
-  color: #93c5fd;
-  font-size: 12px;
+.network-draft-card__disk-id {
+  margin: 10px 0 0;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 14px;
+  line-height: 1.3;
+  word-break: break-all;
 }
 
-.network-draft-card__summary,
-.network-draft-card__detail {
-  margin: 6px 0 0;
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 12px;
-  line-height: 1.5;
-  word-break: break-all;
+.network-draft-card__capacity {
+  align-self: center;
+  justify-self: center;
+  font-size: 20px;
+  font-weight: 600;
 }
 
 .network-draft-card__remove {
   align-self: center;
+  justify-self: end;
+  min-width: 92px;
 }
 </style>
