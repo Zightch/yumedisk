@@ -89,7 +89,13 @@ func (r *Runtime) Run(ctx context.Context) error {
 	}
 
 	go func() {
-		report(r.serveClientListener(ctx, clientListener))
+		report(ServeClientListener(
+			ctx,
+			clientListener,
+			"client",
+			func() uint64 { return r.nextConn.Add(1) },
+			r.serveClientConnection,
+		))
 	}()
 	go func() {
 		report(r.serveStorerListener(ctx, storerListener))
@@ -109,25 +115,6 @@ func (r *Runtime) ClientListenAddr() string {
 
 func (r *Runtime) StorerListenAddr() string {
 	return r.cfg.Storer.ListenAddr
-}
-
-func (r *Runtime) serveClientListener(ctx context.Context, listener net.Listener) error {
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Temporary() {
-				log.Printf("temporary client accept error: %v", err)
-				continue
-			}
-			return fmt.Errorf("accept client connection: %w", err)
-		}
-
-		go r.serveClientConnection(ctx, conn)
-	}
 }
 
 func (r *Runtime) serveStorerListener(ctx context.Context, listener net.Listener) error {
@@ -150,8 +137,7 @@ func (r *Runtime) serveStorerListener(ctx context.Context, listener net.Listener
 	}
 }
 
-func (r *Runtime) serveClientConnection(ctx context.Context, conn net.Conn) {
-	connectionID := r.nextConn.Add(1)
+func (r *Runtime) serveClientConnection(ctx context.Context, connectionID uint64, conn net.Conn) {
 	ServeAcceptedClientConnection(ctx, conn, r.clientHandler, connectionID, ClientConnectionHooks{
 		LogPrefix: "gateway client",
 		OnConnected: func(conn net.Conn, state *ConnectionState) {

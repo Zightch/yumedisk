@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"sync/atomic"
 
@@ -52,31 +51,16 @@ func (r *WholeRuntime) Run(ctx context.Context) error {
 	}
 	defer listener.Close()
 
-	go func() {
-		<-ctx.Done()
-		_ = listener.Close()
-	}()
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			var netErr net.Error
-			if errors.As(err, &netErr) && netErr.Temporary() {
-				log.Printf("temporary accept error: %v", err)
-				continue
-			}
-			return fmt.Errorf("accept connection: %w", err)
-		}
-
-		go r.serveAcceptedConnection(ctx, conn)
-	}
+	return gateway.ServeClientListener(
+		ctx,
+		listener,
+		"client",
+		func() uint64 { return r.nextConn.Add(1) },
+		r.serveAcceptedConnection,
+	)
 }
 
-func (r *WholeRuntime) serveAcceptedConnection(ctx context.Context, conn net.Conn) {
-	connectionID := r.nextConn.Add(1)
+func (r *WholeRuntime) serveAcceptedConnection(ctx context.Context, connectionID uint64, conn net.Conn) {
 	gateway.ServeAcceptedClientConnection(ctx, conn, r.gateway, connectionID, gateway.ClientConnectionHooks{
 		LogPrefix: "whole client",
 	})
