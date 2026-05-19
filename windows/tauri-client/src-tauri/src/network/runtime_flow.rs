@@ -323,3 +323,56 @@ pub fn rescan_network_runtimes(
 fn map_mount_error(error: NetworkClientError) -> ApiError {
     ApiError::new("mount-disk-failed", "挂载磁盘失败", Some(error.to_string()))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use backend_rust::BackendContext;
+
+    use super::mount_network_disk;
+    use crate::network::NETWORK_SESSION_MISSING_REASON;
+    use crate::state::disk_runtime::DiskRuntime;
+    use crate::state::disk_runtime::DiskRuntimeStatus;
+    use crate::state::disk_runtime::DiskRuntimeStore;
+    use crate::state::network_client::NetworkClientState;
+
+    #[test]
+    fn mount_network_disk_marks_runtime_invalid_when_session_is_missing() {
+        let backend = BackendContext::default();
+        let network_client_mutex = Mutex::new(NetworkClientState::default());
+        let mut runtime_store = DiskRuntimeStore::default();
+
+        let mut runtime = DiskRuntime::new_network(
+            "disk-1".to_string(),
+            "network-disk".to_string(),
+            false,
+            "127.0.0.1:9003".to_string(),
+            "Z9y8X7w6V5u4T3s2".to_string(),
+            "claim-2".to_string(),
+            4096,
+            false,
+        );
+        runtime.set_network_unmounted(4096, false);
+        runtime_store.insert_runtime(runtime);
+
+        let error = mount_network_disk(
+            &backend,
+            &mut runtime_store,
+            &network_client_mutex,
+            "disk-1",
+        )
+        .expect_err("mount should fail without live session");
+
+        assert_eq!(error.code, "disk-invalid");
+        let runtime = runtime_store
+            .find_runtime("disk-1")
+            .expect("runtime should exist");
+        assert_eq!(
+            runtime.status(),
+            &DiskRuntimeStatus::Invalid {
+                reason: NETWORK_SESSION_MISSING_REASON.to_string(),
+            }
+        );
+    }
+}

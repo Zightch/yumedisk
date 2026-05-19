@@ -110,3 +110,54 @@ pub fn sync_pending_events(
 
     changed
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use backend_rust::BackendContext;
+
+    use super::sync_pending_events;
+    use crate::network::NETWORK_SESSION_MISSING_REASON;
+    use crate::state::disk_runtime::DiskRuntime;
+    use crate::state::disk_runtime::DiskRuntimeStatus;
+    use crate::state::disk_runtime::DiskRuntimeStore;
+    use crate::state::network_client::NetworkClientState;
+
+    #[test]
+    fn media_invalidation_marks_unmounted_runtime_invalid() {
+        let backend = BackendContext::default();
+        let network_client = NetworkClientState::default();
+        let invalidate = network_client.media_invalidation_handler("disk-1");
+        let network_client_mutex = Mutex::new(network_client);
+
+        let mut runtime_store = DiskRuntimeStore::default();
+        let mut runtime = DiskRuntime::new_network(
+            "disk-1".to_string(),
+            "network-disk".to_string(),
+            false,
+            "127.0.0.1:9002".to_string(),
+            "A1b2C3d4E5f6G7h8".to_string(),
+            "claim-1".to_string(),
+            4096,
+            false,
+        );
+        runtime.set_network_unmounted(4096, false);
+        runtime_store.insert_runtime(runtime);
+
+        invalidate();
+
+        let changed = sync_pending_events(&backend, &mut runtime_store, &network_client_mutex);
+        assert!(changed);
+
+        let runtime = runtime_store
+            .find_runtime("disk-1")
+            .expect("runtime should exist");
+        assert_eq!(
+            runtime.status(),
+            &DiskRuntimeStatus::Invalid {
+                reason: NETWORK_SESSION_MISSING_REASON.to_string(),
+            }
+        );
+    }
+}
