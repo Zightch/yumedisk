@@ -26,6 +26,12 @@
   --success: #52d98d;
   --warning: #ffb454;
   --danger: #ff6b6b;
+  --disk-type-memory: #f7b267;
+  --disk-type-memory-soft: rgba(247, 178, 103, 0.15);
+  --disk-type-file: #80b7ff;
+  --disk-type-file-soft: rgba(128, 183, 255, 0.15);
+  --disk-type-network: #a1c48c;
+  --disk-type-network-soft: rgba(161, 196, 140, 0.15);
   --accent: #c34458;
   --accent-strong: #d45a6d;
   --accent-text: #d45a6d;

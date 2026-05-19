@@ -177,7 +177,6 @@ const claimCodeModel = computed({
 }
 
 .network-dialog__utility-button.el-button {
-  height: 36px;
   padding: 0 14px;
   border-radius: 8px;
   font-size: 12px;
@@ -198,7 +197,6 @@ const claimCodeModel = computed({
 }
 
 .network-dialog__test-button {
-  min-width: 92px;
   justify-self: end;
 }
 

@@ -81,15 +81,15 @@
 }
 
 .disk-card__avatar--memory {
-  color: #f7b267;
+  color: var(--disk-type-memory);
 }
 
 .disk-card__avatar--file {
-  color: #80b7ff;
+  color: var(--disk-type-file);
 }
 
 .disk-card__avatar--network {
-  color: #7dd3fc;
+  color: var(--disk-type-network);
 }
 
 .disk-card__main {

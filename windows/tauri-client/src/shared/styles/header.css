@@ -236,18 +236,18 @@
 }
 
 .app-header__add-option-icon--memory {
-  background: rgba(247, 178, 103, 0.15);
-  color: #f7b267;
+  background: var(--disk-type-memory-soft);
+  color: var(--disk-type-memory);
 }
 
 .app-header__add-option-icon--file {
-  background: rgba(128, 183, 255, 0.15);
-  color: #80b7ff;
+  background: var(--disk-type-file-soft);
+  color: var(--disk-type-file);
 }
 
 .app-header__add-option-icon--network {
-  background: rgba(161, 196, 140, 0.15);
-  color: #a1c48c;
+  background: var(--disk-type-network-soft);
+  color: var(--disk-type-network);
 }
 
 .app-header__add-option-title {
