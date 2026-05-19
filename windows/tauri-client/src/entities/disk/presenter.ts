@@ -7,6 +7,10 @@ export function formatDiskKindText(disk: HomeDiskListItem): string {
     return `内存盘 · ${disk.media.memoryKind === "denseMem" ? "稠密" : "稀疏"}`;
   }
 
+  if (disk.media.kind === "network") {
+    return `网络盘 · ${formatDiskCapacityText(disk)}`;
+  }
+
   return "文件盘 · RAW";
 }
 
@@ -19,11 +23,15 @@ export function formatDiskSummaryText(disk: HomeDiskListItem): string {
 }
 
 export function formatDiskDetailText(disk: HomeDiskListItem): string | null {
-  if (disk.media.kind !== "file") {
-    return null;
+  if (disk.media.kind === "file") {
+    return disk.media.filePath;
   }
 
-  return disk.media.filePath;
+  if (disk.media.kind === "network") {
+    return `${disk.media.serverAddr} · ${disk.media.remoteDiskId}`;
+  }
+
+  return null;
 }
 
 function formatBytes(value: number): string {

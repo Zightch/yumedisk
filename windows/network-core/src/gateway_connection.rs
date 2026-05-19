@@ -290,7 +290,7 @@ impl GatewayConnection {
             .is_some()
     }
 
-    pub(crate) fn discard_auth_grant(&self, auth_id: u64) -> bool {
+    pub fn discard_auth_grant(&self, auth_id: u64) -> bool {
         self.consume_auth_grant(auth_id)
     }
 

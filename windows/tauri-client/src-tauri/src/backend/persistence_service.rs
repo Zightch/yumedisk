@@ -143,6 +143,22 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
                 )),
             }
         }
+        PersistedDiskMediaConfig::Network {
+            server_addr,
+            remote_disk_id,
+            auth_material,
+            capacity_bytes,
+            read_only,
+        } => Ok(DiskRuntime::new_network(
+            persisted_disk.local_disk_id,
+            persisted_disk.disk_name,
+            persisted_disk.auto_mount,
+            server_addr,
+            remote_disk_id,
+            auth_material,
+            capacity_bytes,
+            read_only,
+        )),
     }
 }
 
@@ -180,6 +196,19 @@ fn map_persisted_disk_record(
                     FileMediaKind::RawFile => PersistedFileMediaKind::RawFile,
                 },
                 file_path,
+            },
+            crate::state::disk_runtime::DiskMediaConfig::Network {
+                server_addr,
+                remote_disk_id,
+                auth_material,
+                capacity_bytes,
+                read_only,
+            } => PersistedDiskMediaConfig::Network {
+                server_addr,
+                remote_disk_id,
+                auth_material,
+                capacity_bytes,
+                read_only,
             },
         },
     }

@@ -133,7 +133,13 @@ pub fn run() {
             commands::disk::delete_disk,
             commands::disk::undo_delete_disk,
             commands::disk::commit_deleted_disk,
-            commands::disk::update_disk
+            commands::disk::update_disk,
+            commands::network_disk::test_network_connection,
+            commands::network_disk::create_network_draft,
+            commands::network_disk::add_network_draft_item,
+            commands::network_disk::remove_network_draft_item,
+            commands::network_disk::submit_network_draft,
+            commands::network_disk::dispose_network_draft
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

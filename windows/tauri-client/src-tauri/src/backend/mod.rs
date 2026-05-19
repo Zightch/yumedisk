@@ -3,5 +3,7 @@ pub mod app_session_service;
 pub mod config_service;
 pub mod disk_service;
 pub mod memory_media;
+pub mod network_media;
+pub mod network_service;
 pub mod persistence_service;
 pub mod raw_file_media;

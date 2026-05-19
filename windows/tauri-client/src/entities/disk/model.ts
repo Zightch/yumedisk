@@ -15,6 +15,13 @@ export type HomeDiskMedia =
       fileKind: FileMediaKind;
       filePath: string;
       capacityBytes: number;
+    }
+  | {
+      kind: "network";
+      serverAddr: string;
+      remoteDiskId: string;
+      capacityBytes: number;
+      readOnly: boolean;
     };
 
 export interface HomeDiskListItem {
@@ -105,4 +112,45 @@ export interface UpdateDiskRequest {
 
 export interface PickRawFilePathResponse {
   filePath: string | null;
+}
+
+export interface TestNetworkConnectionRequest {
+  serverAddr: string;
+}
+
+export interface CreateNetworkDraftRequest {
+  serverAddr: string;
+}
+
+export interface NetworkDraftItem {
+  diskName: string;
+  serverAddr: string;
+  remoteDiskId: string;
+  capacityBytes: number;
+  readOnly: boolean;
+}
+
+export interface NetworkDraftSnapshot {
+  draftId: string;
+  serverAddr: string;
+  items: NetworkDraftItem[];
+}
+
+export interface AddNetworkDraftItemRequest {
+  draftId: string;
+  diskName: string;
+  claimCode: string;
+}
+
+export interface RemoveNetworkDraftItemRequest {
+  draftId: string;
+  remoteDiskId: string;
+}
+
+export interface SubmitNetworkDraftRequest {
+  draftId: string;
+}
+
+export interface DisposeNetworkDraftRequest {
+  draftId: string;
 }

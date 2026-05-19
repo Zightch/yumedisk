@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
+use std::sync::Mutex;
 
 use backend_rust::BackendContext;
 use backend_rust::DiskConfig;
@@ -12,6 +13,7 @@ use crate::api_error::ApiError;
 use crate::backend::memory_media::DenseMemoryMedia;
 use crate::backend::memory_media::DenseMemoryMediaError;
 use crate::backend::memory_media::SparseMemoryMedia;
+use crate::backend::network_service;
 use crate::backend::persistence_service;
 use crate::state::disk_runtime::DiskMediaConfig;
 use crate::state::disk_runtime::DiskRuntime;
@@ -21,6 +23,7 @@ use crate::state::disk_runtime::DiskRuntimeStore;
 use crate::state::disk_runtime::FileMediaKind;
 use crate::state::disk_runtime::MemoryMediaKind;
 use crate::state::disk_runtime::RemovedDiskRuntime;
+use crate::state::network_client::NetworkClientState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HomeDiskListItemSnapshot {
@@ -306,8 +309,28 @@ pub fn create_new_file_disk(
 pub fn mount_disk(
     backend: &BackendContext,
     runtime_store: &mut DiskRuntimeStore,
+    network_client_mutex: &Mutex<NetworkClientState>,
     local_disk_id: &str,
 ) -> Result<u32, ApiError> {
+    if runtime_store
+        .find_runtime(local_disk_id)
+        .ok_or_else(|| {
+            ApiError::new(
+                "disk-not-found",
+                "磁盘不存在",
+                Some(local_disk_id.to_string()),
+            )
+        })?
+        .is_network()
+    {
+        return network_service::mount_network_disk(
+            backend,
+            runtime_store,
+            network_client_mutex,
+            local_disk_id,
+        );
+    }
+
     let runtime = runtime_store
         .find_runtime_mut(local_disk_id)
         .ok_or_else(|| {
@@ -378,6 +401,20 @@ pub fn eject_disk(
     runtime_store: &mut DiskRuntimeStore,
     local_disk_id: &str,
 ) -> Result<(), ApiError> {
+    if runtime_store
+        .find_runtime(local_disk_id)
+        .ok_or_else(|| {
+            ApiError::new(
+                "disk-not-found",
+                "磁盘不存在",
+                Some(local_disk_id.to_string()),
+            )
+        })?
+        .is_network()
+    {
+        return network_service::eject_network_disk(backend, runtime_store, local_disk_id);
+    }
+
     let runtime = runtime_store
         .find_runtime_mut(local_disk_id)
         .ok_or_else(|| {
@@ -432,7 +469,16 @@ pub fn eject_disk(
 pub fn prepare_deleted_runtime(
     backend: &BackendContext,
     removed_runtime: &mut RemovedDiskRuntime,
+    _network_client_mutex: &Mutex<NetworkClientState>,
 ) -> Result<(), ApiError> {
+    if removed_runtime.runtime.is_network() {
+        return network_service::prepare_deleted_network_runtime(
+            backend,
+            removed_runtime,
+            _network_client_mutex,
+        );
+    }
+
     if let Some(target_id) = removed_runtime.runtime.mounted_target_id() {
         let mut error_text = String::new();
         let media = backend
@@ -500,9 +546,14 @@ pub fn update_disk(
 pub fn rescan_runtime_disks(
     backend: &BackendContext,
     runtime_store: &mut DiskRuntimeStore,
+    network_client_mutex: &Mutex<NetworkClientState>,
 ) -> HomeDiskListSnapshot {
     for runtime in runtime_store.runtimes_mut() {
         if runtime.is_memory() {
+            continue;
+        }
+
+        if runtime.is_network() {
             continue;
         }
 
@@ -531,6 +582,7 @@ pub fn rescan_runtime_disks(
         }
     }
 
+    network_service::rescan_network_runtimes(runtime_store, network_client_mutex);
     query_home_disk_list(backend, runtime_store)
 }
 

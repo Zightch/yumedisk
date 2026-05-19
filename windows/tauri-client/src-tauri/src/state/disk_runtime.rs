@@ -29,6 +29,13 @@ pub enum DiskMediaConfig {
         file_path: String,
         capacity_bytes: u64,
     },
+    Network {
+        server_addr: String,
+        remote_disk_id: String,
+        auth_material: String,
+        capacity_bytes: u64,
+        read_only: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,8 +105,18 @@ impl DiskRuntimeStore {
             .find(|runtime| runtime.local_disk_id() == local_disk_id)
     }
 
+    pub fn find_runtime(&self, local_disk_id: &str) -> Option<&DiskRuntime> {
+        self.runtimes
+            .iter()
+            .find(|runtime| runtime.local_disk_id() == local_disk_id)
+    }
+
     pub fn runtimes_mut(&mut self) -> std::slice::IterMut<'_, DiskRuntime> {
         self.runtimes.iter_mut()
+    }
+
+    pub fn runtimes(&self) -> std::slice::Iter<'_, DiskRuntime> {
+        self.runtimes.iter()
     }
 
     pub fn remove_runtime(&mut self, local_disk_id: &str) -> Option<RemovedDiskRuntime> {
@@ -177,6 +194,35 @@ impl DiskRuntime {
         }
     }
 
+    pub fn new_network(
+        local_disk_id: String,
+        disk_name: String,
+        auto_mount: bool,
+        server_addr: String,
+        remote_disk_id: String,
+        auth_material: String,
+        capacity_bytes: u64,
+        read_only: bool,
+    ) -> Self {
+        Self {
+            local_disk_id,
+            disk_name,
+            auto_mount,
+            read_only,
+            state: DiskRuntimeStatus::Invalid {
+                reason: "网络盘会话未打开".to_string(),
+            },
+            media_config: DiskMediaConfig::Network {
+                server_addr,
+                remote_disk_id,
+                auth_material,
+                capacity_bytes,
+                read_only,
+            },
+            media: None,
+        }
+    }
+
     pub fn local_disk_id(&self) -> &str {
         &self.local_disk_id
     }
@@ -202,6 +248,7 @@ impl DiskRuntime {
         match &self.media_config {
             DiskMediaConfig::Memory { capacity_bytes, .. } => *capacity_bytes,
             DiskMediaConfig::File { capacity_bytes, .. } => *capacity_bytes,
+            DiskMediaConfig::Network { capacity_bytes, .. } => *capacity_bytes,
         }
     }
 
@@ -227,10 +274,36 @@ impl DiskRuntime {
         matches!(self.media_config, DiskMediaConfig::Memory { .. })
     }
 
+    pub fn is_network(&self) -> bool {
+        matches!(self.media_config, DiskMediaConfig::Network { .. })
+    }
+
     pub fn file_path(&self) -> Option<&str> {
         match &self.media_config {
             DiskMediaConfig::Memory { .. } => None,
             DiskMediaConfig::File { file_path, .. } => Some(file_path.as_str()),
+            DiskMediaConfig::Network { .. } => None,
+        }
+    }
+
+    pub fn server_addr(&self) -> Option<&str> {
+        match &self.media_config {
+            DiskMediaConfig::Network { server_addr, .. } => Some(server_addr.as_str()),
+            DiskMediaConfig::Memory { .. } | DiskMediaConfig::File { .. } => None,
+        }
+    }
+
+    pub fn remote_disk_id(&self) -> Option<&str> {
+        match &self.media_config {
+            DiskMediaConfig::Network { remote_disk_id, .. } => Some(remote_disk_id.as_str()),
+            DiskMediaConfig::Memory { .. } | DiskMediaConfig::File { .. } => None,
+        }
+    }
+
+    pub fn auth_material(&self) -> Option<&str> {
+        match &self.media_config {
+            DiskMediaConfig::Network { auth_material, .. } => Some(auth_material.as_str()),
+            DiskMediaConfig::Memory { .. } | DiskMediaConfig::File { .. } => None,
         }
     }
 
@@ -277,6 +350,36 @@ impl DiskRuntime {
         self.read_only = false;
         self.state = DiskRuntimeStatus::Invalid { reason };
         self.media = None;
+    }
+
+    pub fn set_network_unmounted(&mut self, capacity_bytes: u64, read_only: bool) {
+        if let DiskMediaConfig::Network {
+            capacity_bytes: current_capacity_bytes,
+            read_only: current_read_only,
+            ..
+        } = &mut self.media_config
+        {
+            *current_capacity_bytes = capacity_bytes;
+            *current_read_only = read_only;
+        }
+        self.read_only = read_only;
+        self.state = DiskRuntimeStatus::Unmounted;
+    }
+
+    pub fn set_network_invalid(&mut self, reason: String) {
+        self.state = DiskRuntimeStatus::Invalid { reason };
+        self.media = None;
+    }
+
+    pub fn network_key(&self) -> Option<(String, String)> {
+        match &self.media_config {
+            DiskMediaConfig::Network {
+                server_addr,
+                remote_disk_id,
+                ..
+            } => Some((server_addr.clone(), remote_disk_id.clone())),
+            DiskMediaConfig::Memory { .. } | DiskMediaConfig::File { .. } => None,
+        }
     }
 
     pub fn snapshot(&self) -> DiskRuntimeSnapshot {

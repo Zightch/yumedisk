@@ -41,6 +41,18 @@ pub enum PersistedDiskMediaConfig {
         #[serde(rename = "filePath")]
         file_path: String,
     },
+    Network {
+        #[serde(rename = "serverAddr")]
+        server_addr: String,
+        #[serde(rename = "remoteDiskId")]
+        remote_disk_id: String,
+        #[serde(rename = "authMaterial")]
+        auth_material: String,
+        #[serde(rename = "capacityBytes")]
+        capacity_bytes: u64,
+        #[serde(rename = "readOnly")]
+        read_only: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

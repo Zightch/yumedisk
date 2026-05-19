@@ -4,8 +4,10 @@ use tauri::State;
 
 use crate::api_error::ApiError;
 use crate::backend::disk_service;
+use crate::backend::network_service;
 use crate::backend::persistence_service;
 use crate::state::client_state::ClientState;
+use crate::state::disk_catalog::DiskCatalogState;
 use crate::state::disk_catalog::PendingDiskDeletion;
 use crate::state::disk_runtime::DiskMediaConfig;
 use crate::state::disk_runtime::DiskRuntimeStatus;
@@ -184,6 +186,16 @@ pub enum HomeDiskMediaDto {
         #[serde(rename = "capacityBytes")]
         capacity_bytes: u64,
     },
+    Network {
+        #[serde(rename = "serverAddr")]
+        server_addr: String,
+        #[serde(rename = "remoteDiskId")]
+        remote_disk_id: String,
+        #[serde(rename = "capacityBytes")]
+        capacity_bytes: u64,
+        #[serde(rename = "readOnly")]
+        read_only: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -243,6 +255,18 @@ fn map_home_disk_media_dto(media: DiskMediaConfig) -> HomeDiskMediaDto {
             },
             file_path,
             capacity_bytes,
+        },
+        DiskMediaConfig::Network {
+            server_addr,
+            remote_disk_id,
+            capacity_bytes,
+            read_only,
+            ..
+        } => HomeDiskMediaDto::Network {
+            server_addr,
+            remote_disk_id,
+            capacity_bytes,
+            read_only,
         },
     }
 }
@@ -305,6 +329,14 @@ fn build_home_disk_list_response(
     }
 }
 
+fn sync_network_runtime_state(state: &ClientState, disk_catalog: &mut DiskCatalogState) {
+    network_service::sync_pending_events(
+        &state.backend,
+        disk_catalog.runtime_store_mut(),
+        &state.network_client,
+    );
+}
+
 #[tauri::command]
 pub fn query_managed_disks(state: State<'_, ClientState>) -> QueryManagedDisksResponse {
     let disks = disk_service::query_managed_disks(&state.backend)
@@ -318,10 +350,11 @@ pub fn query_managed_disks(state: State<'_, ClientState>) -> QueryManagedDisksRe
 #[tauri::command]
 pub fn query_home_disk_list(state: State<'_, ClientState>) -> QueryHomeDiskListResponse {
     let snapshot = {
-        let disk_catalog = state
+        let mut disk_catalog = state
             .disk_catalog
             .lock()
             .expect("disk catalog mutex should not be poisoned");
+        sync_network_runtime_state(&state, &mut disk_catalog);
 
         disk_service::query_home_disk_list(&state.backend, disk_catalog.runtime_store())
     };
@@ -338,9 +371,13 @@ pub fn rescan_runtime_disks(
             .disk_catalog
             .lock()
             .expect("disk catalog mutex should not be poisoned");
+        sync_network_runtime_state(&state, &mut disk_catalog);
 
-        let snapshot =
-            disk_service::rescan_runtime_disks(&state.backend, disk_catalog.runtime_store_mut());
+        let snapshot = disk_service::rescan_runtime_disks(
+            &state.backend,
+            disk_catalog.runtime_store_mut(),
+            &state.network_client,
+        );
         persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())?;
         snapshot
     };
@@ -470,10 +507,12 @@ pub fn mount_disk(
             .disk_catalog
             .lock()
             .expect("disk catalog mutex should not be poisoned");
+        sync_network_runtime_state(&state, &mut disk_catalog);
 
         disk_service::mount_disk(
             &state.backend,
             disk_catalog.runtime_store_mut(),
+            &state.network_client,
             &request.local_disk_id,
         )?
     };
@@ -490,6 +529,7 @@ pub fn eject_disk(
         .disk_catalog
         .lock()
         .expect("disk catalog mutex should not be poisoned");
+    sync_network_runtime_state(&state, &mut disk_catalog);
 
     disk_service::eject_disk(
         &state.backend,
@@ -507,6 +547,7 @@ pub fn delete_disk(
         .disk_catalog
         .lock()
         .expect("disk catalog mutex should not be poisoned");
+    sync_network_runtime_state(&state, &mut disk_catalog);
 
     let Some(mut removed_runtime) = disk_catalog.remove_runtime(&request.local_disk_id) else {
         return Err(ApiError::new(
@@ -516,8 +557,11 @@ pub fn delete_disk(
         ));
     };
 
-    if let Err(error) = disk_service::prepare_deleted_runtime(&state.backend, &mut removed_runtime)
-    {
+    if let Err(error) = disk_service::prepare_deleted_runtime(
+        &state.backend,
+        &mut removed_runtime,
+        &state.network_client,
+    ) {
         disk_catalog.restore_removed_runtime(removed_runtime);
         return Err(error);
     }

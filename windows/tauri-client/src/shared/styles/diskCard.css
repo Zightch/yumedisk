@@ -88,6 +88,10 @@
   color: #80b7ff;
 }
 
+.disk-card__avatar--network {
+  color: #7dd3fc;
+}
+
 .disk-card__main {
   min-width: 0;
   min-height: 54px;

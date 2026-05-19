@@ -23,9 +23,23 @@ const detailText = computed(() => formatDiskDetailText(props.disk));
 const summaryText = computed(() => formatDiskSummaryText(props.disk));
 const isMounted = computed(() => props.disk.status === "mounted");
 const isInvalid = computed(() => props.disk.status === "invalid");
-const avatarText = computed(() => (props.disk.media.kind === "memory" ? "M" : "F"));
+const avatarText = computed(() => {
+  if (props.disk.media.kind === "memory") {
+    return "M";
+  }
+
+  if (props.disk.media.kind === "network") {
+    return "N";
+  }
+
+  return "F";
+});
 const avatarClassName = computed(() =>
-  props.disk.media.kind === "memory" ? "disk-card__avatar--memory" : "disk-card__avatar--file",
+  props.disk.media.kind === "memory"
+    ? "disk-card__avatar--memory"
+    : props.disk.media.kind === "network"
+      ? "disk-card__avatar--network"
+      : "disk-card__avatar--file",
 );
 
 const statusText = computed(() => {
