@@ -117,14 +117,14 @@ const claimCodeModel = computed({
 }
 
 .network-dialog__server-label {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
 .network-dialog__server-label-text {
-  min-width: 0;
+  flex: 0 0 auto;
 }
 
 .network-dialog__server-row {
@@ -142,9 +142,10 @@ const claimCodeModel = computed({
 .network-dialog__status-badge {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  width: fit-content;
   min-width: 0;
-  max-width: 180px;
+  max-width: 100%;
   padding: 6px 12px;
   border-radius: 999px;
   font-size: 12px;
@@ -152,6 +153,7 @@ const claimCodeModel = computed({
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: left;
 }
 
 .network-dialog__status-badge--idle {
@@ -171,7 +173,6 @@ const claimCodeModel = computed({
 
 .network-dialog__status-badge--compact {
   padding: 3px 8px;
-  max-width: 140px;
   font-size: 11px;
   line-height: 1.2;
 }
