@@ -112,6 +112,7 @@ transport 单帧 payload 上限为 `65536` 字节。
 
 - client-gateway connection 死亡时，该 connection 下 session 全部失效
 - route 死亡时，该 route 下 session 全部失效
+- session 不定义独立 TTL；它只在显式 `Close`、connection 死亡或 route 死亡时收束
 - `SessionCloseNotice` 到达时，目标 session 已经失效
 
 ## SessionCloseNotice Reason

@@ -40,12 +40,6 @@ func (m *Manager) Get(id uint64) (Record, bool) {
 	return record, ok
 }
 
-func (m *Manager) Update(record Record) {
-	m.mu.Lock()
-	m.items[record.ID] = record
-	m.mu.Unlock()
-}
-
 func (m *Manager) Close(id uint64) {
 	m.mu.Lock()
 	delete(m.items, id)

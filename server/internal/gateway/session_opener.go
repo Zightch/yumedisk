@@ -101,13 +101,14 @@ func (o *sessionOpener) handleDescribe(state *ConnectionState, header proto.Head
 	return proto.BuildSuccessResponse(header, bodyOut), nil
 }
 
-func (o *sessionOpener) handleConnHeartbeat(header proto.Header, body []byte) ([]byte, error) {
+func (o *sessionOpener) handleConnHeartbeat(state *ConnectionState, header proto.Header, body []byte) ([]byte, error) {
 	if header.SessionID != 0 {
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
 	if len(body) != 0 {
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
+	state.markHeartbeat()
 	return proto.BuildSuccessResponse(header, nil), nil
 }
 

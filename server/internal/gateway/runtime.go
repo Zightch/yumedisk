@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"yumedisk/server/internal/bootstrap"
 	"yumedisk/server/internal/config"
 	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/transport"
@@ -30,7 +28,6 @@ type Runtime struct {
 
 type clientConnection struct {
 	conn  net.Conn
-	state *ConnectionState
 	write sync.Mutex
 }
 
@@ -154,47 +151,22 @@ func (r *Runtime) serveStorerListener(ctx context.Context, listener net.Listener
 }
 
 func (r *Runtime) serveClientConnection(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
-	if err := bootstrap.AcceptClient(conn); err != nil {
-		if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
-			log.Printf("gateway client bootstrap rejected from %s: %v", conn.RemoteAddr(), err)
-		}
-		return
-	}
-
 	connectionID := r.nextConn.Add(1)
-	state := r.clientHandler.NewConnectionState(connectionID)
-
-	r.clientConnMu.Lock()
-	r.clientConns[state.ID] = &clientConnection{
-		conn:  conn,
-		state: state,
-	}
-	r.clientConnMu.Unlock()
-	defer r.clientHandler.CloseConnection(state.ID)
-	defer func() {
-		r.clientConnMu.Lock()
-		delete(r.clientConns, state.ID)
-		r.clientConnMu.Unlock()
-	}()
-
-	log.Printf("gateway client connection %d accepted from %s", state.ID, conn.RemoteAddr())
-
-	runtime := transport.NewRuntime(conn, r.clientHandler.Bind(state))
-	done := make(chan error, 1)
-	go func() {
-		done <- runtime.Run()
-	}()
-
-	select {
-	case <-ctx.Done():
-		_ = runtime.Close()
-		<-done
-	case err := <-done:
-		if err != nil && !errors.Is(err, net.ErrClosed) {
-			log.Printf("gateway client connection %d runtime: %v", state.ID, err)
-		}
-	}
+	ServeAcceptedClientConnection(ctx, conn, r.clientHandler, connectionID, ClientConnectionHooks{
+		LogPrefix: "gateway client",
+		OnConnected: func(conn net.Conn, state *ConnectionState) {
+			r.clientConnMu.Lock()
+			r.clientConns[state.ID] = &clientConnection{
+				conn: conn,
+			}
+			r.clientConnMu.Unlock()
+		},
+		OnClosed: func(state *ConnectionState) {
+			r.clientConnMu.Lock()
+			delete(r.clientConns, state.ID)
+			r.clientConnMu.Unlock()
+		},
+	})
 }
 
 func (r *Runtime) serveStorerConnection(ctx context.Context, connectionID uint64, conn net.Conn) {

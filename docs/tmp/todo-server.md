@@ -63,6 +63,7 @@
 - heartbeat request 超时未收到 storer response 时，gateway 立即走 route 丢失清理路径。
 - `role = storer` 维护本地 watchdog。
 - storer 超时未收到 gateway heartbeat 时主动退出。
+- storer 不再维护 session TTL，session 只由显式 `Close`、route 失效或 connection 结束收束。
 - route 丢失路径统一撤销 grant、关闭 session、发送 `SessionCloseNotice`。
 
 验收标准：

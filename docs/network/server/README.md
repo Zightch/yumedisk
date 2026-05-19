@@ -247,6 +247,7 @@ gateway 当前实现策略为：
 - `client -> gateway : ConnHeartbeat`
 
 gateway 返回普通 response，不再派生其他 client 心跳分支。
+当前实现还会在 `ConnHeartbeat` 超时后主动断开 client 连接，并按 connection 级清理其名下已打开 session，向各自所属 storer 发 `Close`。
 
 ### gateway-storer
 
@@ -273,6 +274,13 @@ gateway 返回普通 response，不再派生其他 client 心跳分支。
 4. 对仍在线的 client 发送 `SessionCloseNotice`
 5. 清理本地映射
 
+当前 gateway 在 client 连接失效后的清理口径为：
+
+1. 断开该 client 连接
+2. 收束该 connection 名下活跃 session
+3. 对这些 session 所属 route/storer 发 `Close`
+4. 清理本地映射
+
 当前 storer 在 connection 结束后的口径为：
 
 - 关闭该 connection 名下本地 session
@@ -286,5 +294,6 @@ gateway 返回普通 response，不再派生其他 client 心跳分支。
 因此：
 
 - client 不需要知道对端是独立 gateway 还是 `whole`
+- `whole` 对 client 的心跳超时与连接失效，按 gateway 的 client-connection 语义收束，只关闭该条连接和其名下 session，不结束整个进程
 - `whole` 内部本地盘失效时，也必须映射成标准 session / connection 失效结果
 - 对 client 的故障表达仍通过已有状态码与 `SessionCloseNotice` 完成

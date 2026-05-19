@@ -20,9 +20,10 @@ type Handler struct {
 type ConnectionState struct {
 	ID uint64
 
-	mu           sync.RWMutex
-	authInFlight bool
-	openInFlight bool
+	mu                sync.RWMutex
+	authInFlight      bool
+	openInFlight      bool
+	heartbeatWatchdog *clientHeartbeatWatchdog
 }
 
 type ConnectionHandler struct {
@@ -81,7 +82,7 @@ func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte,
 	case proto.OpSessionDescribe:
 		return h.sessionOpener.handleDescribe(state, header, body)
 	case proto.OpConnHeartbeat:
-		return h.sessionOpener.handleConnHeartbeat(header, body)
+		return h.sessionOpener.handleConnHeartbeat(state, header, body)
 	case proto.OpClose:
 		return h.sessionOpener.handleClose(state, header, body)
 	case proto.OpReadAt:
@@ -198,6 +199,21 @@ func (s *ConnectionState) pendingAuth() bool {
 	pending := s.authInFlight
 	s.mu.RUnlock()
 	return pending
+}
+
+func (s *ConnectionState) setHeartbeatWatchdog(watchdog *clientHeartbeatWatchdog) {
+	s.mu.Lock()
+	s.heartbeatWatchdog = watchdog
+	s.mu.Unlock()
+}
+
+func (s *ConnectionState) markHeartbeat() {
+	s.mu.RLock()
+	watchdog := s.heartbeatWatchdog
+	s.mu.RUnlock()
+	if watchdog != nil {
+		watchdog.Mark()
+	}
 }
 
 var (

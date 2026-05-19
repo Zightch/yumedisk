@@ -142,6 +142,7 @@ storer ----主动连接----> gateway
 - route transport 断开时，该 route 下 session 全部失效
 - `LinkHeartbeat` 失败时，该 route 可以被判定为失效
 - route 失效后，gateway 不能再把新的 `SessionOpen / ReadAt / WriteAt / Close` 发到该 route
+- `storer` 不对 session 维护独立 TTL；session 生命周期由显式 `Close`、route 失效和 connection 断开收束
 
 至于：
 

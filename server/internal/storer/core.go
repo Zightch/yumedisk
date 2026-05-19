@@ -2,7 +2,6 @@ package storer
 
 import (
 	"fmt"
-	"time"
 
 	"yumedisk/server/internal/auth"
 	"yumedisk/server/internal/config"
@@ -12,7 +11,6 @@ import (
 )
 
 const (
-	defaultSessionTTL   = 30 * time.Second
 	defaultSessionMaxIO = 60 * 1024
 )
 
@@ -47,7 +45,7 @@ func NewCore(cfg config.StorerConfig) (*Core, error) {
 		material: material,
 		storage:  storage,
 		metadata: metadata,
-		sessions: session.NewService(session.NewManager(), storage, metadata, defaultSessionTTL),
+		sessions: session.NewService(session.NewManager(), storage, metadata),
 	}, nil
 }
 

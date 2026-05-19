@@ -256,6 +256,8 @@
 
 它只表示 connection 级保活，不表示某个 session 保活。
 
+若实现把 `ConnHeartbeat` 超时判定为 connection 死亡，这属于允许实现策略。
+
 ## SessionCloseNotice
 
 ### notice body

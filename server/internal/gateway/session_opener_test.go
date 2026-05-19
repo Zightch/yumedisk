@@ -242,7 +242,7 @@ func newSessionTestHandlerWithRaw(t *testing.T, readOnly bool) (*Handler, *Conne
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
 		MaxIOBytes:    60 * 1024,
-	}, 30*time.Second)
+	})
 	backend := newTestGatewayBackend(material, sessions, storage.Size(), storage.ReadOnly())
 	handler, err := NewHandler(backend, backend)
 	if err != nil {
