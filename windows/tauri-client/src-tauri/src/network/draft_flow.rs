@@ -19,7 +19,6 @@ use crate::state::network_client::OpenedNetworkDiskSession;
 use super::cleanup;
 use super::gateway_ops;
 use super::lock_network_client;
-use super::runtime_flow;
 use super::uniqueness;
 use super::validation;
 
@@ -238,7 +237,6 @@ pub fn submit_network_draft(
         }
     }
 
-    runtime_flow::rescan_network_runtimes(runtime_store, network_client_mutex);
     Ok(())
 }
 
@@ -336,7 +334,6 @@ mod tests {
     use network_core::transport::TransportEndpoint;
 
     use super::dispose_network_draft;
-    use super::submit_network_draft;
     use super::DisposeNetworkDraftRequest;
     use super::SubmitNetworkDraftRequest;
     use crate::state::client_config;
@@ -347,6 +344,7 @@ mod tests {
     use crate::state::network_client::NetworkCreateDraft;
     use crate::state::network_client::NetworkDiskKey;
     use crate::state::network_client::NetworkDraftItem;
+    use crate::workflow::network_draft as network_draft_workflow;
 
     static TEST_HOME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -502,7 +500,7 @@ mod tests {
             network_client.insert_draft(draft);
             let network_client_mutex = Mutex::new(network_client);
 
-            submit_network_draft(
+            network_draft_workflow::submit_network_draft(
                 &backend,
                 &mut runtime_store,
                 &network_client_mutex,
@@ -557,7 +555,7 @@ mod tests {
         network_client.insert_draft(draft);
         let network_client_mutex = Mutex::new(network_client);
 
-        let error = submit_network_draft(
+        let error = network_draft_workflow::submit_network_draft(
             &backend,
             &mut runtime_store,
             &network_client_mutex,

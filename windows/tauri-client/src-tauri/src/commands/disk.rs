@@ -5,14 +5,14 @@ use tauri::State;
 use crate::api_error::ApiError;
 use crate::backend::disk_service;
 use crate::backend::persistence_service;
-use crate::network::event_reconciler;
 use crate::state::client_state::ClientState;
-use crate::state::disk_catalog::DiskCatalogState;
 use crate::state::disk_catalog::PendingDiskDeletion;
 use crate::state::disk_runtime::DiskMediaConfig;
 use crate::state::disk_runtime::DiskRuntimeStatus;
 use crate::state::disk_runtime::FileMediaKind;
 use crate::state::disk_runtime::MemoryMediaKind;
+use crate::workflow::network_runtime;
+use crate::workflow::runtime_disk;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -329,14 +329,6 @@ fn build_home_disk_list_response(
     }
 }
 
-fn sync_network_runtime_state(state: &ClientState, disk_catalog: &mut DiskCatalogState) {
-    event_reconciler::sync_pending_events(
-        &state.backend,
-        disk_catalog.runtime_store_mut(),
-        &state.network_client,
-    );
-}
-
 #[tauri::command]
 pub fn query_managed_disks(state: State<'_, ClientState>) -> QueryManagedDisksResponse {
     let disks = disk_service::query_managed_disks(&state.backend)
@@ -354,9 +346,11 @@ pub fn query_home_disk_list(state: State<'_, ClientState>) -> QueryHomeDiskListR
             .disk_catalog
             .lock()
             .expect("disk catalog mutex should not be poisoned");
-        sync_network_runtime_state(&state, &mut disk_catalog);
-
-        disk_service::query_home_disk_list(&state.backend, disk_catalog.runtime_store())
+        runtime_disk::query_home_disk_list(
+            &state.backend,
+            disk_catalog.runtime_store_mut(),
+            &state.network_client,
+        )
     };
 
     build_home_disk_list_response(snapshot)
@@ -371,9 +365,7 @@ pub fn rescan_runtime_disks(
             .disk_catalog
             .lock()
             .expect("disk catalog mutex should not be poisoned");
-        sync_network_runtime_state(&state, &mut disk_catalog);
-
-        let snapshot = disk_service::rescan_runtime_disks(
+        let snapshot = runtime_disk::rescan_runtime_disks(
             &state.backend,
             disk_catalog.runtime_store_mut(),
             &state.network_client,
@@ -507,9 +499,7 @@ pub fn mount_disk(
             .disk_catalog
             .lock()
             .expect("disk catalog mutex should not be poisoned");
-        sync_network_runtime_state(&state, &mut disk_catalog);
-
-        disk_service::mount_disk(
+        runtime_disk::mount_disk(
             &state.backend,
             disk_catalog.runtime_store_mut(),
             &state.network_client,
@@ -529,11 +519,10 @@ pub fn eject_disk(
         .disk_catalog
         .lock()
         .expect("disk catalog mutex should not be poisoned");
-    sync_network_runtime_state(&state, &mut disk_catalog);
-
-    disk_service::eject_disk(
+    runtime_disk::eject_disk(
         &state.backend,
         disk_catalog.runtime_store_mut(),
+        &state.network_client,
         &request.local_disk_id,
     )
 }
@@ -547,7 +536,11 @@ pub fn delete_disk(
         .disk_catalog
         .lock()
         .expect("disk catalog mutex should not be poisoned");
-    sync_network_runtime_state(&state, &mut disk_catalog);
+    network_runtime::sync_runtime_state(
+        &state.backend,
+        disk_catalog.runtime_store_mut(),
+        &state.network_client,
+    );
 
     let Some(mut removed_runtime) = disk_catalog.remove_runtime(&request.local_disk_id) else {
         return Err(ApiError::new(
@@ -557,7 +550,7 @@ pub fn delete_disk(
         ));
     };
 
-    if let Err(error) = disk_service::prepare_deleted_runtime(
+    if let Err(error) = runtime_disk::prepare_deleted_runtime(
         &state.backend,
         &mut removed_runtime,
         &state.network_client,

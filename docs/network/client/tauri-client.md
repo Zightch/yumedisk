@@ -123,16 +123,23 @@ DiskRuntime
   - `event_reconciler.rs`
     - drain 事件并把 `NetworkClientState`、`DiskRuntimeStore`、`BackendRust` 收束一致
   - `draft_flow.rs`
-    - 创建网络盘对话框的 draft 生命周期
+    - draft 真状态写入、提交接管、dispose cleanup
   - `runtime_flow.rs`
-    - mount / eject / delete / rescan 的正式 runtime 生命周期
+    - network runtime 的挂载、拔出、删除、重扫最小编排
+- `src-tauri/src/workflow/`
+  - `network_runtime.rs`
+    - network event 收束唯一闸口
+  - `network_draft.rs`
+    - draft command 的上层编排与跨 flow 串接
+  - `runtime_disk.rs`
+    - local/network runtime 的统一分派入口
 - `src-tauri/src/commands/`
   - `network_disk.rs`
     - 网络盘 draft command 薄桥接
   - `disk.rs`
-    - 普通盘 command 与 network runtime flow 分派
+    - 磁盘 command 薄桥接
 - `src-tauri/src/lib.rs`
-  - 后台 watcher 定时调用 `event_reconciler`
+  - 后台 watcher 定时调用 `workflow/network_runtime`
 
 ## `DiskRuntime` 与 `NetworkMedia`
 

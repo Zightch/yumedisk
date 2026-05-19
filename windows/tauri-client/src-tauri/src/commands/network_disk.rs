@@ -4,8 +4,8 @@ use tauri::State;
 
 use crate::api_error::ApiError;
 use crate::network::draft_flow;
-use crate::network::event_reconciler;
 use crate::state::client_state::ClientState;
+use crate::workflow::network_draft;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,14 +115,9 @@ pub fn add_network_draft_item(
         .disk_catalog
         .lock()
         .expect("disk catalog mutex should not be poisoned");
-    event_reconciler::sync_pending_events(
+    network_draft::add_network_draft_item(
         &state.backend,
         disk_catalog.runtime_store_mut(),
-        &state.network_client,
-    );
-
-    draft_flow::add_network_draft_item(
-        disk_catalog.runtime_store(),
         &state.network_client,
         draft_flow::AddNetworkDraftItemRequest {
             draft_id: request.draft_id,
@@ -157,13 +152,7 @@ pub fn submit_network_draft(
         .disk_catalog
         .lock()
         .expect("disk catalog mutex should not be poisoned");
-    event_reconciler::sync_pending_events(
-        &state.backend,
-        disk_catalog.runtime_store_mut(),
-        &state.network_client,
-    );
-
-    draft_flow::submit_network_draft(
+    network_draft::submit_network_draft(
         &state.backend,
         disk_catalog.runtime_store_mut(),
         &state.network_client,
