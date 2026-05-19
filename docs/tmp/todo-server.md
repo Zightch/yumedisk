@@ -46,9 +46,11 @@
 
 - `gateway` 的 storer-facing 实现已收进 `server/internal/gateway/storer/`
 - `gateway` 的 client-facing 实现已收进 `server/internal/gateway/client/`
+- `gateway/client` 下的 connection 相关能力已继续下沉到 `server/internal/gateway/client/connection/`
 - `gateway/client` 下的 session 相关能力已继续下沉到 `server/internal/gateway/client/session/`
 - `gateway.Runtime` 已删掉 `StorerHandler`，不再直接操纵 storer register / heartbeat / round-trip 细节
 - storer listener 已从 `gateway/runtime.go` 手写 accept loop 抽离为独立壳
+- `gateway/storer` 的 SessionDataPlane 转发已从 `Registry` 抽成独立 `data_plane.go`
 - `role=storer` 的 gateway 主动连接链已收进 `server/internal/storer/gateway/`
 - `role=whole` 的本地固定路由适配也已收进 `server/internal/storer/gateway/`
 - `role=whole` 的 client-facing 入口已直接复用 `gateway/client` 收束后的公开入口，不再依赖旧平铺 `session_*` 文件
@@ -58,24 +60,26 @@
 当前 `gateway` 的 client-facing 已不再停留在平铺前缀阶段，而是明确分成：
 
 - `gateway/client/`
-  - client connection 生命周期、watchdog、协议闸口、auth grant
+  - 顶层协议闸口、auth grant、watchdog、公开入口别名
+- `gateway/client/connection/`
+  - client connection 生命周期
+  - accepted connection runtime
 - `gateway/client/session/`
   - session open/describe/read/write/close
   - gateway session registry
   - session close notice 协议口
 
-这一步直接落地了开发原则第 5 点中的目录化约束：稳定前缀不只在第一层目录收口，而是在 `gateway/client/` 之下继续按 `session/` 形成第二层稳定子组件。
+这一步直接落地了开发原则第 5 点中的目录化约束：稳定前缀不只在第一层目录收口，而是在 `gateway/client/` 之下继续按 `connection/`、`session/` 形成第二层稳定子组件。
 
-### 3.3 剩余问题一：gateway/storer.Registry 仍然偏厚
+### 3.3 剩余问题一：gateway/storer 的 disconnect 传播与连接 owner 仍可继续下沉
 
-当前 `server/internal/gateway/storer/Registry` 已经比旧版清楚很多，但它仍然同时承担：
+当前 `server/internal/gateway/storer/Registry` 已不再承接 SessionDataPlane 转发；这一层已经下沉到独立 `data_plane.go`。但 route-facing 侧仍然还保留：
 
 - route 真状态接入
 - 活跃 storer link 索引
-- SessionDataPlane 适配
 - route disconnect 后的 session close 传播
 
-这说明 route-facing 结构已经从“完全混在 runtime”进到“中层已出现”，但还没有完全拆到 `data_plane` 与 `disconnect_notifier` 级别。
+也就是说，route-facing 已经从“Registry 同时管 route + link + data plane”进一步收住，但 `disconnect_notifier` 与连接 owner 边界还可以继续明确。
 
 ### 3.4 剩余问题二：storer 顶层与 core 边界还能继续收
 
@@ -99,6 +103,20 @@
 当前 `whole_runtime.go` 已经复用新的本地 gateway 适配，并直接依赖 `gateway/client` 的公开入口。
 
 这本身没有行为问题，当前也不构成阻塞；但后续如果 `gateway/client/` 再继续下沉更多子组件，whole 侧仍要坚持只依赖收束后的入口，避免再次回到“知道太多下层细节”的状态。
+
+### 3.6 当前非阻塞项：仍存在少量可选前缀平铺
+
+本轮顺手检查后，当前还看得到的可选平铺主要是：
+
+- `gateway/client` 下的 `auth_*`
+- `storer/gateway` 下的 `link_*`
+
+当前判断：
+
+- `gateway/client/auth_*` 边界稳定，后续如继续深挖 client-facing，可考虑再收成 `auth/`
+- `storer/gateway/link_*` 目前文件数量不多，且协作关系集中，收益暂时低于 `gateway/storer` 与 `storer/core` 两块主问题
+
+因此这两组目前归类为“可选继续收口项”，不是当前最阻塞的结构问题。
 
 ## 4. 本轮重构目标
 
@@ -223,12 +241,14 @@ server/internal/
   gateway/
     runtime.go                       # 顶层 gateway runtime，只做装配、listener、分发
     client/
-      listener_runtime.go            # client listener 壳
-      connection_runtime.go          # accepted client connection 壳
-      heartbeat_watchdog.go          # client connection watchdog
       handler.go                     # client-facing 协议闸口
       authenticator.go               # 认证过程
       auth_grant_registry.go         # auth grant 真状态
+      heartbeat_watchdog.go          # client connection watchdog
+      listener_runtime.go            # client listener 壳
+      connection/
+        runtime.go                   # accepted client connection 壳
+        state.go                     # client connection 状态与阶段约束
       session/
         opener.go                    # open/describe/read/write/close
         registry.go                  # gateway session 真状态

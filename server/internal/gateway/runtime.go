@@ -37,7 +37,7 @@ const (
 
 func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
 	storerRoutes := storerruntime.NewRegistry()
-	clientHandler, err := gatewayclient.NewHandler(storerRoutes, storerRoutes)
+	clientHandler, err := gatewayclient.NewHandler(storerRoutes, storerRoutes.DataPlane())
 	if err != nil {
 		return nil, err
 	}

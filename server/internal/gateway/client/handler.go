@@ -43,10 +43,7 @@ func (h *Handler) NewConnectionState(id uint64) *ConnectionState {
 }
 
 func (h *Handler) Bind(state *ConnectionState) *ConnectionHandler {
-	return &ConnectionHandler{
-		parent: h,
-		state:  state,
-	}
+	return newConnectionHandler(h, state)
 }
 
 func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte, error) {
@@ -79,10 +76,6 @@ func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte,
 	default:
 		return proto.BuildErrorResponse(header, proto.StatusUnsupportedOp), nil
 	}
-}
-
-func (h *ConnectionHandler) HandlePayload(payload []byte) ([]byte, error) {
-	return h.parent.HandlePayload(h.state, payload)
 }
 
 func (h *Handler) CloseConnection(connectionID uint64) {

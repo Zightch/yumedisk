@@ -40,7 +40,7 @@ func TestConnHeartbeatMarksClientWatchdog(t *testing.T) {
 	}
 	state := handler.NewConnectionState(17)
 	watchdog := newClientHeartbeatWatchdog(time.Second)
-	state.setHeartbeatWatchdog(watchdog)
+	state.SetHeartbeatMarker(watchdog)
 
 	resp, err := handler.HandlePayload(state, buildRequest(proto.OpConnHeartbeat, 1, 0, nil))
 	if err != nil {

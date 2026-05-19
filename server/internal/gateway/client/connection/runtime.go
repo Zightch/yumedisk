@@ -1,4 +1,4 @@
-package client
+package connection
 
 import (
 	"context"
@@ -6,26 +6,51 @@ import (
 	"io"
 	"log"
 	"net"
-	"time"
 
 	"yumedisk/server/internal/bootstrap"
 	"yumedisk/server/internal/transport"
 )
 
-const clientHeartbeatTimeout = 15 * time.Second
-
-type ClientConnectionHooks struct {
-	LogPrefix   string
-	OnConnected func(conn net.Conn, state *ConnectionState)
-	OnClosed    func(state *ConnectionState)
+type Parent interface {
+	HandlePayload(state *State, payload []byte) ([]byte, error)
+	CloseConnection(connectionID uint64)
 }
 
-func ServeAcceptedClientConnection(
+type Watchdog interface {
+	HeartbeatMarker
+	Start(conn net.Conn) <-chan error
+	Stop()
+}
+
+type Handler struct {
+	parent Parent
+	state  *State
+}
+
+type Hooks struct {
+	LogPrefix       string
+	OnConnected     func(conn net.Conn, state *State)
+	OnClosed        func(state *State)
+	WatchdogFactory func() Watchdog
+}
+
+func NewHandler(parent Parent, state *State) *Handler {
+	return &Handler{
+		parent: parent,
+		state:  state,
+	}
+}
+
+func (h *Handler) HandlePayload(payload []byte) ([]byte, error) {
+	return h.parent.HandlePayload(h.state, payload)
+}
+
+func ServeAcceptedConnection(
 	ctx context.Context,
 	conn net.Conn,
-	handler *Handler,
+	handler Parent,
 	connectionID uint64,
-	hooks ClientConnectionHooks,
+	hooks Hooks,
 ) {
 	logPrefix := hooks.LogPrefix
 	if logPrefix == "" {
@@ -40,14 +65,21 @@ func ServeAcceptedClientConnection(
 		return
 	}
 
-	state := handler.NewConnectionState(connectionID)
-	watchdog := newClientHeartbeatWatchdog(clientHeartbeatTimeout)
-	state.setHeartbeatWatchdog(watchdog)
-	watchdog.Mark()
-
+	state := &State{ID: connectionID}
 	if hooks.OnConnected != nil {
 		hooks.OnConnected(conn, state)
 	}
+
+	var watchdog Watchdog
+	var watchdogErr <-chan error
+	if hooks.WatchdogFactory != nil {
+		watchdog = hooks.WatchdogFactory()
+		state.SetHeartbeatMarker(watchdog)
+		watchdog.Mark()
+		watchdogErr = watchdog.Start(conn)
+		defer watchdog.Stop()
+	}
+
 	defer handler.CloseConnection(state.ID)
 	if hooks.OnClosed != nil {
 		defer hooks.OnClosed(state)
@@ -55,10 +87,7 @@ func ServeAcceptedClientConnection(
 
 	log.Printf("%s connection %d accepted from %s", logPrefix, state.ID, conn.RemoteAddr())
 
-	runtime := transport.NewRuntime(conn, handler.Bind(state))
-	watchdogErr := watchdog.Start(conn)
-	defer watchdog.Stop()
-
+	runtime := transport.NewRuntime(conn, NewHandler(handler, state))
 	done := make(chan error, 1)
 	go func() {
 		done <- runtime.Run()

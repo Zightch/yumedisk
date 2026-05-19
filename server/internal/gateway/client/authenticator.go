@@ -51,13 +51,13 @@ func (a *authenticator) handleAuthStart(state *ConnectionState, header proto.Hea
 	if err != nil {
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
-	if err := state.beginAuth(); err != nil {
+	if err := state.BeginAuth(); err != nil {
 		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
 	}
 
 	challenge, token, err := a.tokenCodec.Issue(state.ID, diskID, a.challengeTTL)
 	if err != nil {
-		state.failAuth()
+		state.FailAuth()
 		return nil, err
 	}
 
@@ -73,19 +73,19 @@ func (a *authenticator) handleAuthFinish(state *ConnectionState, header proto.He
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
 
-	if !state.pendingAuth() {
+	if !state.PendingAuth() {
 		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
 	}
 
 	token, proof, err := proto.ParseAuthFinishRequestBody(body)
 	if err != nil {
-		state.failAuth()
+		state.FailAuth()
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
 
 	challenge, err := a.tokenCodec.Parse(state.ID, token)
 	if err != nil {
-		state.failAuth()
+		state.FailAuth()
 		if errors.Is(err, auth.ErrChallengeExpired) {
 			a.sleep(a.randomDelay())
 			return proto.BuildErrorResponse(header, proto.StatusAuthExpired), nil
@@ -96,21 +96,21 @@ func (a *authenticator) handleAuthFinish(state *ConnectionState, header proto.He
 
 	entry, ok := a.routes.LookupRoute(challenge.DiskID)
 	if !ok {
-		state.failAuth()
+		state.FailAuth()
 		a.sleep(a.randomDelay())
 		return proto.BuildErrorResponse(header, proto.StatusAuthFailed), nil
 	}
 
 	expected := auth.ComputeProof(entry.AuthVerifier, challenge.Salt[:])
 	if proof != expected {
-		state.failAuth()
+		state.FailAuth()
 		a.sleep(a.randomDelay())
 		return proto.BuildErrorResponse(header, proto.StatusAuthFailed), nil
 	}
 
 	authID := a.grants.Issue(state.ID, challenge.DiskID, time.Now().Add(a.challengeTTL))
-	if err := state.finishAuth(); err != nil {
-		state.failAuth()
+	if err := state.FinishAuth(); err != nil {
+		state.FailAuth()
 		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
 	}
 	return proto.BuildSuccessResponse(header, proto.BuildAuthFinishResponseBody(authID)), nil
