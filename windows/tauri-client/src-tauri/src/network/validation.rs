@@ -45,3 +45,21 @@ pub fn disk_not_found_error(local_disk_id: &str) -> ApiError {
         Some(local_disk_id.to_string()),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::validate_disk_name;
+    use super::validate_server_addr;
+
+    #[test]
+    fn validate_server_addr_rejects_blank_input() {
+        let error = validate_server_addr("   ").expect_err("blank server addr should fail");
+        assert_eq!(error.code, "network-server-addr-empty");
+    }
+
+    #[test]
+    fn validate_disk_name_trims_and_accepts_non_empty_input() {
+        let disk_name = validate_disk_name("  disk-a  ").expect("disk name should pass");
+        assert_eq!(disk_name, "disk-a");
+    }
+}
