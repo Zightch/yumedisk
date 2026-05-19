@@ -46,7 +46,7 @@ func TestNewCoreBuildsLocalDiskAndSessionPlane(t *testing.T) {
 	if core.DiskID() != material.DiskID {
 		t.Fatalf("disk id mismatch: got %q want %q", core.DiskID(), material.DiskID)
 	}
-	if core.AuthVerifier() != material.AuthVerifier {
+	if info := core.GatewayRegisterInfo("gateway-token"); info.AuthVerifier != material.AuthVerifier {
 		t.Fatal("auth verifier mismatch")
 	}
 	if core.StoragePath() != rawPath {

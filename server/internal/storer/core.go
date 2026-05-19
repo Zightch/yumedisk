@@ -8,6 +8,7 @@ import (
 	"yumedisk/server/internal/route"
 	"yumedisk/server/internal/session"
 	filestorage "yumedisk/server/internal/storage/file"
+	gatewaylink "yumedisk/server/internal/storer/gateway/link"
 )
 
 const (
@@ -15,7 +16,6 @@ const (
 )
 
 type Core struct {
-	cfg      config.StorerConfig
 	material auth.Material
 	storage  *filestorage.Backend
 	sessions *session.Service
@@ -41,7 +41,6 @@ func NewCore(cfg config.StorerConfig) (*Core, error) {
 	}
 
 	return &Core{
-		cfg:      cfg,
 		material: material,
 		storage:  storage,
 		metadata: metadata,
@@ -60,28 +59,12 @@ func (c *Core) DiskID() string {
 	return c.metadata.DiskID
 }
 
-func (c *Core) AuthVerifier() [64]byte {
-	return c.material.AuthVerifier
-}
-
-func (c *Core) DiskSize() uint64 {
-	return c.metadata.DiskSizeBytes
-}
-
-func (c *Core) ReadOnly() bool {
-	return c.metadata.ReadOnly
-}
-
 func (c *Core) StoragePath() string {
 	return c.storage.Path()
 }
 
 func (c *Core) SessionService() *session.Service {
 	return c.sessions
-}
-
-func (c *Core) SessionMetadata() session.Metadata {
-	return c.metadata
 }
 
 func (c *Core) RouteEntry(routeTarget string, connectionID uint64) route.Entry {
@@ -91,6 +74,17 @@ func (c *Core) RouteEntry(routeTarget string, connectionID uint64) route.Entry {
 		RouteTarget:   routeTarget,
 		ConnectionID:  connectionID,
 		Connected:     true,
+		DiskSizeBytes: c.metadata.DiskSizeBytes,
+		ReadOnly:      c.metadata.ReadOnly,
+		MaxIOBytes:    c.metadata.MaxIOBytes,
+	}
+}
+
+func (c *Core) GatewayRegisterInfo(gatewayToken string) gatewaylink.RegisterInfo {
+	return gatewaylink.RegisterInfo{
+		GatewayToken:  gatewayToken,
+		DiskID:        c.metadata.DiskID,
+		AuthVerifier:  c.material.AuthVerifier,
 		DiskSizeBytes: c.metadata.DiskSizeBytes,
 		ReadOnly:      c.metadata.ReadOnly,
 		MaxIOBytes:    c.metadata.MaxIOBytes,

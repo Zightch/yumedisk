@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"yumedisk/server/internal/config"
-	storegateway "yumedisk/server/internal/storer/gateway"
+	storegatewaylink "yumedisk/server/internal/storer/gateway/link"
 )
 
 type Runtime interface {
@@ -18,7 +18,7 @@ type Runtime interface {
 const storerLinkHeartbeatTimeout = 15 * time.Second
 
 type StorerRuntime struct {
-	linkRuntime *storegateway.LinkRuntime
+	linkRuntime *storegatewaylink.LinkRuntime
 	nextConn    atomic.Uint64
 }
 
@@ -30,16 +30,9 @@ func NewStorerRuntime(cfg config.StorerConfig, core *Core) (*StorerRuntime, erro
 		return nil, fmt.Errorf("storer runtime requires non-nil core")
 	}
 
-	linkRuntime, err := storegateway.NewLinkRuntime(
+	linkRuntime, err := storegatewaylink.NewLinkRuntime(
 		cfg.Storer.GatewayAddr,
-		storegateway.RegisterInfo{
-			GatewayToken:  cfg.Storer.GatewayToken,
-			DiskID:        core.DiskID(),
-			AuthVerifier:  core.AuthVerifier(),
-			DiskSizeBytes: core.DiskSize(),
-			ReadOnly:      core.ReadOnly(),
-			MaxIOBytes:    core.SessionService().MaxIOBytes(),
-		},
+		core.GatewayRegisterInfo(cfg.Storer.GatewayToken),
 		core.SessionService(),
 		storerLinkHeartbeatTimeout,
 	)

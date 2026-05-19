@@ -52,8 +52,10 @@
 - storer listener 已从 `gateway/runtime.go` 手写 accept loop 抽离为独立壳
 - `gateway/storer` 的 SessionDataPlane 转发已从 `Registry` 抽成独立 `data_plane.go`
 - `role=storer` 的 gateway 主动连接链已收进 `server/internal/storer/gateway/`
+- `role=storer` 的 gateway link 相关能力已继续下沉到 `server/internal/storer/gateway/link/`
 - `role=whole` 的本地固定路由适配也已收进 `server/internal/storer/gateway/`
 - `role=whole` 的 client-facing 入口已直接复用 `gateway/client` 收束后的公开入口，不再依赖旧平铺 `session_*` 文件
+- `Core` 已不再通过零散 getter 把 gateway register 元数据外泄，改为直接暴露组合后的 `GatewayRegisterInfo`
 
 ### 3.2 当前状态补充：gateway client-facing 已完成两层目录化
 
@@ -96,7 +98,7 @@
 - session service
 - route entry 描述辅助
 
-后续还需要再审视 `Core` 是否继续细分为更稳定的低层组件，避免它重新变成“大宿主”。
+当前它已经收掉了一部分“零散 getter 外泄”的问题；但后续还需要再审视它是否继续细分为更稳定的低层组件，避免重新变成“大宿主”。
 
 ### 3.5 当前非阻塞项：whole/client-facing 已跟随收口，但仍要防止重新回流
 
@@ -109,14 +111,12 @@
 本轮顺手检查后，当前还看得到的可选平铺主要是：
 
 - `gateway/client` 下的 `auth_*`
-- `storer/gateway` 下的 `link_*`
 
 当前判断：
 
 - `gateway/client/auth_*` 边界稳定，后续如继续深挖 client-facing，可考虑再收成 `auth/`
-- `storer/gateway/link_*` 目前文件数量不多，且协作关系集中，收益暂时低于 `gateway/storer` 与 `storer/core` 两块主问题
 
-因此这两组目前归类为“可选继续收口项”，不是当前最阻塞的结构问题。
+因此当前仍归类为“可选继续收口项”的，主要只剩 `gateway/client/auth_*` 这一组。
 
 ## 4. 本轮重构目标
 
@@ -269,10 +269,11 @@ server/internal/
     whole_runtime.go                 # whole 顶层入口
     gateway/
       local_adapter.go               # whole 本地固定路由适配
-      link_runtime.go                # role=storer 的单条对 gateway 链路运行时
-      register_client.go             # storer -> gateway register 主动发起
-      data_plane_handler.go          # storer 侧数据面协议闸口
-      link_heartbeat_watchdog.go     # storer 被动喂狗 watchdog
+      link/
+        runtime.go                   # role=storer 的单条对 gateway 链路运行时
+        register_client.go           # storer -> gateway register 主动发起
+        data_plane_handler.go        # storer 侧数据面协议闸口
+        heartbeat_watchdog.go        # storer 被动喂狗 watchdog
 ```
 
 说明：

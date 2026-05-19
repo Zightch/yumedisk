@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"yumedisk/server/internal/proto"
-	"yumedisk/server/internal/route"
 	"yumedisk/server/internal/session"
 	filestorage "yumedisk/server/internal/storage/file"
 )
@@ -17,7 +16,7 @@ import (
 func TestDataPlaneHandlerOpenReadWriteAndClose(t *testing.T) {
 	t.Parallel()
 
-	core := newGatewayTestCore(t)
+	core := newLinkTestCore(t)
 	handler := newDataPlaneHandler(17, core.SessionService(), nil)
 
 	openResp, err := handler.HandlePayload(buildGatewayRequest(proto.OpSessionOpen, 1, 0, nil))
@@ -62,7 +61,7 @@ func TestDataPlaneHandlerOpenReadWriteAndClose(t *testing.T) {
 func TestDataPlaneHandlerRejectsBadOpenBodyAndAuthOps(t *testing.T) {
 	t.Parallel()
 
-	core := newGatewayTestCore(t)
+	core := newLinkTestCore(t)
 	handler := newDataPlaneHandler(18, core.SessionService(), nil)
 
 	openResp, err := handler.HandlePayload(buildGatewayRequest(proto.OpSessionOpen, 1, 0, []byte("unexpected")))
@@ -107,7 +106,7 @@ func TestLinkHeartbeatWatchdogTimesOutWithoutHeartbeat(t *testing.T) {
 func TestDataPlaneHandlerMarksWatchdogOnLinkHeartbeat(t *testing.T) {
 	t.Parallel()
 
-	core := newGatewayTestCore(t)
+	core := newLinkTestCore(t)
 	watchdog := newLinkHeartbeatWatchdog(time.Second)
 	handler := newDataPlaneHandler(19, core.SessionService(), watchdog)
 
@@ -151,7 +150,7 @@ func mustParseGatewayHeader(t *testing.T, payload []byte) proto.Header {
 	return header
 }
 
-func newGatewayTestCore(t *testing.T) *gatewayTestCore {
+func newLinkTestCore(t *testing.T) *linkTestCore {
 	t.Helper()
 
 	tempDir := t.TempDir()
@@ -172,33 +171,21 @@ func newGatewayTestCore(t *testing.T) *gatewayTestCore {
 		ReadOnly:      false,
 		MaxIOBytes:    60 * 1024,
 	}
-	return &gatewayTestCore{
+	return &linkTestCore{
 		sessions: session.NewService(session.NewManager(), storage, metadata),
 		metadata: metadata,
 	}
 }
 
-type gatewayTestCore struct {
+type linkTestCore struct {
 	sessions *session.Service
 	metadata session.Metadata
 }
 
-func (c *gatewayTestCore) DiskID() string {
+func (c *linkTestCore) DiskID() string {
 	return c.metadata.DiskID
 }
 
-func (c *gatewayTestCore) SessionService() *session.Service {
+func (c *linkTestCore) SessionService() *session.Service {
 	return c.sessions
-}
-
-func (c *gatewayTestCore) RouteEntry(routeTarget string, connectionID uint64) route.Entry {
-	return route.Entry{
-		DiskID:        c.metadata.DiskID,
-		RouteTarget:   routeTarget,
-		ConnectionID:  connectionID,
-		Connected:     true,
-		DiskSizeBytes: c.metadata.DiskSizeBytes,
-		ReadOnly:      c.metadata.ReadOnly,
-		MaxIOBytes:    c.metadata.MaxIOBytes,
-	}
 }
