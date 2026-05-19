@@ -7,7 +7,7 @@
 - [define](./define/README.md)
   - 只定义网络协议本身
 - [client](./client/README.md)
-  - 只定义当前 client 实现口径
+  - 只定义 client 总览与各宿主口径
 - [server](./server/README.md)
   - 只定义当前 server 实现口径
 
