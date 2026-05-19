@@ -13,6 +13,7 @@ const emit = defineEmits<{
   openSettings: [];
   openMemoryCreate: [];
   openFileCreate: [];
+  openNetworkCreate: [];
 }>();
 
 const addPopoverVisible = ref(false);
@@ -38,6 +39,15 @@ function handleOpenFileCreate() {
 
   addPopoverVisible.value = false;
   emit("openFileCreate");
+}
+
+function handleOpenNetworkCreate() {
+  if (!canCreateDisk.value) {
+    return;
+  }
+
+  addPopoverVisible.value = false;
+  emit("openNetworkCreate");
 }
 </script>
 
@@ -117,7 +127,11 @@ function handleOpenFileCreate() {
             <span class="app-header__add-option-title">文件盘</span>
           </el-button>
 
-          <el-button class="app-header__add-option" disabled>
+          <el-button
+            class="app-header__add-option"
+            :disabled="!canCreateDisk"
+            @click="handleOpenNetworkCreate"
+          >
             <span class="app-header__add-option-icon app-header__add-option-icon--network">
               N
             </span>

@@ -9,6 +9,7 @@ import { mapHomeDiskDisplayItems } from "../../features/homeBootstrap/homeDispla
 import { useHomeBootstrap } from "../../features/homeBootstrap/useHomeBootstrap";
 import { useRemoveDiskFlow } from "../../features/removeDisk/useRemoveDiskFlow";
 import AppSessionStatusDialog from "../../features/appSessionStatus/AppSessionStatusDialog.vue";
+import CreateNetworkDiskDialog from "../../features/createNetworkDisk/CreateNetworkDiskDialog.vue";
 import { DEFAULT_THEME, applyTheme, type AppTheme } from "../../shared/theme/theme";
 import {
   ejectDisk,
@@ -19,6 +20,7 @@ import DiskListPanel from "../../widgets/DiskListPanel/DiskListPanel.vue";
 import SettingsPage from "../../widgets/SettingsPage/SettingsPage.vue";
 const memoryCreateVisible = ref(false);
 const fileCreateVisible = ref(false);
+const networkCreateVisible = ref(false);
 const editDiskVisible = ref(false);
 const settingsVisible = ref(false);
 const appSessionStatusVisible = ref(false);
@@ -57,6 +59,10 @@ function handleOpenFileCreate() {
   fileCreateVisible.value = true;
 }
 
+function handleOpenNetworkCreate() {
+  networkCreateVisible.value = true;
+}
+
 function handleOpenSettings() {
   settingsVisible.value = true;
 }
@@ -70,6 +76,10 @@ async function handleMemoryDiskCreated() {
 }
 
 async function handleFileDiskCreated() {
+  await loadHomeDiskList();
+}
+
+async function handleNetworkDiskCreated() {
   await loadHomeDiskList();
 }
 
@@ -164,6 +174,7 @@ function handleThemeChanged(theme: AppTheme) {
         @open-settings="handleOpenSettings"
         @open-memory-create="handleOpenMemoryCreate"
         @open-file-create="handleOpenFileCreate"
+        @open-network-create="handleOpenNetworkCreate"
       />
     </el-header>
 
@@ -201,6 +212,10 @@ function handleThemeChanged(theme: AppTheme) {
   <CreateFileDiskDialog
     v-model="fileCreateVisible"
     @created="handleFileDiskCreated"
+  />
+  <CreateNetworkDiskDialog
+    v-model="networkCreateVisible"
+    @created="handleNetworkDiskCreated"
   />
   <EditDiskDialog
     v-model="editDiskVisible"
