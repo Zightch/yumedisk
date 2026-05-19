@@ -93,7 +93,7 @@ export function useRemoveDiskFlow(options: {
 
     const handle = ElNotification({
       title: "删除成功",
-      position: "top-right",
+      position: "bottom-left",
       duration: DELETE_NOTIFICATION_DURATION_MS,
       customClass: "remove-disk-notification-shell",
       message: h(DeleteDiskNotification, {
@@ -119,7 +119,7 @@ export function useRemoveDiskFlow(options: {
   async function removeDisk(disk: HomeDiskListItem): Promise<void> {
     try {
       await ElMessageBox.confirm(
-        `确认删除 ${disk.diskName}？删除后可以在顶部通知中撤销。`,
+        `确认删除 ${disk.diskName}？删除后可以在左下角通知中撤销。`,
         "确认删除",
         {
           type: "warning",
