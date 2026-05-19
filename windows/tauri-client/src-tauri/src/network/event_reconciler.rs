@@ -216,6 +216,62 @@ mod tests {
     }
 
     #[test]
+    fn session_closed_event_invalidates_matching_runtime() {
+        let backend = BackendContext::default();
+        let mut network_client = NetworkClientState::default();
+        let connection = stage_connection(TransportEndpoint::new("127.0.0.1:9006"), 19);
+        let session = DiskSession::new(Arc::clone(&connection), 19).expect("session should build");
+        let key = NetworkDiskKey::new("127.0.0.1:9006", "L1k2J3h4G5f6D7s8");
+
+        network_client.insert_opened_session(OpenedNetworkDiskSession {
+            key: key.clone(),
+            session,
+            metadata: SessionMetadata {
+                disk_size_bytes: 4096,
+                max_io_bytes: 4096,
+                read_only: false,
+            },
+        });
+        network_client.push_test_event(NetworkClientEvent::SessionClosed {
+            server_addr: "127.0.0.1:9006".to_string(),
+            session_id: 19,
+        });
+
+        let network_client_mutex = Mutex::new(network_client);
+        let mut runtime_store = DiskRuntimeStore::default();
+        let mut runtime = DiskRuntime::new_network(
+            "disk-1".to_string(),
+            "network-disk".to_string(),
+            false,
+            "127.0.0.1:9006".to_string(),
+            "L1k2J3h4G5f6D7s8".to_string(),
+            "claim-3".to_string(),
+            4096,
+            false,
+        );
+        runtime.set_network_unmounted(4096, false);
+        runtime_store.insert_runtime(runtime);
+
+        let changed = sync_pending_events(&backend, &mut runtime_store, &network_client_mutex);
+        assert!(changed);
+
+        let runtime = runtime_store
+            .find_runtime("disk-1")
+            .expect("runtime should exist");
+        assert_eq!(
+            runtime.status(),
+            &DiskRuntimeStatus::Invalid {
+                reason: NETWORK_SESSION_MISSING_REASON.to_string(),
+            }
+        );
+
+        let network_client = network_client_mutex
+            .lock()
+            .expect("network client mutex should not be poisoned");
+        assert!(network_client.opened_session(&key).is_none());
+    }
+
+    #[test]
     fn connection_lost_event_invalidates_matching_runtime() {
         let backend = BackendContext::default();
         let mut network_client = NetworkClientState::default();
@@ -262,5 +318,48 @@ mod tests {
                 reason: "网络盘连接不可用".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn connection_lost_event_clears_draft_items_for_server() {
+        let backend = BackendContext::default();
+        let mut network_client = NetworkClientState::default();
+        let connection = stage_connection(TransportEndpoint::new("127.0.0.1:9007"), 23);
+        let session = DiskSession::new(Arc::clone(&connection), 23).expect("session should build");
+
+        let mut draft = NetworkCreateDraft::new(
+            "draft-1".to_string(),
+            "127.0.0.1:9007".to_string(),
+            connection,
+        );
+        draft.insert_item(NetworkDraftItem {
+            key: NetworkDiskKey::new("127.0.0.1:9007", "P1o2I3u4Y5t6R7e8"),
+            disk_name: "draft-disk".to_string(),
+            auth_material: "claim-4".to_string(),
+            session,
+            metadata: SessionMetadata {
+                disk_size_bytes: 4096,
+                max_io_bytes: 4096,
+                read_only: false,
+            },
+        });
+        network_client.insert_draft(draft);
+        network_client.push_test_event(NetworkClientEvent::ConnectionLost {
+            server_addr: "127.0.0.1:9007".to_string(),
+        });
+
+        let network_client_mutex = Mutex::new(network_client);
+        let mut runtime_store = DiskRuntimeStore::default();
+
+        let changed = sync_pending_events(&backend, &mut runtime_store, &network_client_mutex);
+        assert!(changed);
+
+        let network_client = network_client_mutex
+            .lock()
+            .expect("network client mutex should not be poisoned");
+        let draft = network_client
+            .draft("draft-1")
+            .expect("draft should still exist");
+        assert!(draft.items.is_empty());
     }
 }
