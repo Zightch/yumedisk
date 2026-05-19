@@ -1,4 +1,4 @@
-package client
+package clientauth
 
 import (
 	"crypto/rand"
@@ -6,43 +6,43 @@ import (
 	"math/big"
 	"time"
 
-	"yumedisk/server/internal/auth"
+	serverauth "yumedisk/server/internal/auth"
 	"yumedisk/server/internal/proto"
 )
 
 const (
-	defaultChallengeTTL = 30 * time.Second
-	minAuthFailDelay    = 2 * time.Second
-	maxAuthFailDelay    = 5 * time.Second
+	DefaultChallengeTTL = 30 * time.Second
+	MinAuthFailDelay    = 2 * time.Second
+	MaxAuthFailDelay    = 5 * time.Second
 )
 
-type authenticator struct {
+type Authenticator struct {
 	routes       RouteSource
-	grants       *authGrantRegistry
-	tokenCodec   *auth.TokenCodec
+	grants       *Registry
+	tokenCodec   *serverauth.TokenCodec
 	challengeTTL time.Duration
 	sleep        func(time.Duration)
 	randomDelay  func() time.Duration
 }
 
-func newAuthenticator(routes RouteSource, grants *authGrantRegistry) (*authenticator, error) {
-	tokenCodec, err := auth.NewRandomTokenCodec(32)
+func NewAuthenticator(routes RouteSource, grants *Registry) (*Authenticator, error) {
+	tokenCodec, err := serverauth.NewRandomTokenCodec(32)
 	if err != nil {
 		return nil, err
 	}
 
-	a := &authenticator{
+	a := &Authenticator{
 		routes:       routes,
 		grants:       grants,
 		tokenCodec:   tokenCodec,
-		challengeTTL: defaultChallengeTTL,
+		challengeTTL: DefaultChallengeTTL,
 		sleep:        time.Sleep,
 	}
 	a.randomDelay = a.defaultRandomDelay
 	return a, nil
 }
 
-func (a *authenticator) handleAuthStart(state *ConnectionState, header proto.Header, body []byte) ([]byte, error) {
+func (a *Authenticator) HandleAuthStart(state ConnectionState, header proto.Header, body []byte) ([]byte, error) {
 	if header.SessionID != 0 {
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
@@ -55,7 +55,7 @@ func (a *authenticator) handleAuthStart(state *ConnectionState, header proto.Hea
 		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
 	}
 
-	challenge, token, err := a.tokenCodec.Issue(state.ID, diskID, a.challengeTTL)
+	challenge, token, err := a.tokenCodec.Issue(state.ConnectionID(), diskID, a.challengeTTL)
 	if err != nil {
 		state.FailAuth()
 		return nil, err
@@ -68,7 +68,7 @@ func (a *authenticator) handleAuthStart(state *ConnectionState, header proto.Hea
 	return proto.BuildSuccessResponse(header, responseBody), nil
 }
 
-func (a *authenticator) handleAuthFinish(state *ConnectionState, header proto.Header, body []byte) ([]byte, error) {
+func (a *Authenticator) HandleAuthFinish(state ConnectionState, header proto.Header, body []byte) ([]byte, error) {
 	if header.SessionID != 0 {
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
@@ -83,10 +83,10 @@ func (a *authenticator) handleAuthFinish(state *ConnectionState, header proto.He
 		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
 	}
 
-	challenge, err := a.tokenCodec.Parse(state.ID, token)
+	challenge, err := a.tokenCodec.Parse(state.ConnectionID(), token)
 	if err != nil {
 		state.FailAuth()
-		if errors.Is(err, auth.ErrChallengeExpired) {
+		if errors.Is(err, serverauth.ErrChallengeExpired) {
 			a.sleep(a.randomDelay())
 			return proto.BuildErrorResponse(header, proto.StatusAuthExpired), nil
 		}
@@ -101,14 +101,14 @@ func (a *authenticator) handleAuthFinish(state *ConnectionState, header proto.He
 		return proto.BuildErrorResponse(header, proto.StatusAuthFailed), nil
 	}
 
-	expected := auth.ComputeProof(entry.AuthVerifier, challenge.Salt[:])
+	expected := serverauth.ComputeProof(entry.AuthVerifier, challenge.Salt[:])
 	if proof != expected {
 		state.FailAuth()
 		a.sleep(a.randomDelay())
 		return proto.BuildErrorResponse(header, proto.StatusAuthFailed), nil
 	}
 
-	authID := a.grants.Issue(state.ID, challenge.DiskID, time.Now().Add(a.challengeTTL))
+	authID := a.grants.Issue(state.ConnectionID(), challenge.DiskID, time.Now().Add(a.challengeTTL))
 	if err := state.FinishAuth(); err != nil {
 		state.FailAuth()
 		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
@@ -116,15 +116,28 @@ func (a *authenticator) handleAuthFinish(state *ConnectionState, header proto.He
 	return proto.BuildSuccessResponse(header, proto.BuildAuthFinishResponseBody(authID)), nil
 }
 
-func (a *authenticator) defaultRandomDelay() time.Duration {
-	span := maxAuthFailDelay - minAuthFailDelay
+func (a *Authenticator) RouteSource() RouteSource {
+	return a.routes
+}
+
+func (a *Authenticator) SetFailureDelayHooks(sleep func(time.Duration), randomDelay func() time.Duration) {
+	if sleep != nil {
+		a.sleep = sleep
+	}
+	if randomDelay != nil {
+		a.randomDelay = randomDelay
+	}
+}
+
+func (a *Authenticator) defaultRandomDelay() time.Duration {
+	span := MaxAuthFailDelay - MinAuthFailDelay
 	if span <= 0 {
-		return minAuthFailDelay
+		return MinAuthFailDelay
 	}
 
 	n, err := rand.Int(rand.Reader, big.NewInt(span.Nanoseconds()+1))
 	if err != nil {
-		return minAuthFailDelay
+		return MinAuthFailDelay
 	}
-	return minAuthFailDelay + time.Duration(n.Int64())
+	return MinAuthFailDelay + time.Duration(n.Int64())
 }

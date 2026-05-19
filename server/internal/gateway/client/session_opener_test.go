@@ -106,7 +106,7 @@ func TestSessionOpenRejectsWhenSessionIsAlreadyLive(t *testing.T) {
 	if secondOpenHeader.SessionID != 0 {
 		t.Fatalf("expected zero second session id, got %d", secondOpenHeader.SessionID)
 	}
-	if _, status, ok := handler.grants.Lookup(authIDTwo, stateTwo.ID); !ok || status != proto.StatusOK {
+	if _, status, ok := handler.grants.Lookup(authIDTwo, stateTwo.ConnectionID()); !ok || status != proto.StatusOK {
 		t.Fatalf("expected rejected auth grant to stay valid, ok=%v status=%d", ok, status)
 	}
 
@@ -136,7 +136,7 @@ func TestSessionOpenReturnsUnavailableWhenRouteIsGone(t *testing.T) {
 
 	handler, state, material := newSessionTestHandler(t)
 	authID := issueAuthIDForTest(t, handler, state, material)
-	backend := handler.authenticator.routes.(*testGatewayBackend)
+	backend := handler.authenticator.RouteSource().(*testGatewayBackend)
 	backend.DisconnectRoute()
 
 	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 50, 0, proto.BuildSessionOpenRequestBody(authID)))
@@ -248,8 +248,7 @@ func newSessionTestHandlerWithRaw(t *testing.T, readOnly bool) (*Handler, *Conne
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
 	}
-	handler.authenticator.sleep = func(time.Duration) {}
-	handler.authenticator.randomDelay = func() time.Duration { return 0 }
+	handler.authenticator.SetFailureDelayHooks(func(time.Duration) {}, func() time.Duration { return 0 })
 	state := handler.NewConnectionState(100)
 	return handler, state, material, rawPath
 }

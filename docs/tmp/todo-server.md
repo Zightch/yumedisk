@@ -38,7 +38,7 @@
 - 第 6 点“删除优先原则”
 - 第 7 点“测试覆盖原则”
 
-## 3. 当前进度与剩余问题
+## 3. 当前进度与当前边界
 
 当前 `server` 已经完成了一轮真正的结构下沉，不再停留在旧的平铺前缀阶段。
 
@@ -73,50 +73,55 @@
 
 这一步直接落地了开发原则第 5 点中的目录化约束：稳定前缀不只在第一层目录收口，而是在 `gateway/client/` 之下继续按 `connection/`、`session/` 形成第二层稳定子组件。
 
-### 3.3 剩余问题一：gateway/storer 的 disconnect 传播与连接 owner 仍可继续下沉
+### 3.3 当前状态补充：gateway/storer 的 route 与 active link 已继续拆开
 
-当前 `server/internal/gateway/storer/Registry` 已不再承接 SessionDataPlane 转发；这一层已经下沉到独立 `data_plane.go`。但 route-facing 侧仍然还保留：
+当前 `gateway/storer` 已继续收成更明确的两层：
 
-- route 真状态接入
-- 活跃 storer link 索引
-- route disconnect 后的 session close 传播
+- `Registry`
+  - 只组合 route 真状态与 active link owner
+- `activeLinks`
+  - 只持有活跃 storer connection
+  - 只承接 link close 与 pending request 清理
+- `disconnectNotifier`
+  - 只承接 route disconnect 后的 session close 传播
 
-也就是说，route-facing 已经从“Registry 同时管 route + link + data plane”进一步收住，但 `disconnect_notifier` 与连接 owner 边界还可以继续明确。
+当前 `Registry` 已不再直接维护 disconnect handler 与 active connection map 细节，也不再自己展开 disk list 通知逻辑。
 
-### 3.4 剩余问题二：storer 顶层与 core 边界还能继续收
+### 3.4 当前状态补充：storer Core 已继续下沉为 local disk + session service 组合
 
-当前 `role_runtime.go` 已经退回到装配层很多，但 `storer` 顶层仍然还保留：
+当前 `Core` 不再同时直接承接所有底层资源，而是收成：
 
-- role 分发
-- top-level runtime 选择
-- `Core` 的直接传递
+- `localDisk`
+  - claim code 解析
+  - 本地文件后端打开
+  - metadata 组合
+  - route entry / gateway register info 描述
+- `Core`
+  - 只组合 `localDisk` 与 `session.Service`
+  - 继续对上提供稳定入口
 
-而 `Core` 本身也还同时承接：
+也就是说，当前 `Core` 已不再重新变回“大宿主”，而是回到稳定组合层。
 
-- 本地文件后端
-- 认证材料
-- session service
-- route entry 描述辅助
+### 3.5 当前状态补充：gateway/client 的 auth 组已收成目录
 
-当前它已经收掉了一部分“零散 getter 外泄”的问题；但后续还需要再审视它是否继续细分为更稳定的低层组件，避免重新变成“大宿主”。
+当前 `gateway/client` 已进一步分成：
 
-### 3.5 当前非阻塞项：whole/client-facing 已跟随收口，但仍要防止重新回流
+- `connection/`
+- `session/`
+- `auth/`
 
-当前 `whole_runtime.go` 已经复用新的本地 gateway 适配，并直接依赖 `gateway/client` 的公开入口。
+认证相关实现已不再继续平铺在 `client/` 顶层。
 
-这本身没有行为问题，当前也不构成阻塞；但后续如果 `gateway/client/` 再继续下沉更多子组件，whole 侧仍要坚持只依赖收束后的入口，避免再次回到“知道太多下层细节”的状态。
+### 3.6 当前边界
 
-### 3.6 当前非阻塞项：仍存在少量可选前缀平铺
+当前 `server` 结构重构主体已经收口到位：
 
-本轮顺手检查后，当前还看得到的可选平铺主要是：
+- `gateway.Runtime` 保持顶层装配定位
+- `storer RoleRuntime / WholeRuntime / StorerRuntime` 保持顶层装配定位
+- `gateway/client` 与 `gateway/storer` 都已经形成多层结构
+- `storer` 本地盘核心不再混成单体宿主
 
-- `gateway/client` 下的 `auth_*`
-
-当前判断：
-
-- `gateway/client/auth_*` 边界稳定，后续如继续深挖 client-facing，可考虑再收成 `auth/`
-
-因此当前仍归类为“可选继续收口项”的，主要只剩 `gateway/client/auth_*` 这一组。
+后续如果再继续重构，应该只针对新增语义做新一轮分层，而不是继续为当前最小闭环补结构尾巴。
 
 ## 4. 本轮重构目标
 

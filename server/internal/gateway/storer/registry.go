@@ -1,7 +1,7 @@
 package storer
 
 import (
-	"sync"
+	"net"
 
 	"yumedisk/server/internal/route"
 )
@@ -13,23 +13,18 @@ type DisconnectHandler interface {
 type Registry struct {
 	routes *route.Registry
 
-	handlerMu sync.RWMutex
-	handler   DisconnectHandler
-
-	connections *connectionRegistry
+	links *activeLinks
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
-		routes:      route.NewRegistry(),
-		connections: newConnectionRegistry(),
+		routes: route.NewRegistry(),
+		links:  newActiveLinks(),
 	}
 }
 
 func (r *Registry) SetDisconnectHandler(handler DisconnectHandler) {
-	r.handlerMu.Lock()
-	r.handler = handler
-	r.handlerMu.Unlock()
+	r.links.SetDisconnectHandler(handler)
 }
 
 func (r *Registry) LookupRoute(diskID string) (route.Entry, bool) {
@@ -40,23 +35,23 @@ func (r *Registry) Register(entry route.Entry) error {
 	return r.routes.Register(entry)
 }
 
+func (r *Registry) AttachConnection(connectionID uint64, conn net.Conn) *connection {
+	return r.links.Attach(connectionID, conn)
+}
+
 func (r *Registry) DisconnectConnection(connectionID uint64) {
 	disconnected := r.routes.DisconnectConnection(connectionID)
-	conn := r.connections.Remove(connectionID)
-	if conn != nil {
-		conn.closePending()
+	r.links.Disconnect(connectionID, collectDiskIDs(disconnected))
+}
+
+func collectDiskIDs(entries []route.Entry) []string {
+	if len(entries) == 0 {
+		return nil
 	}
 
-	r.handlerMu.RLock()
-	handler := r.handler
-	r.handlerMu.RUnlock()
-	if handler == nil {
-		return
-	}
-
-	diskIDs := make([]string, 0, len(disconnected))
-	for _, entry := range disconnected {
+	diskIDs := make([]string, 0, len(entries))
+	for _, entry := range entries {
 		diskIDs = append(diskIDs, entry.DiskID)
 	}
-	handler.CloseRouteConnection(connectionID, diskIDs)
+	return diskIDs
 }

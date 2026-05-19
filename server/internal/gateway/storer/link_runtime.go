@@ -30,7 +30,7 @@ func newLinkRuntime(
 ) *linkRuntime {
 	return &linkRuntime{
 		registry:          registry,
-		connection:        registry.connections.Attach(connectionID, conn),
+		connection:        registry.AttachConnection(connectionID, conn),
 		registerGate:      newRegisterGate(registry.routes, gatewayToken),
 		heartbeatInterval: heartbeatInterval,
 		heartbeatTimeout:  heartbeatTimeout,

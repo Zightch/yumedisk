@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"sync"
 
+	clientauth "yumedisk/server/internal/gateway/client/auth"
 	clientsession "yumedisk/server/internal/gateway/client/session"
 	"yumedisk/server/internal/proto"
 )
 
 type Handler struct {
-	authenticator *authenticator
+	authenticator *clientauth.Authenticator
 	sessionOpener *clientsession.Opener
-	grants        *authGrantRegistry
+	grants        *clientauth.Registry
 
 	noticeMu             sync.RWMutex
 	sessionCloseNotifier clientsession.CloseNotifier
@@ -26,8 +27,8 @@ func NewHandler(routes RouteSource, sessions SessionDataPlane) (*Handler, error)
 		return nil, errors.New("gateway handler requires session data plane")
 	}
 
-	grants := newAuthGrantRegistry()
-	authenticator, err := newAuthenticator(routes, grants)
+	grants := clientauth.NewRegistry()
+	authenticator, err := clientauth.NewAuthenticator(routes, grants)
 	if err != nil {
 		return nil, err
 	}
@@ -58,9 +59,9 @@ func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte,
 	body := payload[proto.HeaderSize:]
 	switch header.OpCode {
 	case proto.OpAuthStart:
-		return h.authenticator.handleAuthStart(state, header, body)
+		return h.authenticator.HandleAuthStart(state, header, body)
 	case proto.OpAuthFinish:
-		return h.authenticator.handleAuthFinish(state, header, body)
+		return h.authenticator.HandleAuthFinish(state, header, body)
 	case proto.OpSessionOpen:
 		return h.sessionOpener.HandleSessionOpen(state, header, body)
 	case proto.OpSessionDescribe:

@@ -34,7 +34,7 @@ func TestGatewaySessionMappingHidesUpstreamSessionIDAndUsesSnapshot(t *testing.T
 		t.Fatalf("new handler: %v", err)
 	}
 	state := handler.NewConnectionState(42)
-	authID := handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
+	authID := handler.grants.Issue(state.ConnectionID(), diskID, time.Now().Add(time.Minute))
 
 	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, proto.BuildSessionOpenRequestBody(authID)))
 	if err != nil {
@@ -120,7 +120,7 @@ func TestGatewaySessionMappingIsReleasedOnConnectionClose(t *testing.T) {
 		t.Fatalf("new handler: %v", err)
 	}
 	state := handler.NewConnectionState(55)
-	authID := handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
+	authID := handler.grants.Issue(state.ConnectionID(), diskID, time.Now().Add(time.Minute))
 
 	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 10, 0, proto.BuildSessionOpenRequestBody(authID)))
 	if err != nil {
@@ -128,11 +128,11 @@ func TestGatewaySessionMappingIsReleasedOnConnectionClose(t *testing.T) {
 	}
 	openHeader := mustParseGatewayHeader(t, openResp)
 
-	handler.CloseConnection(state.ID)
+	handler.CloseConnection(state.ConnectionID())
 	if dataPlane.lastCloseSessionID != dataPlane.openSessionID {
 		t.Fatalf("close connection did not release upstream session: %d", dataPlane.lastCloseSessionID)
 	}
-	if dataPlane.lastCloseConnectionID != state.ID {
+	if dataPlane.lastCloseConnectionID != state.ConnectionID() {
 		t.Fatalf("close connection used wrong id: %d", dataPlane.lastCloseConnectionID)
 	}
 
@@ -166,7 +166,7 @@ func TestGatewayRouteDisconnectClosesClientSessionAndRevokesGrant(t *testing.T) 
 	notifier := &recordingSessionCloseNotifier{}
 	handler.SetSessionCloseNotifier(notifier)
 	state := handler.NewConnectionState(77)
-	authID := handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
+	authID := handler.grants.Issue(state.ConnectionID(), diskID, time.Now().Add(time.Minute))
 	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, proto.BuildSessionOpenRequestBody(authID)))
 	if err != nil {
 		t.Fatalf("open session: %v", err)
@@ -176,24 +176,24 @@ func TestGatewayRouteDisconnectClosesClientSessionAndRevokesGrant(t *testing.T) 
 		t.Fatalf("unexpected open status: %d", openHeader.StatusCode)
 	}
 
-	pendingAuthID := handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
+	pendingAuthID := handler.grants.Issue(state.ConnectionID(), diskID, time.Now().Add(time.Minute))
 	closed := handler.closeRouteConnectionSessions(routes.entry.ConnectionID, []string{diskID})
 	if len(closed) != 1 {
 		t.Fatalf("unexpected closed sessions count: %d", len(closed))
 	}
-	if closed[0].ClientConnectionID != state.ID {
+	if closed[0].ClientConnectionID != state.ConnectionID() {
 		t.Fatalf("unexpected client connection id: %d", closed[0].ClientConnectionID)
 	}
 	if notifier.count() != 0 {
 		t.Fatalf("manual closeRouteConnectionSessions should not emit notices")
 	}
 
-	if _, status, ok := handler.grants.Lookup(pendingAuthID, state.ID); ok || status != proto.StatusAuthIDInvalid {
+	if _, status, ok := handler.grants.Lookup(pendingAuthID, state.ConnectionID()); ok || status != proto.StatusAuthIDInvalid {
 		t.Fatalf("expected route disconnect to revoke auth grant, ok=%v status=%d", ok, status)
 	}
 
-	pendingAuthID = handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
-	authID = handler.grants.Issue(state.ID, diskID, time.Now().Add(time.Minute))
+	pendingAuthID = handler.grants.Issue(state.ConnectionID(), diskID, time.Now().Add(time.Minute))
+	authID = handler.grants.Issue(state.ConnectionID(), diskID, time.Now().Add(time.Minute))
 	openResp, err = handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 2, 0, proto.BuildSessionOpenRequestBody(authID)))
 	if err != nil {
 		t.Fatalf("open session for notifier path: %v", err)
@@ -213,10 +213,10 @@ func TestGatewayRouteDisconnectClosesClientSessionAndRevokesGrant(t *testing.T) 
 	if record.sessionID != openHeader.SessionID {
 		t.Fatalf("unexpected closed session id: %d", record.sessionID)
 	}
-	if record.clientConnectionID != state.ID {
+	if record.clientConnectionID != state.ConnectionID() {
 		t.Fatalf("unexpected closed client connection id: %d", record.clientConnectionID)
 	}
-	if _, status, ok := handler.grants.Lookup(pendingAuthID, state.ID); ok || status != proto.StatusAuthIDInvalid {
+	if _, status, ok := handler.grants.Lookup(pendingAuthID, state.ConnectionID()); ok || status != proto.StatusAuthIDInvalid {
 		t.Fatalf("expected notifier path to revoke auth grant, ok=%v status=%d", ok, status)
 	}
 }

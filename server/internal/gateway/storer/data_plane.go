@@ -8,15 +8,15 @@ import (
 )
 
 type dataPlane struct {
-	registry *Registry
+	links *activeLinks
 }
 
 func (r *Registry) DataPlane() gatewayclient.SessionDataPlane {
-	return &dataPlane{registry: r}
+	return &dataPlane{links: r.links}
 }
 
 func (p *dataPlane) Open(_ uint64, entry route.Entry) (uint64, error) {
-	conn, ok := p.registry.connections.Lookup(entry.ConnectionID)
+	conn, ok := p.links.Lookup(entry.ConnectionID)
 	if !ok {
 		return 0, session.ErrSessionUnavailable
 	}
@@ -47,7 +47,7 @@ func (p *dataPlane) Open(_ uint64, entry route.Entry) (uint64, error) {
 }
 
 func (p *dataPlane) Close(routeConnectionID uint64, sessionID uint64) {
-	conn, ok := p.registry.connections.Lookup(routeConnectionID)
+	conn, ok := p.links.Lookup(routeConnectionID)
 	if !ok {
 		return
 	}
@@ -57,7 +57,7 @@ func (p *dataPlane) Close(routeConnectionID uint64, sessionID uint64) {
 func (p *dataPlane) CloseConnection(uint64) {}
 
 func (p *dataPlane) Read(routeConnectionID uint64, sessionID uint64, offset uint64, length uint32) ([]byte, error) {
-	conn, ok := p.registry.connections.Lookup(routeConnectionID)
+	conn, ok := p.links.Lookup(routeConnectionID)
 	if !ok {
 		return nil, session.ErrSessionUnavailable
 	}
@@ -79,7 +79,7 @@ func (p *dataPlane) Read(routeConnectionID uint64, sessionID uint64, offset uint
 }
 
 func (p *dataPlane) Write(routeConnectionID uint64, sessionID uint64, offset uint64, data []byte) error {
-	conn, ok := p.registry.connections.Lookup(routeConnectionID)
+	conn, ok := p.links.Lookup(routeConnectionID)
 	if !ok {
 		return session.ErrSessionUnavailable
 	}

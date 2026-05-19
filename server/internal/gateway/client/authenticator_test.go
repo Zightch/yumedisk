@@ -54,7 +54,7 @@ func TestAuthenticatorAuthStartAndFinishSuccess(t *testing.T) {
 		t.Fatal("expected non-zero auth id")
 	}
 
-	if _, status, ok := handler.grants.Lookup(authID, state.ID); !ok || status != proto.StatusOK {
+	if _, status, ok := handler.grants.Lookup(authID, state.ConnectionID()); !ok || status != proto.StatusOK {
 		t.Fatalf("expected issued auth grant to be available, ok=%v status=%d", ok, status)
 	}
 }
@@ -75,10 +75,10 @@ func TestAuthenticatorKeepsMultipleGrantedAuthIDsOnOneConnection(t *testing.T) {
 		t.Fatalf("expected distinct auth ids, got %d", firstAuthID)
 	}
 
-	if _, status, ok := handler.grants.Lookup(firstAuthID, state.ID); !ok || status != proto.StatusOK {
+	if _, status, ok := handler.grants.Lookup(firstAuthID, state.ConnectionID()); !ok || status != proto.StatusOK {
 		t.Fatalf("expected first auth grant to stay valid, ok=%v status=%d", ok, status)
 	}
-	if _, status, ok := handler.grants.Lookup(secondAuthID, state.ID); !ok || status != proto.StatusOK {
+	if _, status, ok := handler.grants.Lookup(secondAuthID, state.ConnectionID()); !ok || status != proto.StatusOK {
 		t.Fatalf("expected second auth grant to stay valid, ok=%v status=%d", ok, status)
 	}
 }
@@ -236,7 +236,6 @@ func newAuthHandler(t *testing.T, material auth.Material) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	handler.authenticator.sleep = func(time.Duration) {}
-	handler.authenticator.randomDelay = func() time.Duration { return 0 }
+	handler.authenticator.SetFailureDelayHooks(func(time.Duration) {}, func() time.Duration { return 0 })
 	return handler, nil
 }
