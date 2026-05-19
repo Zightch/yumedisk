@@ -125,21 +125,35 @@ pub fn invalidate_runtime_by_local_disk_id(
 }
 
 pub fn set_network_runtime_unmounted(
+    backend: &BackendContext,
     runtime_store: &mut DiskRuntimeStore,
     local_disk_id: &str,
     metadata: SessionMetadata,
 ) {
     if let Some(runtime) = runtime_store.find_runtime_mut(local_disk_id) {
+        detach_managed_disk_if_mounted(backend, runtime);
         runtime.set_network_unmounted(metadata.disk_size_bytes, metadata.read_only);
     }
 }
 
+pub fn refresh_network_runtime(
+    runtime_store: &mut DiskRuntimeStore,
+    local_disk_id: &str,
+    metadata: SessionMetadata,
+) {
+    if let Some(runtime) = runtime_store.find_runtime_mut(local_disk_id) {
+        runtime.refresh_network_metadata(metadata.disk_size_bytes, metadata.read_only);
+    }
+}
+
 pub fn set_network_runtime_invalid(
+    backend: &BackendContext,
     runtime_store: &mut DiskRuntimeStore,
     local_disk_id: &str,
     reason: &str,
 ) {
     if let Some(runtime) = runtime_store.find_runtime_mut(local_disk_id) {
+        detach_managed_disk_if_mounted(backend, runtime);
         runtime.set_network_invalid(reason.to_string());
     }
 }
@@ -148,5 +162,19 @@ pub fn close_session_for_cleanup(session: &DiskSession) -> bool {
     match session.close() {
         Ok(()) | Err(NetworkClientError::SessionUnavailable) => true,
         Err(_) => false,
+    }
+}
+
+fn detach_managed_disk_if_mounted(
+    backend: &BackendContext,
+    runtime: &mut crate::state::disk_runtime::DiskRuntime,
+) {
+    let Some(target_id) = runtime.mounted_target_id() else {
+        return;
+    };
+
+    let mut error_text = String::new();
+    if let Some(media) = backend.remove_managed_disk_with_media(target_id, Some(&mut error_text)) {
+        drop(media);
     }
 }

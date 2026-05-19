@@ -27,7 +27,7 @@ pub fn rescan_runtime_disks(
 ) -> disk_service::HomeDiskListSnapshot {
     network_runtime::sync_runtime_state(backend, runtime_store, network_client_mutex);
     disk_service::rescan_local_runtime_disks(backend, runtime_store);
-    runtime_flow::rescan_network_runtimes(runtime_store, network_client_mutex);
+    runtime_flow::rescan_network_runtimes(backend, runtime_store, network_client_mutex);
     disk_service::query_home_disk_list(backend, runtime_store)
 }
 
@@ -92,7 +92,11 @@ pub fn prepare_deleted_runtime(
     network_client_mutex: &Mutex<NetworkClientState>,
 ) -> Result<(), ApiError> {
     if removed_runtime.runtime.is_network() {
-        runtime_flow::prepare_deleted_network_runtime(backend, removed_runtime, network_client_mutex)
+        runtime_flow::prepare_deleted_network_runtime(
+            backend,
+            removed_runtime,
+            network_client_mutex,
+        )
     } else {
         disk_service::prepare_deleted_local_runtime(backend, removed_runtime)
     }

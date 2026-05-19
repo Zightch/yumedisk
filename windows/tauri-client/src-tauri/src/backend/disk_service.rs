@@ -497,10 +497,7 @@ pub fn update_disk(
     Ok(UpdatedDiskState { previous_snapshot })
 }
 
-pub fn rescan_local_runtime_disks(
-    backend: &BackendContext,
-    runtime_store: &mut DiskRuntimeStore,
-) {
+pub fn rescan_local_runtime_disks(backend: &BackendContext, runtime_store: &mut DiskRuntimeStore) {
     for runtime in runtime_store.runtimes_mut() {
         if runtime.is_memory() {
             continue;

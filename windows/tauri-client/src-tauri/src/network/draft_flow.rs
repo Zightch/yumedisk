@@ -81,8 +81,8 @@ pub fn create_network_draft(
     request: CreateNetworkDraftRequest,
 ) -> Result<NetworkCreateDraftSnapshot, ApiError> {
     let server_addr = validation::validate_server_addr(&request.server_addr)?.to_string();
-    let connection =
-        gateway_ops::acquire_connection(network_client_mutex, &server_addr).map_err(map_connect_error)?;
+    let connection = gateway_ops::acquire_connection(network_client_mutex, &server_addr)
+        .map_err(map_connect_error)?;
     let mut network_client = lock_network_client(network_client_mutex);
     let draft_id = network_client.allocate_draft_id();
     let draft = NetworkCreateDraft::new(draft_id.clone(), server_addr, connection);
@@ -105,8 +105,8 @@ pub fn add_network_draft_item(
         (draft.server_addr.clone(), Arc::clone(&draft.connection))
     };
 
-    let auth =
-        gateway_ops::authenticate(Arc::clone(&connection), &request.claim_code).map_err(map_auth_error)?;
+    let auth = gateway_ops::authenticate(Arc::clone(&connection), &request.claim_code)
+        .map_err(map_auth_error)?;
     let key = NetworkDiskKey::new(server_addr.clone(), auth.disk_id().to_string());
 
     {
@@ -121,15 +121,16 @@ pub fn add_network_draft_item(
 
     let session =
         gateway_ops::open_session(Arc::clone(&connection), &auth).map_err(map_open_error)?;
-    let metadata = match gateway_ops::describe_session(Arc::clone(&connection), session.session_id()) {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            let _ = cleanup::close_session_for_cleanup(&session);
-            let mut network_client = lock_network_client(network_client_mutex);
-            network_client.release_connection_after_session_close(&server_addr);
-            return Err(map_metadata_error(error));
-        }
-    };
+    let metadata =
+        match gateway_ops::describe_session(Arc::clone(&connection), session.session_id()) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                let _ = cleanup::close_session_for_cleanup(&session);
+                let mut network_client = lock_network_client(network_client_mutex);
+                network_client.release_connection_after_session_close(&server_addr);
+                return Err(map_metadata_error(error));
+            }
+        };
 
     let snapshot = {
         let mut network_client = lock_network_client(network_client_mutex);
@@ -317,9 +318,9 @@ mod tests {
     use std::net::TcpListener;
     use std::path::Path;
     use std::path::PathBuf;
-    use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
+    use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::OnceLock;
     use std::thread;
@@ -329,8 +330,8 @@ mod tests {
     use network_core::client::DiskSession;
     use network_core::client::GatewayConnection;
     use network_core::client::SessionMetadata;
-    use network_core::test_support::stage_connection;
     use network_core::test_support::expect_client_hello;
+    use network_core::test_support::stage_connection;
     use network_core::transport::TransportEndpoint;
 
     use super::dispose_network_draft;
@@ -381,7 +382,10 @@ mod tests {
     impl ConnectedSessionHarness {
         fn new(session_id: u64) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
-            let server_addr = listener.local_addr().expect("local addr should exist").to_string();
+            let server_addr = listener
+                .local_addr()
+                .expect("local addr should exist")
+                .to_string();
             let stop = Arc::new(AtomicBool::new(false));
             let stop_for_server = Arc::clone(&stop);
             let server = thread::spawn(move || {
@@ -392,7 +396,8 @@ mod tests {
                 }
             });
 
-            let connection = stage_connection(TransportEndpoint::new(server_addr.clone()), session_id);
+            let connection =
+                stage_connection(TransportEndpoint::new(server_addr.clone()), session_id);
             connection.connect().expect("connect should succeed");
 
             Self {
@@ -536,6 +541,83 @@ mod tests {
     }
 
     #[test]
+    fn submit_network_draft_keeps_existing_mounted_runtime_mounted() {
+        with_test_home("submit-keeps-mounted", |_| {
+            let backend = BackendContext::default();
+            let existing_harness = ConnectedSessionHarness::new(33);
+            let draft_harness = ConnectedSessionHarness::new(34);
+            let existing_key =
+                NetworkDiskKey::new(&existing_harness.server_addr, "Z9y8X7w6V5u4T3s2");
+
+            let mut runtime_store = DiskRuntimeStore::default();
+            let mut existing_runtime = DiskRuntime::new_network(
+                "disk-1".to_string(),
+                "mounted-disk".to_string(),
+                false,
+                existing_harness.server_addr.clone(),
+                "Z9y8X7w6V5u4T3s2".to_string(),
+                "claim-mounted".to_string(),
+                1,
+                true,
+            );
+            existing_runtime.set_mounted(7);
+            runtime_store.insert_runtime(existing_runtime);
+
+            let mut draft = NetworkCreateDraft::new(
+                "draft-1".to_string(),
+                draft_harness.server_addr.clone(),
+                Arc::clone(&draft_harness.connection),
+            );
+            draft.insert_item(NetworkDraftItem {
+                key: NetworkDiskKey::new(&draft_harness.server_addr, "A1b2C3d4E5f6G7h8"),
+                disk_name: "new-network-disk".to_string(),
+                auth_material: "claim-draft".to_string(),
+                session: draft_harness.session(34),
+                metadata: sample_metadata(),
+            });
+
+            let mut network_client = NetworkClientState::default();
+            network_client.insert_opened_session(
+                crate::state::network_client::OpenedNetworkDiskSession {
+                    key: existing_key.clone(),
+                    session: existing_harness.session(33),
+                    metadata: sample_metadata(),
+                },
+            );
+            network_client.insert_draft(draft);
+            let network_client_mutex = Mutex::new(network_client);
+
+            network_draft_workflow::submit_network_draft(
+                &backend,
+                &mut runtime_store,
+                &network_client_mutex,
+                SubmitNetworkDraftRequest {
+                    draft_id: "draft-1".to_string(),
+                },
+            )
+            .expect("submit should succeed");
+
+            let existing_runtime = runtime_store
+                .find_runtime("disk-1")
+                .expect("mounted runtime should exist");
+            assert_eq!(
+                existing_runtime.status(),
+                &DiskRuntimeStatus::Mounted { target_id: 7 }
+            );
+            assert_eq!(existing_runtime.capacity_bytes(), 4096);
+            assert!(!existing_runtime.read_only());
+
+            let new_runtime = runtime_store
+                .find_runtime("disk-2")
+                .expect("new runtime should be inserted");
+            assert_eq!(new_runtime.status(), &DiskRuntimeStatus::Unmounted);
+
+            existing_harness.shutdown();
+            draft_harness.shutdown();
+        });
+    }
+
+    #[test]
     fn submit_network_draft_rejects_duplicate_runtime_and_keeps_draft() {
         let backend = BackendContext::default();
         let mut runtime_store = DiskRuntimeStore::default();
@@ -572,11 +654,9 @@ mod tests {
             .lock()
             .expect("network client mutex should not be poisoned");
         assert!(network_client.draft("draft-1").is_some());
-        assert!(
-            network_client
-                .opened_session(&NetworkDiskKey::new("127.0.0.1:9011", "Z9y8X7w6V5u4T3s2"))
-                .is_none()
-        );
+        assert!(network_client
+            .opened_session(&NetworkDiskKey::new("127.0.0.1:9011", "Z9y8X7w6V5u4T3s2"))
+            .is_none());
     }
 
     #[test]

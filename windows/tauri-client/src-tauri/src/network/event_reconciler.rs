@@ -6,10 +6,10 @@ use crate::state::disk_runtime::DiskRuntimeStore;
 use crate::state::network_client::NetworkClientEvent;
 use crate::state::network_client::NetworkClientState;
 
-use super::NETWORK_CONNECTION_UNAVAILABLE_REASON;
-use super::NETWORK_SESSION_MISSING_REASON;
 use super::cleanup;
 use super::lock_network_client;
+use super::NETWORK_CONNECTION_UNAVAILABLE_REASON;
+use super::NETWORK_SESSION_MISSING_REASON;
 
 pub fn sync_pending_events(
     backend: &BackendContext,
@@ -81,10 +81,7 @@ pub fn sync_pending_events(
 
                 let draft_sessions = {
                     let mut network_client = lock_network_client(network_client_mutex);
-                    cleanup::remove_all_draft_sessions_for_server(
-                        &mut network_client,
-                        &server_addr,
-                    )
+                    cleanup::remove_all_draft_sessions_for_server(&mut network_client, &server_addr)
                 };
                 for session in draft_sessions {
                     let _ = cleanup::close_session_for_cleanup(&session);
@@ -123,16 +120,16 @@ mod tests {
     use network_core::transport::TransportEndpoint;
 
     use super::sync_pending_events;
-    use crate::state::network_client::NetworkClientEvent;
-    use crate::state::network_client::NetworkCreateDraft;
-    use crate::state::network_client::NetworkDiskKey;
-    use crate::state::network_client::NetworkDraftItem;
-    use crate::state::network_client::OpenedNetworkDiskSession;
     use crate::network::NETWORK_SESSION_MISSING_REASON;
     use crate::state::disk_runtime::DiskRuntime;
     use crate::state::disk_runtime::DiskRuntimeStatus;
     use crate::state::disk_runtime::DiskRuntimeStore;
+    use crate::state::network_client::NetworkClientEvent;
     use crate::state::network_client::NetworkClientState;
+    use crate::state::network_client::NetworkCreateDraft;
+    use crate::state::network_client::NetworkDiskKey;
+    use crate::state::network_client::NetworkDraftItem;
+    use crate::state::network_client::OpenedNetworkDiskSession;
 
     #[test]
     fn media_invalidation_marks_unmounted_runtime_invalid() {

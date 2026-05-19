@@ -15,16 +15,16 @@ use crate::state::network_client::NetworkClientState;
 use crate::state::network_client::NetworkDiskKey;
 use crate::state::network_client::OpenedNetworkDiskSession;
 
+use super::cleanup;
+use super::gateway_ops;
+use super::lock_network_client;
+use super::validation;
 use super::NETWORK_AUTH_FAILED_REASON;
 use super::NETWORK_AUTH_MISMATCH_REASON;
 use super::NETWORK_CONNECTION_UNAVAILABLE_REASON;
 use super::NETWORK_METADATA_FAILED_REASON;
 use super::NETWORK_OPEN_FAILED_REASON;
 use super::NETWORK_SESSION_MISSING_REASON;
-use super::cleanup;
-use super::gateway_ops;
-use super::lock_network_client;
-use super::validation;
 
 #[derive(Debug, Clone)]
 struct NetworkRescanTask {
@@ -32,6 +32,7 @@ struct NetworkRescanTask {
     server_addr: String,
     remote_disk_id: String,
     auth_material: String,
+    was_mounted: bool,
 }
 
 pub fn mount_network_disk(
@@ -196,6 +197,7 @@ pub fn prepare_deleted_network_runtime(
 }
 
 pub fn rescan_network_runtimes(
+    backend: &BackendContext,
     runtime_store: &mut DiskRuntimeStore,
     network_client_mutex: &Mutex<NetworkClientState>,
 ) {
@@ -211,6 +213,7 @@ pub fn rescan_network_runtimes(
                 server_addr: runtime.server_addr()?.to_string(),
                 remote_disk_id: runtime.remote_disk_id()?.to_string(),
                 auth_material: runtime.auth_material()?.to_string(),
+                was_mounted: runtime.mounted_target_id().is_some(),
             })
         })
         .collect::<Vec<_>>();
@@ -231,11 +234,20 @@ pub fn rescan_network_runtimes(
                 network_client.opened_session(&key)
             } {
                 if opened_session.session.ensure_usable().is_ok() {
-                    cleanup::set_network_runtime_unmounted(
-                        runtime_store,
-                        &task.local_disk_id,
-                        opened_session.metadata,
-                    );
+                    if task.was_mounted {
+                        cleanup::refresh_network_runtime(
+                            runtime_store,
+                            &task.local_disk_id,
+                            opened_session.metadata,
+                        );
+                    } else {
+                        cleanup::set_network_runtime_unmounted(
+                            backend,
+                            runtime_store,
+                            &task.local_disk_id,
+                            opened_session.metadata,
+                        );
+                    }
                     continue;
                 }
 
@@ -245,22 +257,26 @@ pub fn rescan_network_runtimes(
                 network_client.release_connection_after_session_close(&server_addr);
             }
 
-            let connection = match gateway_ops::acquire_connection(network_client_mutex, &server_addr) {
-                Ok(connection) => connection,
-                Err(_) => {
-                    cleanup::set_network_runtime_invalid(
-                        runtime_store,
-                        &task.local_disk_id,
-                        NETWORK_CONNECTION_UNAVAILABLE_REASON,
-                    );
-                    continue;
-                }
-            };
+            let connection =
+                match gateway_ops::acquire_connection(network_client_mutex, &server_addr) {
+                    Ok(connection) => connection,
+                    Err(_) => {
+                        cleanup::set_network_runtime_invalid(
+                            backend,
+                            runtime_store,
+                            &task.local_disk_id,
+                            NETWORK_CONNECTION_UNAVAILABLE_REASON,
+                        );
+                        continue;
+                    }
+                };
 
-            let auth = match gateway_ops::authenticate(Arc::clone(&connection), &task.auth_material) {
+            let auth = match gateway_ops::authenticate(Arc::clone(&connection), &task.auth_material)
+            {
                 Ok(auth) => auth,
                 Err(_) => {
                     cleanup::set_network_runtime_invalid(
+                        backend,
                         runtime_store,
                         &task.local_disk_id,
                         NETWORK_AUTH_FAILED_REASON,
@@ -272,6 +288,7 @@ pub fn rescan_network_runtimes(
             if auth.disk_id() != task.remote_disk_id {
                 let _ = connection.discard_auth_grant(auth.auth_id());
                 cleanup::set_network_runtime_invalid(
+                    backend,
                     runtime_store,
                     &task.local_disk_id,
                     NETWORK_AUTH_MISMATCH_REASON,
@@ -283,6 +300,7 @@ pub fn rescan_network_runtimes(
                 Ok(session) => session,
                 Err(_) => {
                     cleanup::set_network_runtime_invalid(
+                        backend,
                         runtime_store,
                         &task.local_disk_id,
                         NETWORK_OPEN_FAILED_REASON,
@@ -291,21 +309,24 @@ pub fn rescan_network_runtimes(
                 }
             };
 
-            let metadata =
-                match gateway_ops::describe_session(Arc::clone(&connection), session.session_id()) {
-                    Ok(metadata) => metadata,
-                    Err(_) => {
-                        let _ = cleanup::close_session_for_cleanup(&session);
-                        let mut network_client = lock_network_client(network_client_mutex);
-                        network_client.release_connection_after_session_close(&server_addr);
-                        cleanup::set_network_runtime_invalid(
-                            runtime_store,
-                            &task.local_disk_id,
-                            NETWORK_METADATA_FAILED_REASON,
-                        );
-                        continue;
-                    }
-                };
+            let metadata = match gateway_ops::describe_session(
+                Arc::clone(&connection),
+                session.session_id(),
+            ) {
+                Ok(metadata) => metadata,
+                Err(_) => {
+                    let _ = cleanup::close_session_for_cleanup(&session);
+                    let mut network_client = lock_network_client(network_client_mutex);
+                    network_client.release_connection_after_session_close(&server_addr);
+                    cleanup::set_network_runtime_invalid(
+                        backend,
+                        runtime_store,
+                        &task.local_disk_id,
+                        NETWORK_METADATA_FAILED_REASON,
+                    );
+                    continue;
+                }
+            };
 
             {
                 let mut network_client = lock_network_client(network_client_mutex);
@@ -315,7 +336,12 @@ pub fn rescan_network_runtimes(
                     metadata,
                 });
             }
-            cleanup::set_network_runtime_unmounted(runtime_store, &task.local_disk_id, metadata);
+            cleanup::set_network_runtime_unmounted(
+                backend,
+                runtime_store,
+                &task.local_disk_id,
+                metadata,
+            );
         }
     }
 }
@@ -327,9 +353,9 @@ fn map_mount_error(error: NetworkClientError) -> ApiError {
 #[cfg(test)]
 mod tests {
     use std::net::TcpListener;
-    use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
+    use std::sync::Arc;
     use std::sync::Mutex;
     use std::thread;
     use std::time::Duration;
@@ -371,7 +397,10 @@ mod tests {
     impl ConnectedSessionHarness {
         fn new(session_id: u64) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
-            let server_addr = listener.local_addr().expect("local addr should exist").to_string();
+            let server_addr = listener
+                .local_addr()
+                .expect("local addr should exist")
+                .to_string();
             let stop = Arc::new(AtomicBool::new(false));
             let stop_for_server = Arc::clone(&stop);
             let server = thread::spawn(move || {
@@ -382,7 +411,8 @@ mod tests {
                 }
             });
 
-            let connection = stage_connection(TransportEndpoint::new(server_addr.clone()), session_id);
+            let connection =
+                stage_connection(TransportEndpoint::new(server_addr.clone()), session_id);
             connection.connect().expect("connect should succeed");
 
             Self {
@@ -596,6 +626,7 @@ mod tests {
 
     #[test]
     fn rescan_network_runtimes_reuses_live_opened_session() {
+        let backend = BackendContext::default();
         let harness = ConnectedSessionHarness::new(31);
         let key = NetworkDiskKey::new(&harness.server_addr, "Q1w2E3r4T5y6U7i8");
         let opened_session = OpenedNetworkDiskSession {
@@ -620,12 +651,61 @@ mod tests {
             true,
         ));
 
-        rescan_network_runtimes(&mut runtime_store, &network_client_mutex);
+        rescan_network_runtimes(&backend, &mut runtime_store, &network_client_mutex);
 
         let runtime = runtime_store
             .find_runtime("disk-1")
             .expect("runtime should exist");
         assert_eq!(runtime.status(), &DiskRuntimeStatus::Unmounted);
+        assert_eq!(runtime.capacity_bytes(), 4096);
+        assert!(!runtime.read_only());
+
+        let network_client = network_client_mutex
+            .lock()
+            .expect("network client mutex should not be poisoned");
+        assert!(network_client.opened_session(&key).is_some());
+
+        harness.shutdown();
+    }
+
+    #[test]
+    fn rescan_network_runtimes_keeps_mounted_runtime_mounted_when_session_is_live() {
+        let backend = BackendContext::default();
+        let harness = ConnectedSessionHarness::new(32);
+        let key = NetworkDiskKey::new(&harness.server_addr, "Q1w2E3r4T5y6U7i8");
+        let opened_session = OpenedNetworkDiskSession {
+            key: key.clone(),
+            session: harness.session(32),
+            metadata: sample_metadata(),
+        };
+
+        let mut network_client = NetworkClientState::default();
+        network_client.insert_opened_session(opened_session);
+        let network_client_mutex = Mutex::new(network_client);
+
+        let mut runtime_store = DiskRuntimeStore::default();
+        let mut runtime = DiskRuntime::new_network(
+            "disk-1".to_string(),
+            "network-disk".to_string(),
+            false,
+            harness.server_addr.clone(),
+            "Q1w2E3r4T5y6U7i8".to_string(),
+            "claim-5".to_string(),
+            1,
+            true,
+        );
+        runtime.set_mounted(7);
+        runtime_store.insert_runtime(runtime);
+
+        rescan_network_runtimes(&backend, &mut runtime_store, &network_client_mutex);
+
+        let runtime = runtime_store
+            .find_runtime("disk-1")
+            .expect("runtime should exist");
+        assert_eq!(
+            runtime.status(),
+            &DiskRuntimeStatus::Mounted { target_id: 7 }
+        );
         assert_eq!(runtime.capacity_bytes(), 4096);
         assert!(!runtime.read_only());
 

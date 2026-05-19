@@ -353,6 +353,11 @@ impl DiskRuntime {
     }
 
     pub fn set_network_unmounted(&mut self, capacity_bytes: u64, read_only: bool) {
+        self.refresh_network_metadata(capacity_bytes, read_only);
+        self.state = DiskRuntimeStatus::Unmounted;
+    }
+
+    pub fn refresh_network_metadata(&mut self, capacity_bytes: u64, read_only: bool) {
         if let DiskMediaConfig::Network {
             capacity_bytes: current_capacity_bytes,
             read_only: current_read_only,
@@ -363,7 +368,6 @@ impl DiskRuntime {
             *current_read_only = read_only;
         }
         self.read_only = read_only;
-        self.state = DiskRuntimeStatus::Unmounted;
     }
 
     pub fn set_network_invalid(&mut self, reason: String) {

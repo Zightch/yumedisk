@@ -28,6 +28,6 @@ pub fn submit_network_draft(
 ) -> Result<(), ApiError> {
     network_runtime::sync_runtime_state(backend, runtime_store, network_client_mutex);
     draft_flow::submit_network_draft(backend, runtime_store, network_client_mutex, request)?;
-    runtime_flow::rescan_network_runtimes(runtime_store, network_client_mutex);
+    runtime_flow::rescan_network_runtimes(backend, runtime_store, network_client_mutex);
     Ok(())
 }
