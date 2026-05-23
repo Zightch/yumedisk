@@ -24,7 +24,7 @@ func TestWholeRuntimeMinimalClosure(t *testing.T) {
 	cfg := config.StorerConfig{
 		Role:            config.StorerRoleWhole,
 		StorageFilePath: rawPath,
-		ClaimCode:       material.ClaimCode,
+		ClaimCodeRW:     material.ClaimCode,
 		Whole:           config.StorerWholeConfig{ListenAddr: reserveLocalAddr(t)},
 		Storer:          config.StorerRemoteConfig{GatewayAddr: config.DefaultStorerGatewayAddr},
 	}
@@ -128,7 +128,7 @@ func TestWholeRuntimeSecondClientOpenIsRejectedButAuthIDStaysValid(t *testing.T)
 	cfg := config.StorerConfig{
 		Role:            config.StorerRoleWhole,
 		StorageFilePath: rawPath,
-		ClaimCode:       material.ClaimCode,
+		ClaimCodeRW:     material.ClaimCode,
 		Whole:           config.StorerWholeConfig{ListenAddr: reserveLocalAddr(t)},
 		Storer:          config.StorerRemoteConfig{GatewayAddr: config.DefaultStorerGatewayAddr},
 	}
@@ -235,7 +235,7 @@ func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
 	cfg := config.StorerConfig{
 		Role:            config.StorerRoleStorer,
 		StorageFilePath: rawPath,
-		ClaimCode:       material.ClaimCode,
+		ClaimCodeRW:     material.ClaimCode,
 		Whole:           config.StorerWholeConfig{ListenAddr: config.DefaultWholeListenAddr},
 		Storer: config.StorerRemoteConfig{
 			GatewayAddr:  gatewayAddr,

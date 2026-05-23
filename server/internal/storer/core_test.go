@@ -30,7 +30,7 @@ func TestNewCoreBuildsLocalDiskAndSessionPlane(t *testing.T) {
 	core, err := NewCore(config.StorerConfig{
 		Role:            config.StorerRoleWhole,
 		StorageFilePath: rawPath,
-		ClaimCode:       claimCode,
+		ClaimCodeRW:     claimCode,
 		Whole: config.StorerWholeConfig{
 			ListenAddr: "127.0.0.1:9736",
 		},

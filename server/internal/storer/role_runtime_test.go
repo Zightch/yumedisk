@@ -29,7 +29,7 @@ func TestNewRoleRuntimeBuildsWholeRuntimeOnTopOfCore(t *testing.T) {
 	runtime, err := NewRoleRuntime(config.StorerConfig{
 		Role:            config.StorerRoleWhole,
 		StorageFilePath: rawPath,
-		ClaimCode:       claimCode,
+		ClaimCodeRW:     claimCode,
 		Whole: config.StorerWholeConfig{
 			ListenAddr: "127.0.0.1:9736",
 		},
@@ -70,7 +70,7 @@ func TestNewRoleRuntimeBuildsStorerRuntimeOnTopOfCore(t *testing.T) {
 	runtime, err := NewRoleRuntime(config.StorerConfig{
 		Role:            config.StorerRoleStorer,
 		StorageFilePath: rawPath,
-		ClaimCode:       claimCode,
+		ClaimCodeRW:     claimCode,
 		Whole: config.StorerWholeConfig{
 			ListenAddr: config.DefaultWholeListenAddr,
 		},

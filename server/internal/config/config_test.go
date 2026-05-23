@@ -19,7 +19,7 @@ func TestLoadOrInitStorerCreatesWholeConfigOnFirstRun(t *testing.T) {
 	var output bytes.Buffer
 	cfg, initialized, err := LoadOrInitStorer(
 		configPath,
-		strings.NewReader("\nstorage/test-disk.img\n127.0.0.1:9810\n"),
+		strings.NewReader("\nstorage/test-disk.img\n127.0.0.1:9810\n\n"),
 		&output,
 	)
 	if err != nil {
@@ -38,8 +38,11 @@ func TestLoadOrInitStorerCreatesWholeConfigOnFirstRun(t *testing.T) {
 	if cfg.StorageFilePath != "storage/test-disk.img" {
 		t.Fatalf("unexpected storage file path: %q", cfg.StorageFilePath)
 	}
-	if _, err := auth.ParseClaimCode(cfg.ClaimCode); err != nil {
-		t.Fatalf("generated claim code is invalid: %v", err)
+	if _, err := auth.ParseClaimCode(cfg.ClaimCodeRW); err != nil {
+		t.Fatalf("generated claim_code_rw is invalid: %v", err)
+	}
+	if cfg.ClaimCodeRO != "" {
+		t.Fatalf("expected claim_code_ro disabled by default, got %q", cfg.ClaimCodeRO)
 	}
 
 	saved, err := os.ReadFile(configPath)
@@ -62,30 +65,88 @@ func TestLoadOrInitStorerCreatesWholeConfigOnFirstRun(t *testing.T) {
 	if !strings.Contains(savedText, `storage_file_path = "storage/test-disk.img"`) {
 		t.Fatalf("generated config missing storage_file_path: %s", savedText)
 	}
-	if !strings.Contains(savedText, `claim_code = "`) {
-		t.Fatalf("generated config missing claim_code: %s", savedText)
+	if !strings.Contains(savedText, `claim_code_rw = "`) {
+		t.Fatalf("generated config missing claim_code_rw: %s", savedText)
+	}
+	if !strings.Contains(savedText, `claim_code_ro = ""`) {
+		t.Fatalf("generated config missing claim_code_ro: %s", savedText)
 	}
 
 	printed := output.String()
-	if !strings.Contains(printed, "generated claim_code = ") {
-		t.Fatalf("expected init output to print claim code once, got: %q", printed)
+	if !strings.Contains(printed, "generated claim_code_rw = ") {
+		t.Fatalf("expected init output to print claim_code_rw once, got: %q", printed)
+	}
+	if strings.Contains(printed, "generated claim_code_ro = ") {
+		t.Fatalf("expected no claim_code_ro output when disabled, got: %q", printed)
 	}
 }
 
-func TestLoadOrInitStorerUsesExistingConfigWithoutReprintingClaimCode(t *testing.T) {
+func TestLoadOrInitStorerCanGenerateReadOnlyExport(t *testing.T) {
 	t.Parallel()
 
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.toml")
-	claimCode, err := auth.GenerateClaimCode(DefaultClaimSecretLen)
+
+	var output bytes.Buffer
+	cfg, initialized, err := LoadOrInitStorer(
+		configPath,
+		strings.NewReader("storer\ndata/shared.img\n127.0.0.1:9836\ngateway-token\ny\n"),
+		&output,
+	)
 	if err != nil {
-		t.Fatalf("generate claim code: %v", err)
+		t.Fatalf("LoadOrInitStorer returned error: %v", err)
+	}
+	if !initialized {
+		t.Fatal("expected first run to initialize config")
+	}
+	if cfg.Role != StorerRoleStorer {
+		t.Fatalf("unexpected role: %q", cfg.Role)
+	}
+	if cfg.ClaimCodeRO == "" {
+		t.Fatal("expected claim_code_ro to be generated")
+	}
+	diskIDRW, err := cfg.DiskIDRW()
+	if err != nil {
+		t.Fatalf("resolve disk_id_rw: %v", err)
+	}
+	diskIDRO, ok, err := cfg.DiskIDRO()
+	if err != nil {
+		t.Fatalf("resolve disk_id_ro: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected disk_id_ro")
+	}
+	if diskIDRW == diskIDRO {
+		t.Fatalf("expected distinct disk ids, got rw=%q ro=%q", diskIDRW, diskIDRO)
+	}
+	printed := output.String()
+	if !strings.Contains(printed, "generated claim_code_rw = ") {
+		t.Fatalf("expected init output to print claim_code_rw, got: %q", printed)
+	}
+	if !strings.Contains(printed, "generated claim_code_ro = ") {
+		t.Fatalf("expected init output to print claim_code_ro, got: %q", printed)
+	}
+}
+
+func TestLoadOrInitStorerUsesExistingConfigWithoutReprintingClaimCodes(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	configPath := filepath.Join(tempDir, "config.toml")
+	claimCodeRW, err := auth.GenerateClaimCode(DefaultClaimSecretLen)
+	if err != nil {
+		t.Fatalf("generate claim_code_rw: %v", err)
+	}
+	claimCodeRO, err := auth.GenerateClaimCode(DefaultClaimSecretLen)
+	if err != nil {
+		t.Fatalf("generate claim_code_ro: %v", err)
 	}
 
 	cfg := StorerConfig{
 		Role:            StorerRoleWhole,
 		StorageFilePath: "data/existing.img",
-		ClaimCode:       claimCode,
+		ClaimCodeRW:     claimCodeRW,
+		ClaimCodeRO:     claimCodeRO,
 		Whole: StorerWholeConfig{
 			ListenAddr: "127.0.0.1:9736",
 		},
@@ -118,15 +179,20 @@ func TestLoadStorerParsesSectionedRoleConfigWithInlineComments(t *testing.T) {
 
 	tempDir := t.TempDir()
 	configPath := filepath.Join(tempDir, "config.toml")
-	claimCode, err := auth.GenerateClaimCode(DefaultClaimSecretLen)
+	claimCodeRW, err := auth.GenerateClaimCode(DefaultClaimSecretLen)
 	if err != nil {
-		t.Fatalf("generate claim code: %v", err)
+		t.Fatalf("generate claim_code_rw: %v", err)
+	}
+	claimCodeRO, err := auth.GenerateClaimCode(DefaultClaimSecretLen)
+	if err != nil {
+		t.Fatalf("generate claim_code_ro: %v", err)
 	}
 
 	content := strings.Join([]string{
 		`role = "storer" # whole | storer`,
 		`storage_file_path = "data/disk.img"`,
-		`claim_code = "` + claimCode + `"`,
+		`claim_code_rw = "` + claimCodeRW + `"`,
+		`claim_code_ro = "` + claimCodeRO + `"`,
 		``,
 		`[whole]`,
 		`listen_addr = "127.0.0.1:9736"`,
@@ -153,6 +219,38 @@ func TestLoadStorerParsesSectionedRoleConfigWithInlineComments(t *testing.T) {
 	}
 	if cfg.Storer.GatewayToken != "dev-gateway-token" {
 		t.Fatalf("unexpected gateway token: %q", cfg.Storer.GatewayToken)
+	}
+	if cfg.ClaimCodeRW != claimCodeRW {
+		t.Fatalf("unexpected claim_code_rw: %q", cfg.ClaimCodeRW)
+	}
+	if cfg.ClaimCodeRO != claimCodeRO {
+		t.Fatalf("unexpected claim_code_ro: %q", cfg.ClaimCodeRO)
+	}
+}
+
+func TestStorerConfigValidateRejectsDuplicateDiskIDs(t *testing.T) {
+	t.Parallel()
+
+	claimCodeRW, err := auth.GenerateClaimCode(DefaultClaimSecretLen)
+	if err != nil {
+		t.Fatalf("generate claim_code_rw: %v", err)
+	}
+
+	cfg := StorerConfig{
+		Role:            StorerRoleWhole,
+		StorageFilePath: "data/disk.img",
+		ClaimCodeRW:     claimCodeRW,
+		ClaimCodeRO:     claimCodeRW,
+		Whole: StorerWholeConfig{
+			ListenAddr: DefaultWholeListenAddr,
+		},
+	}
+	err = cfg.Validate()
+	if err == nil {
+		t.Fatal("expected duplicate disk ids to fail validation")
+	}
+	if !strings.Contains(err.Error(), "claim_code_ro must derive a different disk_id") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

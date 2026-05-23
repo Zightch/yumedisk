@@ -46,7 +46,8 @@ type StorerRemoteConfig struct {
 type StorerConfig struct {
 	Role            StorerRole
 	StorageFilePath string
-	ClaimCode       string
+	ClaimCodeRW     string
+	ClaimCodeRO     string
 	Whole           StorerWholeConfig
 	Storer          StorerRemoteConfig
 }
@@ -118,7 +119,8 @@ func LoadStorer(path string) (StorerConfig, error) {
 	cfg := StorerConfig{
 		Role:            StorerRole(getString(values, "role", "")),
 		StorageFilePath: getString(values, "storage_file_path", ""),
-		ClaimCode:       getString(values, "claim_code", ""),
+		ClaimCodeRW:     getString(values, "claim_code_rw", ""),
+		ClaimCodeRO:     getString(values, "claim_code_ro", ""),
 		Whole: StorerWholeConfig{
 			ListenAddr: getString(values, "whole.listen_addr", DefaultWholeListenAddr),
 		},
@@ -163,10 +165,11 @@ func SaveStorer(path string, cfg StorerConfig) error {
 	}
 
 	content := fmt.Sprintf(
-		"role = %q\nstorage_file_path = %q\nclaim_code = %q\n\n[whole]\nlisten_addr = %q\n\n[storer]\ngateway_addr = %q\ngateway_token = %q\n",
+		"role = %q\nstorage_file_path = %q\nclaim_code_rw = %q\nclaim_code_ro = %q\n\n[whole]\nlisten_addr = %q\n\n[storer]\ngateway_addr = %q\ngateway_token = %q\n",
 		string(cfg.Role),
 		cfg.StorageFilePath,
-		cfg.ClaimCode,
+		cfg.ClaimCodeRW,
+		cfg.ClaimCodeRO,
 		cfg.Whole.ListenAddr,
 		cfg.Storer.GatewayAddr,
 		cfg.Storer.GatewayToken,
@@ -207,8 +210,18 @@ func (c StorerConfig) Validate() error {
 	if strings.TrimSpace(c.StorageFilePath) == "" {
 		return errors.New("storage_file_path must not be empty")
 	}
-	if _, err := auth.ParseClaimCode(c.ClaimCode); err != nil {
-		return fmt.Errorf("invalid claim_code: %w", err)
+	materialRW, err := auth.ParseClaimCode(c.ClaimCodeRW)
+	if err != nil {
+		return fmt.Errorf("invalid claim_code_rw: %w", err)
+	}
+	if strings.TrimSpace(c.ClaimCodeRO) != "" {
+		materialRO, err := auth.ParseClaimCode(c.ClaimCodeRO)
+		if err != nil {
+			return fmt.Errorf("invalid claim_code_ro: %w", err)
+		}
+		if materialRO.DiskID == materialRW.DiskID {
+			return errors.New("claim_code_ro must derive a different disk_id")
+		}
 	}
 
 	switch c.Role {
@@ -225,6 +238,37 @@ func (c StorerConfig) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (c StorerConfig) ClaimMaterialRW() (auth.Material, error) {
+	return auth.ParseClaimCode(c.ClaimCodeRW)
+}
+
+func (c StorerConfig) ClaimMaterialRO() (auth.Material, bool, error) {
+	if strings.TrimSpace(c.ClaimCodeRO) == "" {
+		return auth.Material{}, false, nil
+	}
+	material, err := auth.ParseClaimCode(c.ClaimCodeRO)
+	if err != nil {
+		return auth.Material{}, false, err
+	}
+	return material, true, nil
+}
+
+func (c StorerConfig) DiskIDRW() (string, error) {
+	material, err := c.ClaimMaterialRW()
+	if err != nil {
+		return "", err
+	}
+	return material.DiskID, nil
+}
+
+func (c StorerConfig) DiskIDRO() (string, bool, error) {
+	material, ok, err := c.ClaimMaterialRO()
+	if err != nil || !ok {
+		return "", ok, err
+	}
+	return material.DiskID, true, nil
 }
 
 func (c GatewayConfig) Validate() error {
@@ -257,15 +301,15 @@ func promptAndCreateStorer(path string, stdin io.Reader, stdout io.Writer) (Stor
 		return StorerConfig{}, err
 	}
 
-	claimCode, err := auth.GenerateClaimCode(DefaultClaimSecretLen)
+	claimCodeRW, err := auth.GenerateClaimCode(DefaultClaimSecretLen)
 	if err != nil {
-		return StorerConfig{}, fmt.Errorf("generate claim code: %w", err)
+		return StorerConfig{}, fmt.Errorf("generate claim_code_rw: %w", err)
 	}
 
 	cfg := StorerConfig{
 		Role:            role,
 		StorageFilePath: storageFilePath,
-		ClaimCode:       claimCode,
+		ClaimCodeRW:     claimCodeRW,
 		Whole: StorerWholeConfig{
 			ListenAddr: DefaultWholeListenAddr,
 		},
@@ -291,11 +335,25 @@ func promptAndCreateStorer(path string, stdin io.Reader, stdout io.Writer) (Stor
 		}
 	}
 
+	enableRO, err := promptYesNo(reader, stdout, "enable_read_only_export", false)
+	if err != nil {
+		return StorerConfig{}, err
+	}
+	if enableRO {
+		cfg.ClaimCodeRO, err = auth.GenerateClaimCode(DefaultClaimSecretLen)
+		if err != nil {
+			return StorerConfig{}, fmt.Errorf("generate claim_code_ro: %w", err)
+		}
+	}
+
 	if err := SaveStorer(path, cfg); err != nil {
 		return StorerConfig{}, err
 	}
 
-	fmt.Fprintf(stdout, "generated claim_code = %s\n", cfg.ClaimCode)
+	fmt.Fprintf(stdout, "generated claim_code_rw = %s\n", cfg.ClaimCodeRW)
+	if strings.TrimSpace(cfg.ClaimCodeRO) != "" {
+		fmt.Fprintf(stdout, "generated claim_code_ro = %s\n", cfg.ClaimCodeRO)
+	}
 	return cfg, nil
 }
 
@@ -360,6 +418,32 @@ func promptRequiredLine(reader *bufio.Reader, stdout io.Writer, key string) (str
 		return "", fmt.Errorf("%s must not be empty", key)
 	}
 	return line, nil
+}
+
+func promptYesNo(reader *bufio.Reader, stdout io.Writer, key string, fallback bool) (bool, error) {
+	fallbackText := "n"
+	if fallback {
+		fallbackText = "y"
+	}
+	if _, err := fmt.Fprintf(stdout, "%s [%s]: ", key, fallbackText); err != nil {
+		return false, err
+	}
+	line, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	line = strings.TrimSpace(strings.ToLower(line))
+	if line == "" {
+		return fallback, nil
+	}
+	switch line {
+	case "y", "yes":
+		return true, nil
+	case "n", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("%s must be y/yes or n/no", key)
+	}
 }
 
 func loadKeyValues(path string) (map[string]string, error) {

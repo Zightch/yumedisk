@@ -20,9 +20,9 @@ type localDisk struct {
 }
 
 func openLocalDisk(cfg config.StorerConfig) (*localDisk, error) {
-	material, err := auth.ParseClaimCode(cfg.ClaimCode)
+	material, err := cfg.ClaimMaterialRW()
 	if err != nil {
-		return nil, fmt.Errorf("parse claim code: %w", err)
+		return nil, fmt.Errorf("parse claim_code_rw: %w", err)
 	}
 
 	storage, err := filestorage.Open(cfg.StorageFilePath, false)

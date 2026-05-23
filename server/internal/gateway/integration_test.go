@@ -55,7 +55,7 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 	storerRuntime, err := storer.NewRoleRuntime(config.StorerConfig{
 		Role:            config.StorerRoleStorer,
 		StorageFilePath: rawPath,
-		ClaimCode:       claimCode,
+		ClaimCodeRW:     claimCode,
 		Whole:           config.StorerWholeConfig{ListenAddr: config.DefaultWholeListenAddr},
 		Storer: config.StorerRemoteConfig{
 			GatewayAddr:  storerListenAddr,
