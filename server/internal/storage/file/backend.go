@@ -16,11 +16,17 @@ var (
 )
 
 type Backend struct {
-	mu       sync.Mutex
-	file     *os.File
+	mu       sync.RWMutex
+	file     fileHandle
 	path     string
 	readOnly bool
 	size     uint64
+}
+
+type fileHandle interface {
+	ReadAt(p []byte, off int64) (n int, err error)
+	WriteAt(p []byte, off int64) (n int, err error)
+	Close() error
 }
 
 func Open(path string, readOnly bool) (*Backend, error) {
@@ -90,8 +96,8 @@ func (b *Backend) ReadAt(offset uint64, dst []byte) error {
 		return err
 	}
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 
 	if b.file == nil {
 		return ErrIOFailed
