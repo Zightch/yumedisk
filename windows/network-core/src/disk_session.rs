@@ -5,11 +5,12 @@ use std::sync::atomic::Ordering;
 
 use super::error::NetworkClientError;
 use super::gateway_connection::GatewayConnection;
-use super::protocol_client::CloseRequest;
 use super::protocol_client::ProtocolClientError;
 use super::protocol_client::ProtocolStatusCode;
 use super::protocol_client::ReadAtRequest;
 use super::protocol_client::ReadAtResponse;
+use super::protocol_client::SESSION_CLOSE_REASON_NORMAL_CLOSE;
+use super::protocol_client::SessionCloseNotice;
 use super::protocol_client::WriteAtRequest;
 
 const STATE_OPEN: u8 = 0;
@@ -106,27 +107,21 @@ impl DiskSession {
             return Ok(());
         }
 
-        if let Err(error) = self.ensure_usable() {
-            if matches!(error, NetworkClientError::SessionUnavailable) {
-                self.mark_closed();
-                return Ok(());
-            }
-            return Err(error);
+        let should_send_notice = match self.ensure_usable() {
+            Ok(()) => true,
+            Err(error) if matches!(error, NetworkClientError::SessionUnavailable) => false,
+            Err(_) => false,
+        };
+
+        if should_send_notice {
+            let _ = self.connection.send_session_close_notice(SessionCloseNotice {
+                session_id: self.session_id,
+                reason_code: SESSION_CLOSE_REASON_NORMAL_CLOSE,
+            });
         }
 
-        let request_id = self.connection.allocate_request_id();
-        let payload = CloseRequest {
-            session_id: self.session_id,
-        }
-        .encode_request(request_id)
-        .map_err(NetworkClientError::Protocol)?;
-
-        let response_payload = self.connection.send_request_and_wait(payload)?;
-        let close_result =
-            CloseRequest::decode_response(&response_payload, request_id, self.session_id)
-                .map_err(map_data_plane_error);
         self.mark_closed();
-        close_result
+        Ok(())
     }
 
     pub fn read_at(&self, offset: u64, buffer: &mut [u8]) -> Result<(), NetworkClientError> {
@@ -242,6 +237,7 @@ mod tests {
     use crate::network::ProtocolClientError;
     use crate::network::ProtocolHeader;
     use crate::network::ProtocolStatusCode;
+    use crate::network::SESSION_CLOSE_REASON_NORMAL_CLOSE;
     use crate::network::TransportEndpoint;
     use crate::network::expect_client_hello;
     use crate::network::transport_client::MAX_FRAME_PAYLOAD_BYTES;
@@ -386,7 +382,7 @@ mod tests {
     }
 
     #[test]
-    fn disk_session_close_uses_close_request_and_marks_closed() {
+    fn disk_session_close_sends_notice_and_marks_closed() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
         let address = listener.local_addr().expect("local addr should succeed");
 
@@ -395,26 +391,40 @@ mod tests {
             expect_client_hello(&mut stream);
             let mut buffer = vec![0u8; MAX_FRAME_PAYLOAD_BYTES];
 
-            let close_request = read_frame_into(&mut stream, &mut buffer)
-                .expect("close request should succeed")
-                .to_vec();
-            let close_header =
-                crate::network::parse_request_header(&close_request).expect("parse close request");
-            assert_eq!(close_header.op_code, ClientOperationCode::Close);
-            assert!(close_request[HEADER_SIZE..].is_empty());
-
-            let close_response = ProtocolHeader {
-                protocol_version: PROTOCOL_VERSION,
-                header_len: HEADER_SIZE as u8,
-                op_code: ClientOperationCode::Close,
-                flags: FLAG_RESPONSE,
-                status_code: ProtocolStatusCode::Ok,
-                reserved: 0,
-                request_id: close_header.request_id,
-                session_id: close_header.session_id,
+            loop {
+                let payload = read_frame_into(&mut stream, &mut buffer)
+                    .expect("read frame should succeed")
+                    .to_vec();
+                let header = crate::network::parse_header(&payload).expect("parse frame header");
+                match header.op_code {
+                    ClientOperationCode::ConnHeartbeat => {
+                        let response = ProtocolHeader {
+                            protocol_version: PROTOCOL_VERSION,
+                            header_len: HEADER_SIZE as u8,
+                            op_code: ClientOperationCode::ConnHeartbeat,
+                            flags: FLAG_RESPONSE,
+                            status_code: ProtocolStatusCode::Ok,
+                            reserved: 0,
+                            request_id: header.request_id,
+                            session_id: 0,
+                        }
+                        .encode(&[]);
+                        write_frame(&mut stream, &response)
+                            .expect("write heartbeat response should succeed");
+                    }
+                    ClientOperationCode::SessionCloseNotice => {
+                        assert_eq!(header.flags, crate::network::FLAG_NOTICE);
+                        assert_eq!(header.request_id, 0);
+                        assert_eq!(header.session_id, 77);
+                        assert_eq!(
+                            &payload[HEADER_SIZE..],
+                            &SESSION_CLOSE_REASON_NORMAL_CLOSE.to_be_bytes()
+                        );
+                        return;
+                    }
+                    other => panic!("unexpected op code: {other:?}"),
+                }
             }
-            .encode(&[]);
-            write_frame(&mut stream, &close_response).expect("write close response");
         });
 
         let connection = staged_connection(TransportEndpoint::new(address.to_string()), 77);
@@ -423,9 +433,10 @@ mod tests {
 
         session.close().expect("close should succeed");
         assert!(session.is_closed());
+        assert_eq!(connection.pending_request_count(), 0);
 
-        connection.close().expect("close should succeed");
         server.join().expect("server should join");
+        connection.close().expect("close should succeed");
     }
 
     #[test]

@@ -18,6 +18,12 @@ pub const SESSION_CLOSE_NOTICE_BYTES: usize = 2;
 pub const READ_WRITE_FIXED_BODY_BYTES: usize = 12;
 pub const SESSION_FLAG_READ_ONLY: u16 = 1 << 0;
 pub const ABSOLUTE_MAX_IO_BYTES: u32 = 65_500;
+pub const SESSION_CLOSE_REASON_ROUTE_LOST: u16 = 1;
+pub const SESSION_CLOSE_REASON_GATEWAY_SHUTDOWN: u16 = 2;
+pub const SESSION_CLOSE_REASON_UPSTREAM_SESSION_CLOSED: u16 = 3;
+pub const SESSION_CLOSE_REASON_CLIENT_CONNECTION_REPLACED: u16 = 4;
+pub const SESSION_CLOSE_REASON_NORMAL_CLOSE: u16 = 5;
+pub const SESSION_CLOSE_REASON_PROTOCOL_ERROR: u16 = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -30,7 +36,6 @@ pub enum ClientOperationCode {
     ReadAt = 0x10,
     WriteAt = 0x11,
     ConnHeartbeat = 0x12,
-    Close = 0x13,
 }
 
 impl ClientOperationCode {
@@ -44,7 +49,6 @@ impl ClientOperationCode {
             0x10 => Ok(Self::ReadAt),
             0x11 => Ok(Self::WriteAt),
             0x12 => Ok(Self::ConnHeartbeat),
-            0x13 => Ok(Self::Close),
             actual => Err(ProtocolClientError::UnexpectedOpCode {
                 expected: None,
                 actual,
@@ -251,11 +255,6 @@ pub struct ConnHeartbeatRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnHeartbeatResponse;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CloseRequest {
-    pub session_id: u64,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionCloseNotice {
@@ -616,34 +615,26 @@ impl ConnHeartbeatResponse {
     }
 }
 
-impl CloseRequest {
-    pub fn encode_request(&self, request_id: u64) -> Result<Vec<u8>, ProtocolClientError> {
-        validate_non_zero_session_id(self.session_id)?;
-        Ok(
-            ProtocolHeader::new_request(ClientOperationCode::Close, request_id, self.session_id)?
-                .encode(&[]),
-        )
-    }
-
-    pub fn decode_response(
-        payload: &[u8],
-        expected_request_id: u64,
-        expected_session_id: u64,
-    ) -> Result<(), ProtocolClientError> {
-        let (_, body) = decode_success_response(
-            payload,
-            ClientOperationCode::Close,
-            expected_request_id,
-            Some(expected_session_id),
-        )?;
-        if !body.is_empty() {
-            return Err(ProtocolClientError::InvalidBody("close_response_body"));
-        }
-        Ok(())
-    }
-}
-
 impl SessionCloseNotice {
+    pub fn encode_notice(&self) -> Result<Vec<u8>, ProtocolClientError> {
+        validate_non_zero_session_id(self.session_id)?;
+        if self.reason_code == 0 {
+            return Err(ProtocolClientError::InvalidBody("session_close_reason_code"));
+        }
+
+        Ok(ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::SessionCloseNotice,
+            flags: FLAG_NOTICE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 0,
+            session_id: self.session_id,
+        }
+        .encode(&self.reason_code.to_be_bytes()))
+    }
+
     pub fn decode_notice(payload: &[u8]) -> Result<Self, ProtocolClientError> {
         let header = parse_header(payload)?;
         if header.flags != FLAG_NOTICE {
@@ -880,7 +871,6 @@ mod tests {
     use super::AuthStartRequest;
     use super::AuthStartResponse;
     use super::ClientOperationCode;
-    use super::CloseRequest;
     use super::ConnHeartbeatRequest;
     use super::ConnHeartbeatResponse;
     use super::FLAG_NOTICE;
@@ -893,6 +883,8 @@ mod tests {
     use super::ProtocolStatusCode;
     use super::ReadAtRequest;
     use super::ReadAtResponse;
+    use super::SESSION_CLOSE_NOTICE_BYTES;
+    use super::SESSION_CLOSE_REASON_NORMAL_CLOSE;
     use super::SessionCloseNotice;
     use super::SessionDescribeRequest;
     use super::SessionDescribeResponse;
@@ -1065,7 +1057,7 @@ mod tests {
     }
 
     #[test]
-    fn conn_heartbeat_and_close_follow_documented_shapes() {
+    fn conn_heartbeat_and_session_close_notice_follow_documented_shapes() {
         let heartbeat_payload = ConnHeartbeatRequest
             .encode_request(21)
             .expect("heartbeat encode should succeed");
@@ -1090,10 +1082,21 @@ mod tests {
         ConnHeartbeatResponse::decode_response(&response_payload, 21)
             .expect("heartbeat decode should succeed");
 
-        let close_payload = CloseRequest { session_id: 7 }
-            .encode_request(22)
-            .expect("close encode should succeed");
-        assert_eq!(close_payload.len(), HEADER_SIZE);
+        let close_notice = SessionCloseNotice {
+            session_id: 7,
+            reason_code: SESSION_CLOSE_REASON_NORMAL_CLOSE,
+        }
+        .encode_notice()
+        .expect("notice encode should succeed");
+        assert_eq!(close_notice.len(), HEADER_SIZE + SESSION_CLOSE_NOTICE_BYTES);
+        assert_eq!(close_notice[2], ClientOperationCode::SessionCloseNotice as u8);
+        assert_eq!(close_notice[3], FLAG_NOTICE);
+        assert_eq!(&close_notice[8..16], &0u64.to_be_bytes());
+        assert_eq!(&close_notice[16..24], &7u64.to_be_bytes());
+        assert_eq!(
+            &close_notice[HEADER_SIZE..],
+            &SESSION_CLOSE_REASON_NORMAL_CLOSE.to_be_bytes()
+        );
     }
 
     #[test]

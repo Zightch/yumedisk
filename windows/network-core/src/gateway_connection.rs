@@ -16,6 +16,7 @@ use super::hello_client::perform_client_hello;
 use super::protocol_client::ClientOperationCode;
 use super::protocol_client::ConnHeartbeatRequest;
 use super::protocol_client::ConnHeartbeatResponse;
+use super::protocol_client::ProtocolClientError;
 use super::protocol_client::SessionCloseNotice;
 use super::protocol_client::parse_header;
 use super::protocol_client::parse_request_header;
@@ -202,6 +203,23 @@ impl GatewayConnection {
         payload: Vec<u8>,
     ) -> Result<Vec<u8>, NetworkClientError> {
         self.send_request(payload)?.recv()
+    }
+
+    pub(crate) fn send_session_close_notice(
+        &self,
+        notice: SessionCloseNotice,
+    ) -> Result<(), NetworkClientError> {
+        let payload = notice.encode_notice().map_err(NetworkClientError::Protocol)?;
+        let header = parse_header(&payload).map_err(NetworkClientError::Protocol)?;
+        if !header.is_notice() {
+            return Err(NetworkClientError::Protocol(
+                ProtocolClientError::UnexpectedFlags {
+                    expected: super::protocol_client::FLAG_NOTICE,
+                    actual: header.flags,
+                },
+            ));
+        }
+        self.transport.send_payload(payload).map_err(map_transport_error)
     }
 
     pub(crate) fn pending_request_count(&self) -> usize {
@@ -541,6 +559,7 @@ mod tests {
     use crate::network::PROTOCOL_VERSION;
     use crate::network::ProtocolHeader;
     use crate::network::ProtocolStatusCode;
+    use crate::network::SessionCloseNotice;
     use crate::network::TransportEndpoint;
     use crate::network::expect_client_hello;
     use crate::network::transport_client::MAX_FRAME_PAYLOAD_BYTES;
@@ -681,7 +700,7 @@ mod tests {
         let request_one = ProtocolHeader::new_request(ClientOperationCode::ConnHeartbeat, 1, 0)
             .expect("request one header")
             .encode(&[]);
-        let request_two = ProtocolHeader::new_request(ClientOperationCode::Close, 2, 7)
+        let request_two = ProtocolHeader::new_request(ClientOperationCode::SessionDescribe, 2, 7)
             .expect("request two header")
             .encode(&[]);
 
@@ -903,5 +922,66 @@ mod tests {
             (77, 1)
         );
         assert!(!connection.is_session_active(77));
+    }
+
+    #[test]
+    fn gateway_connection_sends_session_close_notice_without_pending_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
+        let address = listener.local_addr().expect("local_addr should succeed");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            expect_client_hello(&mut stream);
+            let mut buffer = vec![0u8; MAX_FRAME_PAYLOAD_BYTES];
+
+            loop {
+                let payload = read_frame_into(&mut stream, &mut buffer)
+                    .expect("read frame should succeed")
+                    .to_vec();
+                let header = crate::network::parse_header(&payload).expect("parse frame header");
+                match header.op_code {
+                    ClientOperationCode::ConnHeartbeat => {
+                        let response = ProtocolHeader {
+                            protocol_version: PROTOCOL_VERSION,
+                            header_len: crate::network::HEADER_SIZE as u8,
+                            op_code: ClientOperationCode::ConnHeartbeat,
+                            flags: FLAG_RESPONSE,
+                            status_code: ProtocolStatusCode::Ok,
+                            reserved: 0,
+                            request_id: header.request_id,
+                            session_id: 0,
+                        }
+                        .encode(&[]);
+                        write_frame(&mut stream, &response)
+                            .expect("write heartbeat response should succeed");
+                    }
+                    ClientOperationCode::SessionCloseNotice => {
+                        assert_eq!(header.flags, FLAG_NOTICE);
+                        assert_eq!(header.request_id, 0);
+                        assert_eq!(header.session_id, 41);
+                        assert_eq!(
+                            &payload[crate::network::HEADER_SIZE..],
+                            &5u16.to_be_bytes()
+                        );
+                        return;
+                    }
+                    other => panic!("unexpected op code: {other:?}"),
+                }
+            }
+        });
+
+        let connection = GatewayConnection::new(TransportEndpoint::new(address.to_string()));
+        connection.connect().expect("connect should succeed");
+        connection
+            .send_session_close_notice(SessionCloseNotice {
+                session_id: 41,
+                reason_code: 5,
+            })
+            .expect("notice send should succeed");
+
+        assert_eq!(connection.pending_request_count(), 0);
+
+        server.join().expect("server should join");
+        let _ = connection.close();
     }
 }
