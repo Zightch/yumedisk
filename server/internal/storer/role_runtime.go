@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,10 +17,11 @@ type Runtime interface {
 }
 
 const storerLinkHeartbeatTimeout = 15 * time.Second
+const storerLinkReconnectInterval = 5 * time.Second
 
 type StorerRuntime struct {
-	linkRuntime *storegatewaylink.LinkRuntime
-	nextConn    atomic.Uint64
+	links    []*storerLinkWorker
+	nextConn atomic.Uint64
 }
 
 func NewStorerRuntime(cfg config.StorerConfig, core *Core) (*StorerRuntime, error) {
@@ -29,12 +31,13 @@ func NewStorerRuntime(cfg config.StorerConfig, core *Core) (*StorerRuntime, erro
 	if core == nil {
 		return nil, fmt.Errorf("storer runtime requires non-nil core")
 	}
+
 	rwExport, ok := core.Export(ExportIDRW)
 	if !ok {
 		return nil, fmt.Errorf("storer runtime requires rw export")
 	}
 
-	linkRuntime, err := storegatewaylink.NewLinkRuntime(
+	rwLinkRuntime, err := storegatewaylink.NewLinkRuntime(
 		cfg.Storer.GatewayAddr,
 		rwExport.GatewayRegisterInfo(cfg.Storer.GatewayToken),
 		rwExport.SessionService(),
@@ -44,21 +47,41 @@ func NewStorerRuntime(cfg config.StorerConfig, core *Core) (*StorerRuntime, erro
 		return nil, err
 	}
 
+	links := []*storerLinkWorker{
+		newStorerLinkWorker("rw", rwLinkRuntime),
+	}
+
+	if roExport, ok := core.Export(ExportIDRO); ok {
+		roLinkRuntime, err := storegatewaylink.NewLinkRuntime(
+			cfg.Storer.GatewayAddr,
+			roExport.GatewayRegisterInfo(cfg.Storer.GatewayToken),
+			roExport.SessionService(),
+			storerLinkHeartbeatTimeout,
+		)
+		if err != nil {
+			return nil, err
+		}
+		links = append(links, newStorerLinkWorker("ro", roLinkRuntime))
+	}
+
 	return &StorerRuntime{
-		linkRuntime: linkRuntime,
+		links: links,
 	}, nil
 }
 
 func (r *StorerRuntime) Run(ctx context.Context) error {
-	connectionID := r.nextConn.Add(1)
-	runErr := r.linkRuntime.Run(ctx, connectionID)
-	if ctx.Err() != nil {
-		return nil
+	var wg sync.WaitGroup
+	for _, link := range r.links {
+		wg.Add(1)
+		go func(link *storerLinkWorker) {
+			defer wg.Done()
+			link.Run(ctx, &r.nextConn)
+		}(link)
 	}
-	if runErr != nil {
-		log.Printf("storer gateway connection %d ended: %v", connectionID, runErr)
-	}
-	return runErr
+
+	<-ctx.Done()
+	wg.Wait()
+	return nil
 }
 
 type RoleRuntime struct {
@@ -138,5 +161,60 @@ func newRuntimeForRole(cfg config.StorerConfig, core *Core) (Runtime, error) {
 		return NewStorerRuntime(cfg, core)
 	default:
 		return nil, fmt.Errorf("unsupported role: %q", cfg.Role)
+	}
+}
+
+type storerLinkWorker struct {
+	label           string
+	linkRuntime     *storegatewaylink.LinkRuntime
+	retryInterval   time.Duration
+	logf            func(format string, args ...any)
+	reconnectingLog bool
+}
+
+func newStorerLinkWorker(label string, linkRuntime *storegatewaylink.LinkRuntime) *storerLinkWorker {
+	return &storerLinkWorker{
+		label:         label,
+		linkRuntime:   linkRuntime,
+		retryInterval: storerLinkReconnectInterval,
+		logf:          log.Printf,
+	}
+}
+
+func (w *storerLinkWorker) Run(ctx context.Context, nextConn *atomic.Uint64) {
+	if w == nil || w.linkRuntime == nil {
+		return
+	}
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		connectionID := nextConn.Add(1)
+		_ = w.linkRuntime.Run(ctx, connectionID, func() {
+			if w.reconnectingLog {
+				w.logf("%s重连成功", w.label)
+				w.reconnectingLog = false
+			}
+		})
+		if ctx.Err() != nil {
+			return
+		}
+
+		if !w.reconnectingLog {
+			w.logf("%s重连中...", w.label)
+			w.reconnectingLog = true
+		}
+
+		timer := time.NewTimer(w.retryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return
+		case <-timer.C:
+		}
 	}
 }

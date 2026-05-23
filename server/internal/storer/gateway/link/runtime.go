@@ -3,7 +3,6 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"time"
 
@@ -39,7 +38,7 @@ func NewLinkRuntime(
 	}, nil
 }
 
-func (r *LinkRuntime) Run(ctx context.Context, connectionID uint64) error {
+func (r *LinkRuntime) Run(ctx context.Context, connectionID uint64, onReady func()) error {
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", r.gatewayAddr)
 	if err != nil {
@@ -51,10 +50,11 @@ func (r *LinkRuntime) Run(ctx context.Context, connectionID uint64) error {
 	defer r.sessions.CloseConnection(connectionID)
 	defer conn.Close()
 
-	log.Printf("storer connected to gateway %s as connection %d", r.gatewayAddr, connectionID)
-
 	if err := r.registerClient.Register(conn); err != nil {
 		return err
+	}
+	if onReady != nil {
+		onReady()
 	}
 
 	watchdog := newLinkHeartbeatWatchdog(r.heartbeatTimeout)
