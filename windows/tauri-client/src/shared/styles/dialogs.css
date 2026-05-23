@@ -315,13 +315,35 @@
 }
 
 .app-dialog-form__switch {
-  margin-bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.app-dialog-form__switch > .el-form-item__label,
+.app-dialog-form__switch > .el-form-item__label-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.app-dialog-form__switch .el-form-item__label {
+  display: flex;
+  align-items: center;
+  min-height: 22px;
+  padding-bottom: 0;
 }
 
 .app-dialog-form__switch .el-form-item__content {
-  min-height: 38px;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: auto;
+  min-height: 32px;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
 }
 
 .app-dialog__hint {
