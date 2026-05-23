@@ -25,8 +25,12 @@ func NewWholeRuntime(cfg config.StorerConfig, core *Core) (*WholeRuntime, error)
 	if core == nil {
 		return nil, errors.New("whole runtime requires non-nil core")
 	}
+	rwExport, ok := core.Export(ExportIDRW)
+	if !ok {
+		return nil, errors.New("whole runtime requires rw export")
+	}
 
-	backend, err := storegateway.NewLocalAdapter(core)
+	backend, err := storegateway.NewLocalAdapter(rwExport)
 	if err != nil {
 		return nil, err
 	}

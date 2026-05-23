@@ -1,52 +1,65 @@
 package storer
 
 import (
+	"fmt"
+
 	"yumedisk/server/internal/config"
-	"yumedisk/server/internal/route"
-	"yumedisk/server/internal/session"
-	gatewaylink "yumedisk/server/internal/storer/gateway/link"
 )
 
 type Core struct {
-	disk     *localDisk
-	sessions *session.Service
+	storage *sharedStorage
+	exports map[ExportID]*Export
 }
 
 func NewCore(cfg config.StorerConfig) (*Core, error) {
-	disk, err := openLocalDisk(cfg)
+	storage, err := openSharedStorage(cfg.StorageFilePath)
 	if err != nil {
 		return nil, err
 	}
 
+	rwMaterial, err := cfg.ClaimMaterialRW()
+	if err != nil {
+		_ = storage.Close()
+		return nil, fmt.Errorf("parse claim_code_rw: %w", err)
+	}
+
+	exports := map[ExportID]*Export{
+		ExportIDRW: newRWExport(rwMaterial, storage),
+	}
+
+	if roMaterial, ok, err := cfg.ClaimMaterialRO(); err != nil {
+		_ = storage.Close()
+		return nil, fmt.Errorf("parse claim_code_ro: %w", err)
+	} else if ok {
+		exports[ExportIDRO] = newROExport(roMaterial, storage)
+	}
+
 	return &Core{
-		disk:     disk,
-		sessions: session.NewService(session.NewExclusiveManager(), disk.storage, disk.SessionMetadata()),
+		storage: storage,
+		exports: exports,
 	}, nil
 }
 
 func (c *Core) Close() error {
-	if c == nil || c.disk == nil {
+	if c == nil || c.storage == nil {
 		return nil
 	}
-	return c.disk.Close()
-}
-
-func (c *Core) DiskID() string {
-	return c.disk.DiskID()
+	return c.storage.Close()
 }
 
 func (c *Core) StoragePath() string {
-	return c.disk.StoragePath()
+	return c.storage.Path()
 }
 
-func (c *Core) SessionService() *session.Service {
-	return c.sessions
+func (c *Core) ExportIDs() []ExportID {
+	ids := []ExportID{ExportIDRW}
+	if _, ok := c.exports[ExportIDRO]; ok {
+		ids = append(ids, ExportIDRO)
+	}
+	return ids
 }
 
-func (c *Core) RouteEntry(routeTarget string, connectionID uint64) route.Entry {
-	return c.disk.RouteEntry(routeTarget, connectionID)
-}
-
-func (c *Core) GatewayRegisterInfo(gatewayToken string) gatewaylink.RegisterInfo {
-	return c.disk.GatewayRegisterInfo(gatewayToken)
+func (c *Core) Export(id ExportID) (*Export, bool) {
+	export, ok := c.exports[id]
+	return export, ok
 }

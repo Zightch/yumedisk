@@ -29,11 +29,15 @@ func NewStorerRuntime(cfg config.StorerConfig, core *Core) (*StorerRuntime, erro
 	if core == nil {
 		return nil, fmt.Errorf("storer runtime requires non-nil core")
 	}
+	rwExport, ok := core.Export(ExportIDRW)
+	if !ok {
+		return nil, fmt.Errorf("storer runtime requires rw export")
+	}
 
 	linkRuntime, err := storegatewaylink.NewLinkRuntime(
 		cfg.Storer.GatewayAddr,
-		core.GatewayRegisterInfo(cfg.Storer.GatewayToken),
-		core.SessionService(),
+		rwExport.GatewayRegisterInfo(cfg.Storer.GatewayToken),
+		rwExport.SessionService(),
 		storerLinkHeartbeatTimeout,
 	)
 	if err != nil {
@@ -98,7 +102,14 @@ func (r *RoleRuntime) Role() config.StorerRole {
 }
 
 func (r *RoleRuntime) DiskID() string {
-	return r.core.DiskID()
+	if r == nil || r.core == nil {
+		return ""
+	}
+	export, ok := r.core.Export(ExportIDRW)
+	if !ok {
+		return ""
+	}
+	return export.DiskID()
 }
 
 func (r *RoleRuntime) StoragePath() string {

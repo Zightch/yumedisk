@@ -13,13 +13,13 @@ import (
 func TestLocalAdapterRegistersSingleWholeRoute(t *testing.T) {
 	t.Parallel()
 
-	core := newGatewayTestCore(t)
-	backend, err := NewLocalAdapter(core)
+	export := newGatewayTestExport(t)
+	backend, err := NewLocalAdapter(export)
 	if err != nil {
 		t.Fatalf("NewLocalAdapter returned error: %v", err)
 	}
 
-	entry, ok := backend.LookupRoute(core.DiskID())
+	entry, ok := backend.LookupRoute(export.DiskID())
 	if !ok {
 		t.Fatal("expected whole route to be registered")
 	}
@@ -34,7 +34,7 @@ func TestLocalAdapterRegistersSingleWholeRoute(t *testing.T) {
 	}
 }
 
-func newGatewayTestCore(t *testing.T) *gatewayTestCore {
+func newGatewayTestExport(t *testing.T) *gatewayTestExport {
 	t.Helper()
 
 	tempDir := t.TempDir()
@@ -55,26 +55,26 @@ func newGatewayTestCore(t *testing.T) *gatewayTestCore {
 		ReadOnly:      false,
 		MaxIOBytes:    60 * 1024,
 	}
-	return &gatewayTestCore{
+	return &gatewayTestExport{
 		sessions: session.NewService(session.NewExclusiveManager(), storage, metadata),
 		metadata: metadata,
 	}
 }
 
-type gatewayTestCore struct {
+type gatewayTestExport struct {
 	sessions *session.Service
 	metadata session.Metadata
 }
 
-func (c *gatewayTestCore) DiskID() string {
+func (c *gatewayTestExport) DiskID() string {
 	return c.metadata.DiskID
 }
 
-func (c *gatewayTestCore) SessionService() *session.Service {
+func (c *gatewayTestExport) SessionService() *session.Service {
 	return c.sessions
 }
 
-func (c *gatewayTestCore) RouteEntry(routeTarget string, connectionID uint64) route.Entry {
+func (c *gatewayTestExport) RouteEntry(routeTarget string, connectionID uint64) route.Entry {
 	return route.Entry{
 		DiskID:        c.metadata.DiskID,
 		RouteTarget:   routeTarget,
