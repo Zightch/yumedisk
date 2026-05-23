@@ -124,17 +124,6 @@ func (r *RoleRuntime) Role() config.StorerRole {
 	return r.cfg.Role
 }
 
-func (r *RoleRuntime) DiskID() string {
-	if r == nil || r.core == nil {
-		return ""
-	}
-	export, ok := r.core.Export(ExportIDRW)
-	if !ok {
-		return ""
-	}
-	return export.DiskID()
-}
-
 func (r *RoleRuntime) StoragePath() string {
 	return r.core.StoragePath()
 }

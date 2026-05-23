@@ -48,8 +48,8 @@ func TestNewRoleRuntimeBuildsWholeRuntimeOnTopOfCore(t *testing.T) {
 	if runtime.ListenAddr() != "127.0.0.1:9736" {
 		t.Fatalf("unexpected listen addr: %q", runtime.ListenAddr())
 	}
-	if runtime.DiskID() == "" {
-		t.Fatal("expected disk id")
+	if runtime.StoragePath() != rawPath {
+		t.Fatalf("unexpected storage path: %q", runtime.StoragePath())
 	}
 }
 
