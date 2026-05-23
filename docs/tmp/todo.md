@@ -22,9 +22,14 @@
 
 ### 2.1 必须保持
 
-- 不改 `docs/network/define` 已固定的协议边界
-- 不改 `gateway-storer` 的 `StorerRegister / SessionOpen / ReadAt / WriteAt / Close` 主体协议
+- 保持 `auth -> session open -> data plane` 主模型不变
+- 保持正式心跳边界不变：
+  - `client(connection) -> gateway : ConnHeartbeat`
+  - `gateway -> storer : LinkHeartbeat`
+- 不引入 session-scoped heartbeat
+- 不引入 session TTL
 - 不引入新的 `SessionOpen` 模式位
+- 关闭语义以前置 `docs/tmp/todo-close.md` 为准
 - 不做历史兼容桥
 - 不保留单 `claim_code` 和双 `claim_code` 并存的长期过渡结构
 - 不保留单导出 `Core` 和双导出 `Core` 并存的长期过渡结构
@@ -34,7 +39,7 @@
 - 不做多 writer
 - 不做 snapshot read
 - 不做多版本只读视图
-- 不做自动重连
+- 不做指数退避、supervisor、actor 化的复杂重连框架
 - 不做 locator / 分片 / 多副本
 - 不把一个 storer 进程扩成多盘进程
 
@@ -61,11 +66,24 @@
 - gateway 的 session 映射与 route 映射
   - 已经按 `route_connection_id` 和 `gateway_session_id` 维护
 - gateway 的 client 断线清理
-  - 当前已经是按 client connection 枚举 session，再逐个向上游发 `Close`
+  - 当前旧实现已经是按 client connection 枚举 session，再逐个向上游发 `Close`
+  - 这条旧关闭路径的协议重建由 `todo-close.md` 负责
 - gateway 的 route 断线清理
   - 当前已经是按 route connection 清理，不是按整个进程清理
 
 ### 3.2 当前明确阻塞点
+
+#### close 前置重构尚未完成
+
+shared storer 默认依赖 `docs/tmp/todo-close.md` 先落地。
+
+也就是说：
+
+- `docs/network/define` 的关闭语义
+- `windows/network-core` 的关闭语义
+- server 当前关闭协议与 handler 路径
+
+都应先按 `todo-close.md` 完成统一重建，再进入 shared storer 主线。
 
 #### 配置层仍是单 claim code
 
@@ -204,6 +222,13 @@ shared storer 下必须继续保持：
 - `shared`
   - 允许多个 live session
 
+session 生命周期与 `closing/drain` 语义以前置 `docs/tmp/todo-close.md` 为准。
+
+shared storer 在这个前提上只额外要求：
+
+- `rw session` 的独占位只能在 drain 完成后释放
+- `ro session` 共享多开不改变既有 close 生命周期边界
+
 ## 4.3 storer core 目标
 
 storer core 直接重建为：
@@ -256,7 +281,8 @@ storer core 直接重建为：
 - 某条 link 第一次进入重连态时：
   - 打印一次 `rw重连中...` 或 `ro重连中...`
 - 重连态期间：
-  - 不再打印中间每次连接失败日志
+  - 只静默中间重复的连接失败日志
+  - 不额外静默其他正常运行日志
 - 某条 link 重连成功时：
   - 打印一次 `rw重连成功` 或 `ro重连成功`
 - 成功后：
@@ -367,6 +393,7 @@ server/internal/storer/
   - `exclusive manager`
 - 新增：
   - `shared manager`
+- 复用 `todo-close.md` 已完成的 session lifecycle 抽象
 - 保持 `session` 错误语义不变：
   - `ErrSessionOpenRejected`
   - `ErrSessionUnavailable`
@@ -378,6 +405,7 @@ server/internal/storer/
   - `exclusive manager`
   - `shared manager`
 - 当前 gateway / whole / storer 调用面不再依赖单 concrete manager
+- `rw session` 在 `closing` 且仍有在途写入时，不能被新的 `rw open` 抢占
 
 ### 阶段 C：重建 shared storage
 
@@ -472,7 +500,8 @@ server/internal/storer/
   - 再进入该 link 自己的重连态
 - 下一次拨号固定在失败后 `5s` 发起
 - 同步拨号失败后继续等待 `5s`
-- 中间所有重试失败默认静默，不逐次刷日志
+- 中间重复的重连失败日志默认静默，不逐次刷日志
+- 其他运行日志不额外静默
 
 建议实现方式：
 
@@ -549,6 +578,10 @@ server/internal/storer/
   - route connection 死亡
   - 单 session `SessionUnavailable`
   - open reject
+- 基于 `todo-close.md` 已固定的关闭语义，确保 cleanup 作用域仍严格落在：
+  - session
+  - client connection
+  - route connection
 - 若发现实现里仍有“按整个 storer 整体清理”的暗含假设，直接删掉
 - 不新增“storer 进程级 cleanup facade”
 
@@ -597,6 +630,7 @@ server/internal/storer/
   - 多个 open success
   - `Close` 只关闭目标 session
   - `CloseConnection` 只关闭该 connection 名下 session
+  - `rw session` 必须 drain 后才释放独占位
 
 ### 7.3 backend
 
