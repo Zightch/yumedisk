@@ -65,7 +65,7 @@
 ### `session_id`
 
 - `AuthStart / AuthFinish / SessionOpen / ConnHeartbeat` 固定为 `0`
-- `SessionDescribe / ReadAt / WriteAt / Close` 必须带有效非 `0` `session_id`
+- `SessionDescribe / ReadAt / WriteAt` 必须带有效非 `0` `session_id`
 - `SessionOpen` 成功响应在响应头写入新分配的 `session_id`
 - `SessionCloseNotice` 在 notice 头中写目标 `session_id`
 
@@ -82,7 +82,7 @@
 
 `disk_id` 只出现在 `AuthStart` body 中，不在通用头中出现。
 
-`ReadAt / WriteAt / Close` 的请求与响应 body 细节见 [data-plane](data-plane.md)。
+`ReadAt / WriteAt` 的请求与响应 body 细节见 [data-plane](data-plane.md)。
 
 ## 操作码
 
@@ -96,7 +96,6 @@
 | `0x10` | `ReadAt` | req/resp |
 | `0x11` | `WriteAt` | req/resp |
 | `0x12` | `ConnHeartbeat` | req/resp |
-| `0x13` | `Close` | req/resp |
 
 ## 核心状态码
 
@@ -150,7 +149,7 @@
 - auth 过程与 `SessionOpen` 过程互斥
 - 已签发 `auth_id` 可以并存
 - 已打开 session 可以并存
-- 已打开 session 的读写和关闭不受 auth/open lane 互斥影响
+- 已打开 session 上的 `SessionDescribe / ReadAt / WriteAt` 不受 auth/open lane 互斥影响
 
 ## AuthStart
 
@@ -260,6 +259,17 @@
 
 ## SessionCloseNotice
 
+### 主动发起边界
+
+在这条边上，协议层允许：
+
+- `client -> gateway`
+- `gateway -> client`
+
+主动发出 `SessionCloseNotice`。
+
+当前项目的最小闭环实现只要求这两个方向，不要求其他附加 close 分支。
+
 ### notice body
 
 固定长度 `2` 字节：
@@ -276,7 +286,12 @@
 | `2` | gateway shutdown |
 | `3` | upstream session closed |
 | `4` | client connection replaced |
-| `5` | normal close mirror |
+| `5` | normal close |
 | `6` | protocol error |
 
-notice 一旦送达，就表示目标 session 已经失效。
+### 语义
+
+- `SessionCloseNotice` 是这条边上的唯一正式 close 语义
+- notice 一旦发出，发送方不等待回复
+- notice 一旦送达，就表示目标 session 已经失效
+- 若目标 session 已不存在，接收方按幂等忽略

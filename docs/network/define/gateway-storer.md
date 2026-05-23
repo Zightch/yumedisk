@@ -33,9 +33,9 @@ storer ----主动连接----> gateway
 | `0x20` | `StorerRegister` | req/resp |
 | `0x21` | `LinkHeartbeat` | req/resp |
 | `0x03` | `SessionOpen` | req/resp |
+| `0x05` | `SessionCloseNotice` | notice |
 | `0x10` | `ReadAt` | req/resp |
 | `0x11` | `WriteAt` | req/resp |
-| `0x13` | `Close` | req/resp |
 
 ## StorerRegister
 
@@ -70,7 +70,7 @@ storer ----主动连接----> gateway
 一旦注册成功，协议层承认以下事实：
 
 - 这条 route connection 绑定声明的 `disk_id`
-- gateway 后续可在该 route 上发 `SessionOpen / ReadAt / WriteAt / Close`
+- gateway 后续可在该 route 上发 `SessionOpen / ReadAt / WriteAt`
 - route 失效前，gateway 以该注册得到的 metadata 作为这条 route 的外部描述
 
 ## Route-Facing SessionOpen
@@ -105,11 +105,26 @@ storer ----主动连接----> gateway
 
 - `ReadAt`
 - `WriteAt`
-- `Close`
+- `SessionCloseNotice`
 
 字段格式与 [data-plane](data-plane.md) 一致。
 
 此处的 `session_id` 是 storer 自己的会话标识，不等于 client 看到的 `session_id`。
+
+## SessionCloseNotice
+
+在这条边上，协议层允许：
+
+- `gateway -> storer`
+- `storer -> gateway`
+
+主动发出 `SessionCloseNotice`。
+
+当前项目的最小闭环实现只要求：
+
+- `gateway -> storer`
+
+notice body 与 `reason_code` 定义见 [data-plane](data-plane.md)。
 
 ## LinkHeartbeat
 
@@ -141,8 +156,8 @@ storer ----主动连接----> gateway
 
 - route transport 断开时，该 route 下 session 全部失效
 - `LinkHeartbeat` 失败时，该 route 可以被判定为失效
-- route 失效后，gateway 不能再把新的 `SessionOpen / ReadAt / WriteAt / Close` 发到该 route
-- `storer` 不对 session 维护独立 TTL；session 生命周期由显式 `Close`、route 失效和 connection 断开收束
+- route 失效后，gateway 不能再把新的 `SessionOpen / ReadAt / WriteAt` 发到该 route
+- `storer` 不对 session 维护独立 TTL；session 生命周期由 `SessionCloseNotice`、route 失效和 connection 断开收束
 
 至于：
 

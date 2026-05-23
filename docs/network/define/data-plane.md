@@ -67,18 +67,27 @@ client 进入数据面前必须已经完成：
 
 - 当前不要求固定负载
 
-## Close
+## SessionCloseNotice
 
-### 请求
+### notice
 
 - header `session_id` 为目标 session
-- body 为空
+- header `request_id = 0`
+- body 为 `reason_code`
 
 ### 语义
 
-- `Close` 只关闭目标 session
-- 不直接等于关闭整条 connection
-- 关闭成功后，再对该 `session_id` 读写应返回 session unavailable
+- `SessionCloseNotice` 只表达目标 session 已失效
+- 它不直接等于关闭整条 connection
+- 它是单向 notice，不等待回复
+- 某条协议边的任意一端都可以主动发出它
+- 当前项目的最小闭环实现方向由具体边界文档定义
+- 若目标 session 已不存在，接收方按幂等忽略
+- 若 client 需要等待本地在途 I/O 完成，再决定是否关闭，责任在 client 自己
+- 协议层不承诺 graceful close
+- 当前最小闭环实现允许：
+  - 已经进入同步处理链路的请求自然执行完成
+  - 若 session 已关闭，后续回复可以直接丢弃
 
 ## 大块 I/O
 
@@ -112,7 +121,7 @@ transport 单帧 payload 上限为 `65536` 字节。
 
 - client-gateway connection 死亡时，该 connection 下 session 全部失效
 - route 死亡时，该 route 下 session 全部失效
-- session 不定义独立 TTL；它只在显式 `Close`、connection 死亡或 route 死亡时收束
+- session 不定义独立 TTL；它只在 `SessionCloseNotice`、connection 死亡或 route 死亡时收束
 - `SessionCloseNotice` 到达时，目标 session 已经失效
 
 ## SessionCloseNotice Reason
@@ -125,7 +134,7 @@ transport 单帧 payload 上限为 `65536` 字节。
 | `2` | gateway shutdown |
 | `3` | upstream session closed |
 | `4` | client connection replaced |
-| `5` | normal close mirror |
+| `5` | normal close |
 | `6` | protocol error |
 
 这些 reason code 只说明关闭事实来源，不定义 client 盘对象该如何收束。

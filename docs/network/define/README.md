@@ -79,7 +79,8 @@ TCP
   -> SessionOpen(auth_id)
   -> session_id
   -> SessionDescribe(session_id)
-  -> ReadAt / WriteAt / Close
+  -> ReadAt / WriteAt
+  <-> SessionCloseNotice
 ```
 
 固定约束如下：
@@ -89,7 +90,7 @@ TCP
 - auth 过程与 `SessionOpen` 过程互斥
 - 同一条 connection 可以同时持有多个已签发 `auth_id`
 - 同一条 connection 可以同时持有多个已打开 session
-- 已打开 session 上的 `SessionDescribe / ReadAt / WriteAt / Close` 允许并发
+- 已打开 session 上的 `SessionDescribe / ReadAt / WriteAt` 允许并发
 - 已打开 session 的并发存在，不阻止该 connection 后续再次串行发起 auth/open
 
 ## 元数据边界
@@ -118,6 +119,8 @@ TCP
 
 - client-gateway connection 死亡时，该 connection 下 `auth_id` 与 session 一起失效
 - route connection 死亡时，该 route 下 session 一起失效
+- `SessionCloseNotice` 是唯一正式 close 语义
+- `SessionCloseNotice` 可由某条协议边的任意一端主动发出
 - `SessionCloseNotice` 一旦到达，目标 session 已经失效
 
 至于：
