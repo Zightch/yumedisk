@@ -29,7 +29,7 @@ func TestReadAndWriteKeepSessionOpen(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 
-	service := NewService(NewManager(), storage, Metadata{
+	service := NewService(NewExclusiveManager(), storage, Metadata{
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
@@ -77,7 +77,7 @@ func TestCloseMakesSessionUnavailable(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 
-	service := NewService(NewManager(), storage, Metadata{
+	service := NewService(NewExclusiveManager(), storage, Metadata{
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
@@ -119,7 +119,7 @@ func TestOpenRejectsWhileSessionIsLive(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 
-	service := NewService(NewManager(), storage, Metadata{
+	service := NewService(NewExclusiveManager(), storage, Metadata{
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
@@ -160,7 +160,7 @@ func TestServiceCloseKeepsWriterSlotOccupiedUntilInflightIODrains(t *testing.T) 
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 
-	service := NewService(NewManager(), storage, Metadata{
+	service := NewService(NewExclusiveManager(), storage, Metadata{
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),

@@ -56,7 +56,7 @@ func newGatewayTestCore(t *testing.T) *gatewayTestCore {
 		MaxIOBytes:    60 * 1024,
 	}
 	return &gatewayTestCore{
-		sessions: session.NewService(session.NewManager(), storage, metadata),
+		sessions: session.NewService(session.NewExclusiveManager(), storage, metadata),
 		metadata: metadata,
 	}
 }

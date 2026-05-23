@@ -17,12 +17,12 @@ var (
 )
 
 type Service struct {
-	manager  *Manager
+	manager  Manager
 	storage  *filestorage.Backend
 	metadata Metadata
 }
 
-func NewService(manager *Manager, storage *filestorage.Backend, metadata Metadata) *Service {
+func NewService(manager Manager, storage *filestorage.Backend, metadata Metadata) *Service {
 	return &Service{
 		manager:  manager,
 		storage:  storage,
@@ -57,7 +57,7 @@ func (s *Service) Metadata() Metadata {
 	return s.metadata
 }
 
-func (s *Service) Manager() *Manager {
+func (s *Service) Manager() Manager {
 	return s.manager
 }
 

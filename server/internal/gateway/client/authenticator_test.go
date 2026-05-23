@@ -229,7 +229,7 @@ func newAuthHandler(t *testing.T, material auth.Material) (*Handler, error) {
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 
-	sessions := session.NewService(session.NewManager(), storage, session.Metadata{
+	sessions := session.NewService(session.NewExclusiveManager(), storage, session.Metadata{
 		DiskID:        material.DiskID,
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),

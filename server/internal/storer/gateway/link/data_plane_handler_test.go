@@ -188,7 +188,7 @@ func newLinkTestCore(t *testing.T) *linkTestCore {
 		MaxIOBytes:    60 * 1024,
 	}
 	return &linkTestCore{
-		sessions: session.NewService(session.NewManager(), storage, metadata),
+		sessions: session.NewService(session.NewExclusiveManager(), storage, metadata),
 		metadata: metadata,
 	}
 }

@@ -2,8 +2,8 @@ package session
 
 import "testing"
 
-func TestManagerCloseWaitsForInflightIOBeforeDrain(t *testing.T) {
-	manager := NewManager()
+func TestExclusiveManagerCloseWaitsForInflightIOBeforeDrain(t *testing.T) {
+	manager := NewExclusiveManager()
 
 	record, err := manager.Open(Record{
 		Connection: 1,
@@ -56,8 +56,8 @@ func TestManagerCloseWaitsForInflightIOBeforeDrain(t *testing.T) {
 	}
 }
 
-func TestManagerCloseConnectionWaitsForInflightIOBeforeDrain(t *testing.T) {
-	manager := NewManager()
+func TestExclusiveManagerCloseConnectionWaitsForInflightIOBeforeDrain(t *testing.T) {
+	manager := NewExclusiveManager()
 
 	record, err := manager.Open(Record{
 		Connection: 7,
@@ -97,5 +97,121 @@ func TestManagerCloseConnectionWaitsForInflightIOBeforeDrain(t *testing.T) {
 	}
 	if _, err := manager.Open(Record{Connection: 8}); err != nil {
 		t.Fatalf("open after connection-close drain: %v", err)
+	}
+}
+
+func TestSharedManagerAllowsMultipleLiveSessions(t *testing.T) {
+	manager := NewSharedManager()
+
+	first, err := manager.Open(Record{
+		Connection: 1,
+		Metadata: Metadata{
+			DiskID:        "A1b2C3d4E5f6G7h8",
+			DiskSizeBytes: 4096,
+			MaxIOBytes:    1024,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open first session: %v", err)
+	}
+	second, err := manager.Open(Record{
+		Connection: 2,
+		Metadata: Metadata{
+			DiskID:        "A1b2C3d4E5f6G7h8",
+			DiskSizeBytes: 4096,
+			MaxIOBytes:    1024,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open second session: %v", err)
+	}
+	if first.ID == 0 || second.ID == 0 || first.ID == second.ID {
+		t.Fatalf("unexpected session ids: first=%d second=%d", first.ID, second.ID)
+	}
+}
+
+func TestSharedManagerCloseOnlyAffectsTargetSession(t *testing.T) {
+	manager := NewSharedManager()
+
+	first, err := manager.Open(Record{
+		Connection: 1,
+		Metadata: Metadata{
+			DiskID:        "A1b2C3d4E5f6G7h8",
+			DiskSizeBytes: 4096,
+			MaxIOBytes:    1024,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open first session: %v", err)
+	}
+	second, err := manager.Open(Record{
+		Connection: 2,
+		Metadata: Metadata{
+			DiskID:        "A1b2C3d4E5f6G7h8",
+			DiskSizeBytes: 4096,
+			MaxIOBytes:    1024,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open second session: %v", err)
+	}
+
+	manager.Close(first.ID)
+
+	if _, ok := manager.Get(first.ID); ok {
+		t.Fatal("expected first session to close")
+	}
+	if _, ok := manager.Get(second.ID); !ok {
+		t.Fatal("expected second session to remain open")
+	}
+}
+
+func TestSharedManagerCloseConnectionOnlyAffectsMatchingSessions(t *testing.T) {
+	manager := NewSharedManager()
+
+	first, err := manager.Open(Record{
+		Connection: 7,
+		Metadata: Metadata{
+			DiskID:        "A1b2C3d4E5f6G7h8",
+			DiskSizeBytes: 4096,
+			MaxIOBytes:    1024,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open first session: %v", err)
+	}
+	second, err := manager.Open(Record{
+		Connection: 7,
+		Metadata: Metadata{
+			DiskID:        "A1b2C3d4E5f6G7h8",
+			DiskSizeBytes: 4096,
+			MaxIOBytes:    1024,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open second session: %v", err)
+	}
+	third, err := manager.Open(Record{
+		Connection: 8,
+		Metadata: Metadata{
+			DiskID:        "A1b2C3d4E5f6G7h8",
+			DiskSizeBytes: 4096,
+			MaxIOBytes:    1024,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open third session: %v", err)
+	}
+
+	manager.CloseConnection(7)
+
+	if _, ok := manager.Get(first.ID); ok {
+		t.Fatal("expected first session to close with connection 7")
+	}
+	if _, ok := manager.Get(second.ID); ok {
+		t.Fatal("expected second session to close with connection 7")
+	}
+	if _, ok := manager.Get(third.ID); !ok {
+		t.Fatal("expected third session to remain open")
 	}
 }

@@ -20,7 +20,7 @@ func NewCore(cfg config.StorerConfig) (*Core, error) {
 
 	return &Core{
 		disk:     disk,
-		sessions: session.NewService(session.NewManager(), disk.storage, disk.SessionMetadata()),
+		sessions: session.NewService(session.NewExclusiveManager(), disk.storage, disk.SessionMetadata()),
 	}, nil
 }
 

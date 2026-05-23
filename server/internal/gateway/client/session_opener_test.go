@@ -256,7 +256,7 @@ func newSessionTestHandlerWithRaw(t *testing.T, readOnly bool) (*Handler, *Conne
 	}
 	t.Cleanup(func() { _ = storage.Close() })
 
-	sessions := session.NewService(session.NewManager(), storage, session.Metadata{
+	sessions := session.NewService(session.NewExclusiveManager(), storage, session.Metadata{
 		DiskID:        material.DiskID,
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
