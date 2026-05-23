@@ -62,10 +62,11 @@ func (s *Service) Manager() *Manager {
 }
 
 func (s *Service) Read(sessionID uint64, offset uint64, length uint32) ([]byte, error) {
-	record, err := s.validate(sessionID)
+	record, lease, err := s.manager.beginIO(sessionID)
 	if err != nil {
 		return nil, err
 	}
+	defer lease.release()
 	if length == 0 || length > record.Metadata.MaxIOBytes {
 		return nil, ErrIOLimit
 	}
@@ -81,10 +82,11 @@ func (s *Service) Read(sessionID uint64, offset uint64, length uint32) ([]byte, 
 }
 
 func (s *Service) Write(sessionID uint64, offset uint64, data []byte) error {
-	record, err := s.validate(sessionID)
+	record, lease, err := s.manager.beginIO(sessionID)
 	if err != nil {
 		return err
 	}
+	defer lease.release()
 	if record.Metadata.ReadOnly {
 		return ErrReadOnly
 	}
@@ -99,14 +101,6 @@ func (s *Service) Write(sessionID uint64, offset uint64, data []byte) error {
 		return mapStorageError(err)
 	}
 	return nil
-}
-
-func (s *Service) validate(sessionID uint64) (Record, error) {
-	record, ok := s.manager.Get(sessionID)
-	if !ok {
-		return Record{}, ErrSessionUnavailable
-	}
-	return record, nil
 }
 
 func mapStorageError(err error) error {

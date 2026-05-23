@@ -191,10 +191,26 @@ func TestWholeRuntimeSecondClientOpenIsRejectedButAuthIDStaysValid(t *testing.T)
 	}
 	requestIDOne++
 
-	retryOpenRespTwo := mustRoundTrip(t, connTwo, buildRequest(proto.OpSessionOpen, requestIDTwo, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
-	retryOpenHeaderTwo := mustParseHeader(t, retryOpenRespTwo)
-	if retryOpenHeaderTwo.StatusCode != proto.StatusOK {
-		t.Fatalf("expected retry open success, got %d", retryOpenHeaderTwo.StatusCode)
+	readAfterCloseRespOne := mustRoundTrip(t, connOne, buildRequest(proto.OpReadAt, requestIDOne, openHeaderOne.SessionID, proto.BuildReadBody(0, 1)))
+	if readAfterCloseHeaderOne := mustParseHeader(t, readAfterCloseRespOne); readAfterCloseHeaderOne.StatusCode != proto.StatusSessionUnavailable {
+		t.Fatalf("expected read-after-close unavailable, got %d", readAfterCloseHeaderOne.StatusCode)
+	}
+
+	var retryOpenHeaderTwo proto.Header
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		retryOpenRespTwo := mustRoundTrip(t, connTwo, buildRequest(proto.OpSessionOpen, requestIDTwo, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
+		retryOpenHeaderTwo = mustParseHeader(t, retryOpenRespTwo)
+		if retryOpenHeaderTwo.StatusCode == proto.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected retry open success, got %d", retryOpenHeaderTwo.StatusCode)
+		}
+		if retryOpenHeaderTwo.StatusCode != proto.StatusSessionOpenRejected {
+			t.Fatalf("unexpected retry open status while waiting for drain: %d", retryOpenHeaderTwo.StatusCode)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	if retryOpenHeaderTwo.SessionID == 0 {
 		t.Fatal("expected non-zero retry session id")

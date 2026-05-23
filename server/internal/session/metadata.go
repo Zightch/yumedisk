@@ -10,5 +10,6 @@ type Metadata struct {
 type Record struct {
 	ID         uint64
 	Connection uint64
+	Closing    bool
 	Metadata   Metadata
 }
