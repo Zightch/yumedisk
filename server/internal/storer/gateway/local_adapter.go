@@ -7,8 +7,6 @@ import (
 	"yumedisk/server/internal/session"
 )
 
-const WholeRouteConnectionID uint64 = 1
-
 type LocalExport interface {
 	DiskID() string
 	SessionService() *session.Service
@@ -16,22 +14,32 @@ type LocalExport interface {
 }
 
 type LocalAdapter struct {
-	export LocalExport
-	routes *route.Registry
+	exportsByRoute map[uint64]LocalExport
+	routes         *route.Registry
 }
 
-func NewLocalAdapter(export LocalExport) (*LocalAdapter, error) {
-	if export == nil {
-		return nil, fmt.Errorf("local adapter requires export")
+func NewLocalAdapter(exports []LocalExport) (*LocalAdapter, error) {
+	if len(exports) == 0 {
+		return nil, fmt.Errorf("local adapter requires at least one export")
 	}
 
 	routes := route.NewRegistry()
-	if err := routes.Register(export.RouteEntry("embedded://whole", WholeRouteConnectionID)); err != nil {
-		return nil, err
+	exportsByRoute := make(map[uint64]LocalExport, len(exports))
+	for index, export := range exports {
+		if export == nil {
+			return nil, fmt.Errorf("local adapter export %d must not be nil", index)
+		}
+		routeConnectionID := uint64(index + 1)
+		entry := export.RouteEntry("embedded://whole/"+export.DiskID(), routeConnectionID)
+		if err := routes.Register(entry); err != nil {
+			return nil, err
+		}
+		exportsByRoute[routeConnectionID] = export
 	}
+
 	return &LocalAdapter{
-		export: export,
-		routes: routes,
+		exportsByRoute: exportsByRoute,
+		routes:         routes,
 	}, nil
 }
 
@@ -40,7 +48,11 @@ func (b *LocalAdapter) LookupRoute(diskID string) (route.Entry, bool) {
 }
 
 func (b *LocalAdapter) Open(connectionID uint64, entry route.Entry) (uint64, error) {
-	desc, err := b.export.SessionService().Open(connectionID)
+	export, ok := b.exportsByRoute[entry.ConnectionID]
+	if !ok {
+		return 0, session.ErrSessionUnavailable
+	}
+	desc, err := export.SessionService().Open(connectionID)
 	if err != nil {
 		return 0, err
 	}
@@ -48,17 +60,31 @@ func (b *LocalAdapter) Open(connectionID uint64, entry route.Entry) (uint64, err
 }
 
 func (b *LocalAdapter) Close(routeConnectionID uint64, sessionID uint64) {
-	b.export.SessionService().Close(sessionID)
+	export, ok := b.exportsByRoute[routeConnectionID]
+	if !ok {
+		return
+	}
+	export.SessionService().Close(sessionID)
 }
 
 func (b *LocalAdapter) CloseConnection(connectionID uint64) {
-	b.export.SessionService().CloseConnection(connectionID)
+	for _, export := range b.exportsByRoute {
+		export.SessionService().CloseConnection(connectionID)
+	}
 }
 
 func (b *LocalAdapter) Read(routeConnectionID uint64, sessionID uint64, offset uint64, length uint32) ([]byte, error) {
-	return b.export.SessionService().Read(sessionID, offset, length)
+	export, ok := b.exportsByRoute[routeConnectionID]
+	if !ok {
+		return nil, session.ErrSessionUnavailable
+	}
+	return export.SessionService().Read(sessionID, offset, length)
 }
 
 func (b *LocalAdapter) Write(routeConnectionID uint64, sessionID uint64, offset uint64, data []byte) error {
-	return b.export.SessionService().Write(sessionID, offset, data)
+	export, ok := b.exportsByRoute[routeConnectionID]
+	if !ok {
+		return session.ErrSessionUnavailable
+	}
+	return export.SessionService().Write(sessionID, offset, data)
 }

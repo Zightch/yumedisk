@@ -227,6 +227,167 @@ func TestWholeRuntimeSecondClientOpenIsRejectedButAuthIDStaysValid(t *testing.T)
 	}
 }
 
+func TestWholeRuntimeSupportsRWAndROSessionsTogether(t *testing.T) {
+	t.Parallel()
+
+	rawPath, rwMaterial := newRuntimeDisk(t)
+	roClaimCode, err := auth.GenerateClaimCode(64)
+	if err != nil {
+		t.Fatalf("generate claim code ro: %v", err)
+	}
+	roMaterial, err := auth.ParseClaimCode(roClaimCode)
+	if err != nil {
+		t.Fatalf("parse claim code ro: %v", err)
+	}
+
+	cfg := config.StorerConfig{
+		Role:            config.StorerRoleWhole,
+		StorageFilePath: rawPath,
+		ClaimCodeRW:     rwMaterial.ClaimCode,
+		ClaimCodeRO:     roClaimCode,
+		Whole:           config.StorerWholeConfig{ListenAddr: reserveLocalAddr(t)},
+		Storer:          config.StorerRemoteConfig{GatewayAddr: config.DefaultStorerGatewayAddr},
+	}
+
+	runtime, err := NewRoleRuntime(cfg)
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = runtime.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- runtime.Run(ctx)
+	}()
+	waitForTCP(t, cfg.Whole.ListenAddr)
+
+	rwConn, err := net.Dial("tcp", cfg.Whole.ListenAddr)
+	if err != nil {
+		t.Fatalf("dial rw client: %v", err)
+	}
+	defer rwConn.Close()
+	mustHello(t, rwConn)
+	rwRequestID := uint64(1)
+	rwAuthID := authenticateConnection(t, rwConn, rwMaterial, &rwRequestID)
+	rwOpenResp := mustRoundTrip(t, rwConn, buildRequest(proto.OpSessionOpen, rwRequestID, 0, proto.BuildSessionOpenRequestBody(rwAuthID)))
+	rwOpenHeader := mustParseHeader(t, rwOpenResp)
+	if rwOpenHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("rw open status: %d", rwOpenHeader.StatusCode)
+	}
+	rwSessionID := rwOpenHeader.SessionID
+	rwRequestID++
+
+	roConnOne, err := net.Dial("tcp", cfg.Whole.ListenAddr)
+	if err != nil {
+		t.Fatalf("dial ro client one: %v", err)
+	}
+	defer roConnOne.Close()
+	mustHello(t, roConnOne)
+	roRequestIDOne := uint64(1)
+	roAuthIDOne := authenticateConnection(t, roConnOne, roMaterial, &roRequestIDOne)
+	roOpenRespOne := mustRoundTrip(t, roConnOne, buildRequest(proto.OpSessionOpen, roRequestIDOne, 0, proto.BuildSessionOpenRequestBody(roAuthIDOne)))
+	roOpenHeaderOne := mustParseHeader(t, roOpenRespOne)
+	if roOpenHeaderOne.StatusCode != proto.StatusOK {
+		t.Fatalf("ro open one status: %d", roOpenHeaderOne.StatusCode)
+	}
+	roSessionIDOne := roOpenHeaderOne.SessionID
+	roRequestIDOne++
+
+	roConnTwo, err := net.Dial("tcp", cfg.Whole.ListenAddr)
+	if err != nil {
+		t.Fatalf("dial ro client two: %v", err)
+	}
+	defer roConnTwo.Close()
+	mustHello(t, roConnTwo)
+	roRequestIDTwo := uint64(1)
+	roAuthIDTwo := authenticateConnection(t, roConnTwo, roMaterial, &roRequestIDTwo)
+	roOpenRespTwo := mustRoundTrip(t, roConnTwo, buildRequest(proto.OpSessionOpen, roRequestIDTwo, 0, proto.BuildSessionOpenRequestBody(roAuthIDTwo)))
+	roOpenHeaderTwo := mustParseHeader(t, roOpenRespTwo)
+	if roOpenHeaderTwo.StatusCode != proto.StatusOK {
+		t.Fatalf("ro open two status: %d", roOpenHeaderTwo.StatusCode)
+	}
+	roRequestIDTwo++
+
+	rwDescribeResp := mustRoundTrip(t, rwConn, buildRequest(proto.OpSessionDescribe, rwRequestID, rwSessionID, nil))
+	rwDescribeHeader := mustParseHeader(t, rwDescribeResp)
+	if rwDescribeHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("rw describe status: %d", rwDescribeHeader.StatusCode)
+	}
+	_, _, rwReadOnly, err := proto.ParseSessionDescribeResponseBody(rwDescribeResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse rw describe response: %v", err)
+	}
+	if rwReadOnly {
+		t.Fatal("rw session should not be read only")
+	}
+	rwRequestID++
+
+	roDescribeResp := mustRoundTrip(t, roConnOne, buildRequest(proto.OpSessionDescribe, roRequestIDOne, roSessionIDOne, nil))
+	roDescribeHeader := mustParseHeader(t, roDescribeResp)
+	if roDescribeHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("ro describe status: %d", roDescribeHeader.StatusCode)
+	}
+	_, _, roReadOnly, err := proto.ParseSessionDescribeResponseBody(roDescribeResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse ro describe response: %v", err)
+	}
+	if !roReadOnly {
+		t.Fatal("ro session should be read only")
+	}
+	roRequestIDOne++
+
+	rwWritePayload := append(proto.BuildReadWriteBody(32, 4), []byte("SHRD")...)
+	rwWriteResp := mustRoundTrip(t, rwConn, buildRequest(proto.OpWriteAt, rwRequestID, rwSessionID, rwWritePayload))
+	if header := mustParseHeader(t, rwWriteResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("rw write status: %d", header.StatusCode)
+	}
+	rwRequestID++
+
+	roReadResp := mustRoundTrip(t, roConnOne, buildRequest(proto.OpReadAt, roRequestIDOne, roSessionIDOne, proto.BuildReadBody(32, 4)))
+	roReadHeader := mustParseHeader(t, roReadResp)
+	if roReadHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("ro read status: %d", roReadHeader.StatusCode)
+	}
+	if !bytes.Equal(roReadResp[proto.HeaderSize:], []byte("SHRD")) {
+		t.Fatalf("unexpected ro read payload: %q", string(roReadResp[proto.HeaderSize:]))
+	}
+	roRequestIDOne++
+
+	roWritePayload := append(proto.BuildReadWriteBody(32, 4), []byte("FAIL")...)
+	roWriteResp := mustRoundTrip(t, roConnOne, buildRequest(proto.OpWriteAt, roRequestIDOne, roSessionIDOne, roWritePayload))
+	if header := mustParseHeader(t, roWriteResp); header.StatusCode != proto.StatusIOReadOnly {
+		t.Fatalf("ro write status: %d", header.StatusCode)
+	}
+	roRequestIDOne++
+
+	rwConnTwo, err := net.Dial("tcp", cfg.Whole.ListenAddr)
+	if err != nil {
+		t.Fatalf("dial second rw client: %v", err)
+	}
+	defer rwConnTwo.Close()
+	mustHello(t, rwConnTwo)
+	rwRequestIDTwo := uint64(1)
+	rwAuthIDTwo := authenticateConnection(t, rwConnTwo, rwMaterial, &rwRequestIDTwo)
+	rwOpenRespTwo := mustRoundTrip(t, rwConnTwo, buildRequest(proto.OpSessionOpen, rwRequestIDTwo, 0, proto.BuildSessionOpenRequestBody(rwAuthIDTwo)))
+	rwOpenHeaderTwo := mustParseHeader(t, rwOpenRespTwo)
+	if rwOpenHeaderTwo.StatusCode != proto.StatusSessionOpenRejected {
+		t.Fatalf("second rw open status: %d", rwOpenHeaderTwo.StatusCode)
+	}
+
+	cancel()
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("server run exited with error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not stop in time")
+	}
+}
+
 func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
 	t.Parallel()
 
