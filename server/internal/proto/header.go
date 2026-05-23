@@ -21,7 +21,6 @@ const (
 	OpReadAt             = 0x10
 	OpWriteAt            = 0x11
 	OpConnHeartbeat      = 0x12
-	OpClose              = 0x13
 	OpStorerRegister     = 0x20
 	OpLinkHeartbeat      = 0x21
 )

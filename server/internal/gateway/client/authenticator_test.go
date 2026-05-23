@@ -186,6 +186,10 @@ func buildRequest(opCode uint8, requestID uint64, sessionID uint64, body []byte)
 	return payload
 }
 
+func buildNotice(opCode uint8, sessionID uint64, body []byte) []byte {
+	return proto.BuildNotice(opCode, sessionID, body)
+}
+
 func mustParseGatewayHeader(t *testing.T, payload []byte) proto.Header {
 	t.Helper()
 

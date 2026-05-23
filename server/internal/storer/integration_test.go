@@ -96,9 +96,18 @@ func TestWholeRuntimeMinimalClosure(t *testing.T) {
 	}
 	requestID++
 
-	closeResp := mustRoundTrip(t, conn, buildRequest(proto.OpClose, requestID, sessionID, nil))
-	if header := mustParseHeader(t, closeResp); header.StatusCode != proto.StatusOK {
-		t.Fatalf("close status: %d", header.StatusCode)
+	if err := transport.WriteFrame(conn, buildNotice(
+		proto.OpSessionCloseNotice,
+		sessionID,
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+	)); err != nil {
+		t.Fatalf("write close notice: %v", err)
+	}
+	requestID++
+
+	readAfterCloseResp := mustRoundTrip(t, conn, buildRequest(proto.OpReadAt, requestID, sessionID, proto.BuildReadBody(0, 1)))
+	if header := mustParseHeader(t, readAfterCloseResp); header.StatusCode != proto.StatusSessionUnavailable {
+		t.Fatalf("read-after-close status: %d", header.StatusCode)
 	}
 
 	cancel()
@@ -173,9 +182,12 @@ func TestWholeRuntimeSecondClientOpenIsRejectedButAuthIDStaysValid(t *testing.T)
 	}
 	requestIDTwo++
 
-	closeRespOne := mustRoundTrip(t, connOne, buildRequest(proto.OpClose, requestIDOne, openHeaderOne.SessionID, nil))
-	if closeHeaderOne := mustParseHeader(t, closeRespOne); closeHeaderOne.StatusCode != proto.StatusOK {
-		t.Fatalf("first close status: %d", closeHeaderOne.StatusCode)
+	if err := transport.WriteFrame(connOne, buildNotice(
+		proto.OpSessionCloseNotice,
+		openHeaderOne.SessionID,
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+	)); err != nil {
+		t.Fatalf("write first close notice: %v", err)
 	}
 	requestIDOne++
 
@@ -420,6 +432,10 @@ func buildRequest(opCode uint8, requestID uint64, sessionID uint64, body []byte)
 	}, payload)
 	copy(payload[proto.HeaderSize:], body)
 	return payload
+}
+
+func buildNotice(opCode uint8, sessionID uint64, body []byte) []byte {
+	return proto.BuildNotice(opCode, sessionID, body)
 }
 
 func mustHello(t *testing.T, conn net.Conn) {

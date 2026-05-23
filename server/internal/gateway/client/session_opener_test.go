@@ -65,12 +65,16 @@ func TestSessionOpenDescribeReadWriteAndClose(t *testing.T) {
 		t.Fatalf("unexpected raw backend content: %q", string(raw[4:8]))
 	}
 
-	closeResp, err := handler.HandlePayload(state, buildRequest(proto.OpClose, 33, sessionID, nil))
+	closeResp, err := handler.HandlePayload(state, buildNotice(
+		proto.OpSessionCloseNotice,
+		sessionID,
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+	))
 	if err != nil {
-		t.Fatalf("close: %v", err)
+		t.Fatalf("close notice: %v", err)
 	}
-	if header := mustParseGatewayHeader(t, closeResp); header.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected close status: %d", header.StatusCode)
+	if closeResp != nil {
+		t.Fatal("expected close notice to produce no response")
 	}
 
 	readAfterCloseResp, err := handler.HandlePayload(state, buildRequest(proto.OpReadAt, 34, sessionID, proto.BuildReadBody(0, 1)))
@@ -110,12 +114,16 @@ func TestSessionOpenRejectsWhenSessionIsAlreadyLive(t *testing.T) {
 		t.Fatalf("expected rejected auth grant to stay valid, ok=%v status=%d", ok, status)
 	}
 
-	closeResp, err := handler.HandlePayload(stateOne, buildRequest(proto.OpClose, 41, firstSessionID, nil))
+	closeResp, err := handler.HandlePayload(stateOne, buildNotice(
+		proto.OpSessionCloseNotice,
+		firstSessionID,
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+	))
 	if err != nil {
-		t.Fatalf("close first session: %v", err)
+		t.Fatalf("close first session notice: %v", err)
 	}
-	if header := mustParseGatewayHeader(t, closeResp); header.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected close status: %d", header.StatusCode)
+	if closeResp != nil {
+		t.Fatal("expected close notice to produce no response")
 	}
 
 	retryOpenResp, err := handler.HandlePayload(stateTwo, buildRequest(proto.OpSessionOpen, 42, 0, proto.BuildSessionOpenRequestBody(authIDTwo)))
@@ -204,7 +212,6 @@ func TestSessionRequestValidationAndUnavailableSemantics(t *testing.T) {
 		{64, proto.OpSessionDescribe, nil},
 		{65, proto.OpReadAt, proto.BuildReadBody(0, 1)},
 		{66, proto.OpWriteAt, append(proto.BuildReadWriteBody(0, 1), 'X')},
-		{67, proto.OpClose, nil},
 	} {
 		resp, err := handler.HandlePayload(state, buildRequest(tc.op, tc.id, wrongSessionID, tc.body))
 		if err != nil {
@@ -213,6 +220,18 @@ func TestSessionRequestValidationAndUnavailableSemantics(t *testing.T) {
 		if header := mustParseGatewayHeader(t, resp); header.StatusCode != proto.StatusSessionUnavailable {
 			t.Fatalf("unexpected wrong-session status for op %d: %d", tc.op, header.StatusCode)
 		}
+	}
+
+	closeResp, err := handler.HandlePayload(state, buildNotice(
+		proto.OpSessionCloseNotice,
+		wrongSessionID,
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+	))
+	if err != nil {
+		t.Fatalf("close wrong session notice: %v", err)
+	}
+	if closeResp != nil {
+		t.Fatal("expected wrong-session close notice to be ignored without response")
 	}
 }
 

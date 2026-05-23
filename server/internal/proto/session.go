@@ -21,7 +21,7 @@ const (
 	SessionCloseReasonGatewayShutdown         = uint16(2)
 	SessionCloseReasonUpstreamSessionClosed   = uint16(3)
 	SessionCloseReasonClientConnectionReplace = uint16(4)
-	SessionCloseReasonNormalCloseMirror       = uint16(5)
+	SessionCloseReasonNormalClose             = uint16(5)
 	SessionCloseReasonProtocolError           = uint16(6)
 )
 

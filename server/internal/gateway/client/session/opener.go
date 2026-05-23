@@ -1,6 +1,8 @@
 package session
 
 import (
+	"fmt"
+
 	"yumedisk/server/internal/proto"
 	serversession "yumedisk/server/internal/session"
 )
@@ -108,22 +110,22 @@ func (o *Opener) HandleConnHeartbeat(state ConnectionState, header proto.Header,
 	return proto.BuildSuccessResponse(header, nil), nil
 }
 
-func (o *Opener) HandleClose(state ConnectionState, header proto.Header, body []byte) ([]byte, error) {
+func (o *Opener) HandleSessionCloseNotice(state ConnectionState, header proto.Header, body []byte) ([]byte, error) {
 	if header.SessionID == 0 {
-		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
+		return nil, fmt.Errorf("session close notice requires session id")
 	}
-	if len(body) != 0 {
-		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
+	if _, err := proto.ParseSessionCloseNoticeBody(body); err != nil {
+		return nil, fmt.Errorf("session close notice body: %w", err)
 	}
 
 	record, ok := o.registry.LookupOwned(header.SessionID, state.ConnectionID())
 	if !ok {
-		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
+		return nil, nil
 	}
 
 	o.registry.Close(header.SessionID)
 	o.sessions.Close(record.RouteConnectionID, record.UpstreamSessionID)
-	return proto.BuildSuccessResponse(header, nil), nil
+	return nil, nil
 }
 
 func (o *Opener) HandleRead(state ConnectionState, header proto.Header, body []byte) ([]byte, error) {

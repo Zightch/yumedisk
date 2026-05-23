@@ -40,6 +40,13 @@ func (c *connection) roundTrip(payload []byte) ([]byte, error) {
 	return c.roundTripWithTimeout(payload, 0)
 }
 
+func (c *connection) notify(payload []byte) error {
+	c.writeMu.Lock()
+	err := transport.WriteFrame(c.conn, payload)
+	c.writeMu.Unlock()
+	return err
+}
+
 func (c *connection) roundTripWithTimeout(payload []byte, timeout time.Duration) ([]byte, error) {
 	header, err := proto.ParseHeader(payload)
 	if err != nil {

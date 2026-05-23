@@ -87,12 +87,16 @@ func TestGatewaySessionMappingHidesUpstreamSessionIDAndUsesSnapshot(t *testing.T
 		t.Fatalf("write used wrong upstream session id: %d", dataPlane.lastWriteSessionID)
 	}
 
-	closeResp, err := handler.HandlePayload(state, buildRequest(proto.OpClose, 5, openHeader.SessionID, nil))
+	closeResp, err := handler.HandlePayload(state, buildNotice(
+		proto.OpSessionCloseNotice,
+		openHeader.SessionID,
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+	))
 	if err != nil {
-		t.Fatalf("close: %v", err)
+		t.Fatalf("close notice: %v", err)
 	}
-	if header := mustParseGatewayHeader(t, closeResp); header.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected close status: %d", header.StatusCode)
+	if closeResp != nil {
+		t.Fatal("expected close notice to produce no response")
 	}
 	if dataPlane.lastCloseSessionID != dataPlane.openSessionID {
 		t.Fatalf("close used wrong upstream session id: %d", dataPlane.lastCloseSessionID)

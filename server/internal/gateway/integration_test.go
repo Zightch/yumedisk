@@ -145,9 +145,18 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 	}
 	requestID++
 
-	closeResp := mustGatewayRoundTrip(t, conn, buildGatewayRequest(proto.OpClose, requestID, sessionID, nil))
-	if header := mustGatewayHeader(t, closeResp); header.StatusCode != proto.StatusOK {
-		t.Fatalf("close status: %d", header.StatusCode)
+	if err := transport.WriteFrame(conn, buildGatewayNotice(
+		proto.OpSessionCloseNotice,
+		sessionID,
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+	)); err != nil {
+		t.Fatalf("write close notice: %v", err)
+	}
+	requestID++
+
+	readAfterCloseResp := mustGatewayRoundTrip(t, conn, buildGatewayRequest(proto.OpReadAt, requestID, sessionID, proto.BuildReadBody(0, 1)))
+	if header := mustGatewayHeader(t, readAfterCloseResp); header.StatusCode != proto.StatusSessionUnavailable {
+		t.Fatalf("read-after-close status: %d", header.StatusCode)
 	}
 
 	cancel()
@@ -267,6 +276,10 @@ func buildGatewayRequest(opCode uint8, requestID uint64, sessionID uint64, body 
 	}, payload)
 	copy(payload[proto.HeaderSize:], body)
 	return payload
+}
+
+func buildGatewayNotice(opCode uint8, sessionID uint64, body []byte) []byte {
+	return proto.BuildNotice(opCode, sessionID, body)
 }
 
 func mustGatewayHello(t *testing.T, conn net.Conn) {

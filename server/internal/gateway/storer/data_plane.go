@@ -51,7 +51,11 @@ func (p *dataPlane) Close(routeConnectionID uint64, sessionID uint64) {
 	if !ok {
 		return
 	}
-	_, _ = p.roundTripData(conn, proto.OpClose, sessionID, nil)
+	_ = conn.notify(proto.BuildNotice(
+		proto.OpSessionCloseNotice,
+		sessionID,
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+	))
 }
 
 func (p *dataPlane) CloseConnection(uint64) {}

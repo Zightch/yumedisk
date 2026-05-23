@@ -52,11 +52,25 @@ func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte,
 	if err != nil {
 		return nil, fmt.Errorf("connection %d parse header: %w", state.ID, err)
 	}
+	body := payload[proto.HeaderSize:]
+
+	if header.Flags == proto.FlagNotice {
+		if err := proto.ValidateNoticeHeader(header); err != nil {
+			return nil, fmt.Errorf("connection %d validate notice: %w", state.ID, err)
+		}
+
+		switch header.OpCode {
+		case proto.OpSessionCloseNotice:
+			return h.sessionOpener.HandleSessionCloseNotice(state, header, body)
+		default:
+			return nil, fmt.Errorf("connection %d unsupported notice op: %d", state.ID, header.OpCode)
+		}
+	}
+
 	if err := proto.ValidateRequestHeader(header); err != nil {
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
 
-	body := payload[proto.HeaderSize:]
 	switch header.OpCode {
 	case proto.OpAuthStart:
 		return h.authenticator.HandleAuthStart(state, header, body)
@@ -68,8 +82,6 @@ func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte,
 		return h.sessionOpener.HandleDescribe(state, header, body)
 	case proto.OpConnHeartbeat:
 		return h.sessionOpener.HandleConnHeartbeat(state, header, body)
-	case proto.OpClose:
-		return h.sessionOpener.HandleClose(state, header, body)
 	case proto.OpReadAt:
 		return h.sessionOpener.HandleRead(state, header, body)
 	case proto.OpWriteAt:

@@ -26,18 +26,30 @@ func (h *dataPlaneHandler) HandlePayload(payload []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("storer connection %d parse header: %w", h.connectionID, err)
 	}
+	body := payload[proto.HeaderSize:]
+
+	if header.Flags == proto.FlagNotice {
+		if err := proto.ValidateNoticeHeader(header); err != nil {
+			return nil, fmt.Errorf("storer connection %d validate notice: %w", h.connectionID, err)
+		}
+
+		switch header.OpCode {
+		case proto.OpSessionCloseNotice:
+			return h.handleSessionCloseNotice(header, body)
+		default:
+			return nil, fmt.Errorf("storer connection %d unsupported notice op: %d", h.connectionID, header.OpCode)
+		}
+	}
+
 	if err := proto.ValidateRequestHeader(header); err != nil {
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
 
-	body := payload[proto.HeaderSize:]
 	switch header.OpCode {
 	case proto.OpSessionOpen:
 		return h.handleSessionOpen(header, body)
 	case proto.OpLinkHeartbeat:
 		return h.handleLinkHeartbeat(header, body)
-	case proto.OpClose:
-		return h.handleClose(header, body)
 	case proto.OpReadAt:
 		return h.handleRead(header, body)
 	case proto.OpWriteAt:
@@ -76,16 +88,16 @@ func (h *dataPlaneHandler) handleLinkHeartbeat(header proto.Header, body []byte)
 	return proto.BuildSuccessResponse(header, proto.BuildLinkHeartbeatBody(nonce)), nil
 }
 
-func (h *dataPlaneHandler) handleClose(header proto.Header, body []byte) ([]byte, error) {
+func (h *dataPlaneHandler) handleSessionCloseNotice(header proto.Header, body []byte) ([]byte, error) {
 	if header.SessionID == 0 {
-		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
+		return nil, fmt.Errorf("session close notice requires session id")
 	}
-	if len(body) != 0 {
-		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
+	if _, err := proto.ParseSessionCloseNoticeBody(body); err != nil {
+		return nil, fmt.Errorf("session close notice body: %w", err)
 	}
 
 	h.sessions.Close(header.SessionID)
-	return proto.BuildSuccessResponse(header, nil), nil
+	return nil, nil
 }
 
 func (h *dataPlaneHandler) handleRead(header proto.Header, body []byte) ([]byte, error) {

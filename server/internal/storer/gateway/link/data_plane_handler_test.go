@@ -49,12 +49,24 @@ func TestDataPlaneHandlerOpenReadWriteAndClose(t *testing.T) {
 		t.Fatalf("unexpected read payload: %q", string(readResp[proto.HeaderSize:]))
 	}
 
-	closeResp, err := handler.HandlePayload(buildGatewayRequest(proto.OpClose, 4, openHeader.SessionID, nil))
+	closeResp, err := handler.HandlePayload(buildGatewayNotice(
+		proto.OpSessionCloseNotice,
+		openHeader.SessionID,
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+	))
 	if err != nil {
-		t.Fatalf("close: %v", err)
+		t.Fatalf("close notice: %v", err)
 	}
-	if header := mustParseGatewayHeader(t, closeResp); header.StatusCode != proto.StatusOK {
-		t.Fatalf("unexpected close status: %d", header.StatusCode)
+	if closeResp != nil {
+		t.Fatal("expected close notice to produce no response")
+	}
+
+	readAfterCloseResp, err := handler.HandlePayload(buildGatewayRequest(proto.OpReadAt, 5, openHeader.SessionID, proto.BuildReadBody(4, 4)))
+	if err != nil {
+		t.Fatalf("read after close: %v", err)
+	}
+	if header := mustParseGatewayHeader(t, readAfterCloseResp); header.StatusCode != proto.StatusSessionUnavailable {
+		t.Fatalf("unexpected read-after-close status: %d", header.StatusCode)
 	}
 }
 
@@ -138,6 +150,10 @@ func buildGatewayRequest(opCode uint8, requestID uint64, sessionID uint64, body 
 	}, payload)
 	copy(payload[proto.HeaderSize:], body)
 	return payload
+}
+
+func buildGatewayNotice(opCode uint8, sessionID uint64, body []byte) []byte {
+	return proto.BuildNotice(opCode, sessionID, body)
 }
 
 func mustParseGatewayHeader(t *testing.T, payload []byte) proto.Header {
