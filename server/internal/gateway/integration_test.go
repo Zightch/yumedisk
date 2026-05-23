@@ -178,6 +178,192 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 	}
 }
 
+func TestGatewayAndStorerSupportsReadOnlyExportDataPlane(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	rawPath := filepath.Join(tempDir, "disk.raw")
+	if err := os.WriteFile(rawPath, make([]byte, 4096), 0o644); err != nil {
+		t.Fatalf("write raw file: %v", err)
+	}
+
+	rwClaimCode, err := auth.GenerateClaimCode(64)
+	if err != nil {
+		t.Fatalf("generate rw claim code: %v", err)
+	}
+	rwMaterial, err := auth.ParseClaimCode(rwClaimCode)
+	if err != nil {
+		t.Fatalf("parse rw claim code: %v", err)
+	}
+	roClaimCode, err := auth.GenerateClaimCode(64)
+	if err != nil {
+		t.Fatalf("generate ro claim code: %v", err)
+	}
+	roMaterial, err := auth.ParseClaimCode(roClaimCode)
+	if err != nil {
+		t.Fatalf("parse ro claim code: %v", err)
+	}
+
+	clientAddr := reserveGatewayAddr(t)
+	storerListenAddr := reserveGatewayAddr(t)
+	gatewayToken := "dev-gateway-token"
+
+	gatewayRuntime, err := gateway.NewRuntime(config.GatewayConfig{
+		Client: config.GatewayClientConfig{ListenAddr: clientAddr},
+		Storer: config.GatewayStorerConfig{
+			ListenAddr:   storerListenAddr,
+			GatewayToken: gatewayToken,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new gateway runtime: %v", err)
+	}
+
+	storerRuntime, err := storer.NewRoleRuntime(config.StorerConfig{
+		Role:            config.StorerRoleStorer,
+		StorageFilePath: rawPath,
+		ClaimCodeRW:     rwClaimCode,
+		ClaimCodeRO:     roClaimCode,
+		Whole:           config.StorerWholeConfig{ListenAddr: config.DefaultWholeListenAddr},
+		Storer: config.StorerRemoteConfig{
+			GatewayAddr:  storerListenAddr,
+			GatewayToken: gatewayToken,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new storer runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = storerRuntime.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	gatewayDone := make(chan error, 1)
+	go func() {
+		gatewayDone <- gatewayRuntime.Run(ctx)
+	}()
+	waitForGatewayAddr(t, clientAddr)
+	waitForGatewayAddr(t, storerListenAddr)
+
+	storerDone := make(chan error, 1)
+	go func() {
+		storerDone <- storerRuntime.Run(ctx)
+	}()
+
+	rwConn, err := net.Dial("tcp", clientAddr)
+	if err != nil {
+		t.Fatalf("dial gateway rw: %v", err)
+	}
+	defer rwConn.Close()
+	mustGatewayHello(t, rwConn)
+
+	rwRequestID := uint64(1)
+	rwAuthID := authenticateGatewayConnection(t, rwConn, rwMaterial, &rwRequestID)
+
+	var rwOpenHeader proto.Header
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		rwOpenResp := mustGatewayRoundTrip(t, rwConn, buildGatewayRequest(proto.OpSessionOpen, rwRequestID, 0, proto.BuildSessionOpenRequestBody(rwAuthID)))
+		rwOpenHeader = mustGatewayHeader(t, rwOpenResp)
+		if rwOpenHeader.StatusCode == proto.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("rw session open status after registration wait: %d", rwOpenHeader.StatusCode)
+		}
+		if rwOpenHeader.StatusCode != proto.StatusSessionUnavailable {
+			t.Fatalf("unexpected rw session open status before registration: %d", rwOpenHeader.StatusCode)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	rwSessionID := rwOpenHeader.SessionID
+	rwRequestID++
+
+	writePayload := append(proto.BuildReadWriteBody(0, 4), []byte("BOOT")...)
+	writeResp := mustGatewayRoundTrip(t, rwConn, buildGatewayRequest(proto.OpWriteAt, rwRequestID, rwSessionID, writePayload))
+	if header := mustGatewayHeader(t, writeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("rw write status: %d", header.StatusCode)
+	}
+	rwRequestID++
+
+	roConn, err := net.Dial("tcp", clientAddr)
+	if err != nil {
+		t.Fatalf("dial gateway ro: %v", err)
+	}
+	defer roConn.Close()
+	mustGatewayHello(t, roConn)
+
+	roRequestID := uint64(1)
+	roAuthID := authenticateGatewayConnection(t, roConn, roMaterial, &roRequestID)
+
+	var roOpenHeader proto.Header
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		roOpenResp := mustGatewayRoundTrip(t, roConn, buildGatewayRequest(proto.OpSessionOpen, roRequestID, 0, proto.BuildSessionOpenRequestBody(roAuthID)))
+		roOpenHeader = mustGatewayHeader(t, roOpenResp)
+		if roOpenHeader.StatusCode == proto.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ro session open status after registration wait: %d", roOpenHeader.StatusCode)
+		}
+		if roOpenHeader.StatusCode != proto.StatusSessionUnavailable {
+			t.Fatalf("unexpected ro session open status before registration: %d", roOpenHeader.StatusCode)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	roSessionID := roOpenHeader.SessionID
+	roRequestID++
+
+	describeResp := mustGatewayRoundTrip(t, roConn, buildGatewayRequest(proto.OpSessionDescribe, roRequestID, roSessionID, nil))
+	describeHeader := mustGatewayHeader(t, describeResp)
+	if describeHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("ro describe status: %d", describeHeader.StatusCode)
+	}
+	diskSize, maxIOBytes, readOnly, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	if err != nil {
+		t.Fatalf("parse ro describe response: %v", err)
+	}
+	if diskSize != 4096 || maxIOBytes != 60*1024 || !readOnly {
+		t.Fatalf("unexpected ro describe response: size=%d maxIO=%d readOnly=%v", diskSize, maxIOBytes, readOnly)
+	}
+	roRequestID++
+
+	readResp := mustGatewayRoundTrip(t, roConn, buildGatewayRequest(proto.OpReadAt, roRequestID, roSessionID, proto.BuildReadBody(0, 4)))
+	readHeader := mustGatewayHeader(t, readResp)
+	if readHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("ro read status: %d", readHeader.StatusCode)
+	}
+	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("BOOT")) {
+		t.Fatalf("unexpected ro read payload: %q", string(readResp[proto.HeaderSize:]))
+	}
+	roRequestID++
+
+	roWritePayload := append(proto.BuildReadWriteBody(0, 4), []byte("FAIL")...)
+	roWriteResp := mustGatewayRoundTrip(t, roConn, buildGatewayRequest(proto.OpWriteAt, roRequestID, roSessionID, roWritePayload))
+	if header := mustGatewayHeader(t, roWriteResp); header.StatusCode != proto.StatusIOReadOnly {
+		t.Fatalf("ro write status: %d", header.StatusCode)
+	}
+
+	cancel()
+	select {
+	case err := <-gatewayDone:
+		if err != nil {
+			t.Fatalf("gateway runtime exited with error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("gateway runtime did not stop in time")
+	}
+	select {
+	case err := <-storerDone:
+		if err != nil {
+			t.Fatalf("storer runtime exited with error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("storer runtime did not stop in time")
+	}
+}
+
 func authenticateGatewayConnection(t *testing.T, conn net.Conn, material auth.Material, requestID *uint64) uint64 {
 	t.Helper()
 
