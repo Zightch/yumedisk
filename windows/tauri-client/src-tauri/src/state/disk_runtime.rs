@@ -34,7 +34,6 @@ pub enum DiskMediaConfig {
         remote_disk_id: String,
         auth_material: String,
         capacity_bytes: u64,
-        read_only: bool,
     },
 }
 
@@ -43,7 +42,8 @@ pub struct DiskRuntimeSnapshot {
     pub local_disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
-    pub read_only: bool,
+    pub configured_read_only: bool,
+    pub source_read_only: bool,
     pub status: DiskRuntimeStatus,
     pub media: DiskMediaConfig,
 }
@@ -62,7 +62,8 @@ pub struct DiskRuntime {
     pub(crate) local_disk_id: String,
     pub(crate) disk_name: String,
     pub(crate) auto_mount: bool,
-    pub(crate) read_only: bool,
+    pub(crate) configured_read_only: bool,
+    pub(crate) source_read_only: bool,
     pub(crate) state: DiskRuntimeStatus,
     pub(crate) media_config: DiskMediaConfig,
     pub(crate) media: Option<Box<dyn Media>>,
@@ -150,6 +151,7 @@ impl DiskRuntime {
         local_disk_id: String,
         disk_name: String,
         auto_mount: bool,
+        configured_read_only: bool,
         memory_kind: MemoryMediaKind,
         capacity_bytes: u64,
         media: Box<dyn Media>,
@@ -158,7 +160,8 @@ impl DiskRuntime {
             local_disk_id,
             disk_name,
             auto_mount,
-            read_only: false,
+            configured_read_only,
+            source_read_only: false,
             state: DiskRuntimeStatus::Unmounted,
             media_config: DiskMediaConfig::Memory {
                 memory_kind,
@@ -172,10 +175,11 @@ impl DiskRuntime {
         local_disk_id: String,
         disk_name: String,
         auto_mount: bool,
+        configured_read_only: bool,
         file_kind: FileMediaKind,
         file_path: String,
         capacity_bytes: u64,
-        read_only: bool,
+        source_read_only: bool,
         status: DiskRuntimeStatus,
         media: Option<Box<dyn Media>>,
     ) -> Self {
@@ -183,7 +187,8 @@ impl DiskRuntime {
             local_disk_id,
             disk_name,
             auto_mount,
-            read_only,
+            configured_read_only,
+            source_read_only,
             state: status,
             media_config: DiskMediaConfig::File {
                 file_kind,
@@ -202,13 +207,15 @@ impl DiskRuntime {
         remote_disk_id: String,
         auth_material: String,
         capacity_bytes: u64,
-        read_only: bool,
+        configured_read_only: bool,
+        source_read_only: bool,
     ) -> Self {
         Self {
             local_disk_id,
             disk_name,
             auto_mount,
-            read_only,
+            configured_read_only,
+            source_read_only,
             state: DiskRuntimeStatus::Invalid {
                 reason: "网络盘会话未打开".to_string(),
             },
@@ -217,7 +224,6 @@ impl DiskRuntime {
                 remote_disk_id,
                 auth_material,
                 capacity_bytes,
-                read_only,
             },
             media: None,
         }
@@ -235,13 +241,23 @@ impl DiskRuntime {
         self.auto_mount
     }
 
-    pub fn set_identity(&mut self, disk_name: String, auto_mount: bool) {
+    pub fn set_user_config(
+        &mut self,
+        disk_name: String,
+        auto_mount: bool,
+        configured_read_only: bool,
+    ) {
         self.disk_name = disk_name;
         self.auto_mount = auto_mount;
+        self.configured_read_only = configured_read_only;
     }
 
-    pub fn read_only(&self) -> bool {
-        self.read_only
+    pub fn configured_read_only(&self) -> bool {
+        self.configured_read_only
+    }
+
+    pub fn source_read_only(&self) -> bool {
+        self.source_read_only
     }
 
     pub fn capacity_bytes(&self) -> u64 {
@@ -327,7 +343,7 @@ impl DiskRuntime {
         self.state = DiskRuntimeStatus::Unmounted;
     }
 
-    pub fn set_file_unmounted(&mut self, capacity_bytes: u64, read_only: bool) {
+    pub fn set_file_unmounted(&mut self, capacity_bytes: u64, source_read_only: bool) {
         if let DiskMediaConfig::File {
             capacity_bytes: current_capacity_bytes,
             ..
@@ -335,7 +351,7 @@ impl DiskRuntime {
         {
             *current_capacity_bytes = capacity_bytes;
         }
-        self.read_only = read_only;
+        self.source_read_only = source_read_only;
         self.state = DiskRuntimeStatus::Unmounted;
     }
 
@@ -347,27 +363,25 @@ impl DiskRuntime {
         {
             *current_capacity_bytes = 0;
         }
-        self.read_only = false;
+        self.source_read_only = false;
         self.state = DiskRuntimeStatus::Invalid { reason };
         self.media = None;
     }
 
-    pub fn set_network_unmounted(&mut self, capacity_bytes: u64, read_only: bool) {
-        self.refresh_network_metadata(capacity_bytes, read_only);
+    pub fn set_network_unmounted(&mut self, capacity_bytes: u64, source_read_only: bool) {
+        self.refresh_network_metadata(capacity_bytes, source_read_only);
         self.state = DiskRuntimeStatus::Unmounted;
     }
 
-    pub fn refresh_network_metadata(&mut self, capacity_bytes: u64, read_only: bool) {
+    pub fn refresh_network_metadata(&mut self, capacity_bytes: u64, source_read_only: bool) {
         if let DiskMediaConfig::Network {
             capacity_bytes: current_capacity_bytes,
-            read_only: current_read_only,
             ..
         } = &mut self.media_config
         {
             *current_capacity_bytes = capacity_bytes;
-            *current_read_only = read_only;
         }
-        self.read_only = read_only;
+        self.source_read_only = source_read_only;
     }
 
     pub fn set_network_invalid(&mut self, reason: String) {
@@ -391,7 +405,8 @@ impl DiskRuntime {
             local_disk_id: self.local_disk_id().to_string(),
             disk_name: self.disk_name().to_string(),
             auto_mount: self.auto_mount(),
-            read_only: self.read_only(),
+            configured_read_only: self.configured_read_only(),
+            source_read_only: self.source_read_only(),
             status: self.status().clone(),
             media: self.media_snapshot(),
         }

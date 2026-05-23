@@ -324,6 +324,13 @@
   align-items: center;
 }
 
+.app-dialog__hint {
+  margin: 10px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .app-dialog-tabs.el-tabs {
   --el-tabs-header-height: 36px;
   display: flex;

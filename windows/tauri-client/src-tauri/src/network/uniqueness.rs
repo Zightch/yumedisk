@@ -68,6 +68,7 @@ mod tests {
             "claim-1".to_string(),
             4096,
             false,
+            false,
         ));
 
         let network_client = NetworkClientState::default();

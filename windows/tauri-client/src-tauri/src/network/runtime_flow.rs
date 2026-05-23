@@ -41,7 +41,7 @@ pub fn mount_network_disk(
     network_client_mutex: &Mutex<NetworkClientState>,
     local_disk_id: &str,
 ) -> Result<u32, ApiError> {
-    let key = {
+    let (key, configured_read_only) = {
         let runtime = runtime_store
             .find_runtime(local_disk_id)
             .ok_or_else(|| validation::disk_not_found_error(local_disk_id))?;
@@ -62,7 +62,10 @@ pub fn mount_network_disk(
         let (server_addr, remote_disk_id) = runtime
             .network_key()
             .ok_or_else(|| ApiError::new("disk-not-network", "磁盘不是网络盘", None))?;
-        NetworkDiskKey::new(server_addr, remote_disk_id)
+        (
+            NetworkDiskKey::new(server_addr, remote_disk_id),
+            runtime.configured_read_only(),
+        )
     };
 
     let opened_session = {
@@ -100,6 +103,7 @@ pub fn mount_network_disk(
         key.remote_disk_id.clone(),
         opened_session.session.clone(),
         opened_session.metadata,
+        configured_read_only,
     )
     .map(|media| {
         media.with_invalidation_handler({
@@ -110,7 +114,7 @@ pub fn mount_network_disk(
     .map_err(map_mount_error)?;
     let disk_config = DiskConfig {
         disk_size_bytes: opened_session.metadata.disk_size_bytes,
-        read_only: opened_session.metadata.read_only,
+        read_only: configured_read_only || opened_session.metadata.read_only,
         ..DiskConfig::default()
     };
     let boxed_media: Box<dyn Media> = Box::new(media);
@@ -156,7 +160,7 @@ pub fn eject_network_disk(
         .ok_or_else(|| ApiError::new("eject-disk-failed", "拔出磁盘失败", Some(error_text)))?;
     drop(media);
 
-    runtime.set_network_unmounted(runtime.capacity_bytes(), runtime.read_only());
+    runtime.set_network_unmounted(runtime.capacity_bytes(), runtime.source_read_only());
     Ok(())
 }
 
@@ -173,7 +177,7 @@ pub fn prepare_deleted_network_runtime(
         drop(media);
         removed_runtime.runtime.set_network_unmounted(
             removed_runtime.runtime.capacity_bytes(),
-            removed_runtime.runtime.read_only(),
+            removed_runtime.runtime.source_read_only(),
         );
     }
 
@@ -471,6 +475,7 @@ mod tests {
             "claim-2".to_string(),
             4096,
             false,
+            false,
         );
         runtime.set_network_unmounted(4096, false);
         runtime_store.insert_runtime(runtime);
@@ -517,6 +522,7 @@ mod tests {
             "A1b2C3d4E5f6G7h8".to_string(),
             "claim-1".to_string(),
             4096,
+            false,
             false,
         );
         runtime.set_network_unmounted(4096, false);
@@ -567,6 +573,7 @@ mod tests {
             "claim-2".to_string(),
             4096,
             false,
+            false,
         );
         runtime.set_network_unmounted(4096, false);
         runtime_store.insert_runtime(runtime);
@@ -605,6 +612,7 @@ mod tests {
             "M1n2B3v4C5x6Z7a8".to_string(),
             "claim-3".to_string(),
             4096,
+            false,
             false,
         );
         runtime.set_mounted(7);
@@ -648,6 +656,7 @@ mod tests {
             "Q1w2E3r4T5y6U7i8".to_string(),
             "claim-4".to_string(),
             1,
+            false,
             true,
         ));
 
@@ -658,7 +667,8 @@ mod tests {
             .expect("runtime should exist");
         assert_eq!(runtime.status(), &DiskRuntimeStatus::Unmounted);
         assert_eq!(runtime.capacity_bytes(), 4096);
-        assert!(!runtime.read_only());
+        assert!(!runtime.source_read_only());
+        assert!(!runtime.configured_read_only());
 
         let network_client = network_client_mutex
             .lock()
@@ -692,6 +702,7 @@ mod tests {
             "Q1w2E3r4T5y6U7i8".to_string(),
             "claim-5".to_string(),
             1,
+            false,
             true,
         );
         runtime.set_mounted(7);
@@ -707,7 +718,8 @@ mod tests {
             &DiskRuntimeStatus::Mounted { target_id: 7 }
         );
         assert_eq!(runtime.capacity_bytes(), 4096);
-        assert!(!runtime.read_only());
+        assert!(!runtime.source_read_only());
+        assert!(!runtime.configured_read_only());
 
         let network_client = network_client_mutex
             .lock()

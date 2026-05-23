@@ -148,6 +148,7 @@ mod tests {
             "claim-1".to_string(),
             4096,
             false,
+            false,
         );
         runtime.set_network_unmounted(4096, false);
         runtime_store.insert_runtime(runtime);
@@ -245,6 +246,7 @@ mod tests {
             "claim-3".to_string(),
             4096,
             false,
+            false,
         );
         runtime.set_network_unmounted(4096, false);
         runtime_store.insert_runtime(runtime);
@@ -298,6 +300,7 @@ mod tests {
             "Z9y8X7w6V5u4T3s2".to_string(),
             "claim-2".to_string(),
             4096,
+            false,
             false,
         );
         runtime.set_network_unmounted(4096, false);

@@ -8,6 +8,7 @@ import { getErrorMessage } from "../../shared/api/appSessionClient";
 interface EditDiskFormModel {
   diskName: string;
   autoMount: boolean;
+  configuredReadOnly: boolean;
 }
 
 const props = defineProps<{
@@ -30,6 +31,18 @@ const errorText = ref<string | null>(null);
 const form = reactive<EditDiskFormModel>({
   diskName: "",
   autoMount: false,
+  configuredReadOnly: false,
+});
+
+const isReadOnlyLocked = computed(() => props.disk?.sourceReadOnly ?? false);
+const displayReadOnly = computed({
+  get: () => form.configuredReadOnly || isReadOnlyLocked.value,
+  set: (value: boolean) => {
+    if (isReadOnlyLocked.value) {
+      return;
+    }
+    form.configuredReadOnly = value;
+  },
 });
 
 watch(
@@ -41,6 +54,7 @@ watch(
 
     form.diskName = disk.diskName;
     form.autoMount = disk.autoMount;
+    form.configuredReadOnly = disk.configuredReadOnly;
     errorText.value = null;
   },
   { immediate: true },
@@ -72,6 +86,7 @@ async function handleSubmit() {
     localDiskId: props.disk.localDiskId,
     diskName: form.diskName.trim(),
     autoMount: form.autoMount,
+    configuredReadOnly: form.configuredReadOnly,
   };
 
   submitting.value = true;
@@ -117,6 +132,14 @@ async function handleSubmit() {
         <el-form-item class="app-dialog-form__switch" label="启动自动挂载">
           <el-switch v-model="form.autoMount" />
         </el-form-item>
+
+        <el-form-item class="app-dialog-form__switch" label="只读">
+          <el-switch v-model="displayReadOnly" :disabled="isReadOnlyLocked" />
+        </el-form-item>
+
+        <p v-if="isReadOnlyLocked" class="app-dialog__hint">
+          源介质当前为只读，不能修改只读选项。
+        </p>
       </el-form>
 
       <el-alert

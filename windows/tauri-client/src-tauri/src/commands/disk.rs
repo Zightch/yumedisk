@@ -55,6 +55,7 @@ pub struct CreateFileDiskRequestDto {
     pub disk_name: String,
     pub file_path: String,
     pub auto_mount: bool,
+    pub configured_read_only: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -139,6 +140,7 @@ pub struct UpdateDiskRequestDto {
     pub local_disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
+    pub configured_read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -193,8 +195,6 @@ pub enum HomeDiskMediaDto {
         remote_disk_id: String,
         #[serde(rename = "capacityBytes")]
         capacity_bytes: u64,
-        #[serde(rename = "readOnly")]
-        read_only: bool,
     },
 }
 
@@ -204,7 +204,8 @@ pub struct HomeDiskListItemDto {
     pub local_disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
-    pub read_only: bool,
+    pub configured_read_only: bool,
+    pub source_read_only: bool,
     pub status: DiskStatusDto,
     pub invalid_reason: Option<String>,
     pub online: bool,
@@ -260,13 +261,11 @@ fn map_home_disk_media_dto(media: DiskMediaConfig) -> HomeDiskMediaDto {
             server_addr,
             remote_disk_id,
             capacity_bytes,
-            read_only,
             ..
         } => HomeDiskMediaDto::Network {
             server_addr,
             remote_disk_id,
             capacity_bytes,
-            read_only,
         },
     }
 }
@@ -278,7 +277,8 @@ fn map_home_disk_list_item_dto(
         local_disk_id: snapshot.local_disk_id,
         disk_name: snapshot.disk_name,
         auto_mount: snapshot.auto_mount,
-        read_only: snapshot.read_only,
+        configured_read_only: snapshot.configured_read_only,
+        source_read_only: snapshot.source_read_only,
         status: match snapshot.status {
             DiskRuntimeStatus::Unmounted => DiskStatusDto::Unmounted,
             DiskRuntimeStatus::Mounted { .. } => DiskStatusDto::Mounted,
@@ -442,6 +442,7 @@ pub fn create_file_disk(
                 disk_name: request.disk_name,
                 file_path: request.file_path,
                 auto_mount: request.auto_mount,
+                configured_read_only: request.configured_read_only,
             },
         )?;
         if let Err(error) =
@@ -657,6 +658,7 @@ pub fn update_disk(
             local_disk_id: request.local_disk_id,
             disk_name: request.disk_name,
             auto_mount: request.auto_mount,
+            configured_read_only: request.configured_read_only,
         },
     )?;
 
@@ -673,9 +675,10 @@ pub fn update_disk(
                     Some(updated_state.previous_snapshot.local_disk_id.clone()),
                 )
             })?;
-        runtime.set_identity(
+        runtime.set_user_config(
             updated_state.previous_snapshot.disk_name,
             updated_state.previous_snapshot.auto_mount,
+            updated_state.previous_snapshot.configured_read_only,
         );
         return Err(error);
     }

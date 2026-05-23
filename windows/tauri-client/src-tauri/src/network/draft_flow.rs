@@ -212,6 +212,7 @@ pub fn submit_network_draft(
             item.key.remote_disk_id.clone(),
             item.auth_material.clone(),
             item.metadata.disk_size_bytes,
+            false,
             item.metadata.read_only,
         ));
         inserted_local_disk_ids.push(local_disk_id);
@@ -558,6 +559,7 @@ mod tests {
                 "Z9y8X7w6V5u4T3s2".to_string(),
                 "claim-mounted".to_string(),
                 1,
+                false,
                 true,
             );
             existing_runtime.set_mounted(7);
@@ -605,7 +607,8 @@ mod tests {
                 &DiskRuntimeStatus::Mounted { target_id: 7 }
             );
             assert_eq!(existing_runtime.capacity_bytes(), 4096);
-            assert!(!existing_runtime.read_only());
+            assert!(!existing_runtime.source_read_only());
+            assert!(!existing_runtime.configured_read_only());
 
             let new_runtime = runtime_store
                 .find_runtime("disk-2")
@@ -629,6 +632,7 @@ mod tests {
             "Z9y8X7w6V5u4T3s2".to_string(),
             "claim-existing".to_string(),
             4096,
+            false,
             false,
         ));
 

@@ -99,6 +99,7 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
                 persisted_disk.local_disk_id,
                 persisted_disk.disk_name,
                 persisted_disk.auto_mount,
+                persisted_disk.configured_read_only,
                 memory_kind,
                 capacity_bytes,
                 media,
@@ -117,6 +118,7 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
                     persisted_disk.local_disk_id,
                     persisted_disk.disk_name,
                     persisted_disk.auto_mount,
+                    persisted_disk.configured_read_only,
                     file_kind,
                     file_path,
                     probe.capacity_bytes,
@@ -128,6 +130,7 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
                     persisted_disk.local_disk_id,
                     persisted_disk.disk_name,
                     persisted_disk.auto_mount,
+                    persisted_disk.configured_read_only,
                     file_kind,
                     file_path,
                     0,
@@ -148,7 +151,7 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
             remote_disk_id,
             auth_material,
             capacity_bytes,
-            read_only,
+            source_read_only,
         } => Ok(DiskRuntime::new_network(
             persisted_disk.local_disk_id,
             persisted_disk.disk_name,
@@ -157,7 +160,8 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
             remote_disk_id,
             auth_material,
             capacity_bytes,
-            read_only,
+            persisted_disk.configured_read_only,
+            source_read_only,
         )),
     }
 }
@@ -176,6 +180,7 @@ fn map_persisted_disk_record(
         local_disk_id: snapshot.local_disk_id,
         disk_name: snapshot.disk_name,
         auto_mount: snapshot.auto_mount,
+        configured_read_only: snapshot.configured_read_only,
         media: match snapshot.media {
             crate::state::disk_runtime::DiskMediaConfig::Memory {
                 memory_kind,
@@ -202,13 +207,12 @@ fn map_persisted_disk_record(
                 remote_disk_id,
                 auth_material,
                 capacity_bytes,
-                read_only,
             } => PersistedDiskMediaConfig::Network {
                 server_addr,
                 remote_disk_id,
                 auth_material,
                 capacity_bytes,
-                read_only,
+                source_read_only: snapshot.source_read_only,
             },
         },
     }
@@ -241,7 +245,7 @@ pub fn probe_raw_file_media(file_path: &str) -> Result<RawFileProbe, ApiError> {
         ));
     }
 
-    let media = RawFileMedia::open(&file_path_buf)
+    let media = RawFileMedia::open(&file_path_buf, false)
         .map_err(|error| map_raw_file_media_error(error, file_path))?;
 
     Ok(RawFileProbe {
@@ -250,7 +254,10 @@ pub fn probe_raw_file_media(file_path: &str) -> Result<RawFileProbe, ApiError> {
     })
 }
 
-pub fn open_raw_file_media(file_path: &str) -> Result<RawFileMedia, ApiError> {
+pub fn open_raw_file_media(
+    file_path: &str,
+    force_read_only: bool,
+) -> Result<RawFileMedia, ApiError> {
     let file_path_buf = PathBuf::from(file_path);
     if !file_path_buf.is_file() {
         return Err(ApiError::new(
@@ -260,7 +267,8 @@ pub fn open_raw_file_media(file_path: &str) -> Result<RawFileMedia, ApiError> {
         ));
     }
 
-    RawFileMedia::open(&file_path_buf).map_err(|error| map_raw_file_media_error(error, file_path))
+    RawFileMedia::open(&file_path_buf, force_read_only)
+        .map_err(|error| map_raw_file_media_error(error, file_path))
 }
 
 fn map_dense_memory_media_error(error: DenseMemoryMediaError, capacity_bytes: u64) -> ApiError {

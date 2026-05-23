@@ -28,8 +28,8 @@ pub struct RawFileMedia {
 }
 
 impl RawFileMedia {
-    pub fn open(path: &Path) -> Result<Self, RawFileMediaError> {
-        let (file, read_only) = match OpenOptions::new().read(true).write(true).open(path) {
+    pub fn open(path: &Path, force_read_only: bool) -> Result<Self, RawFileMediaError> {
+        let (file, source_read_only) = match OpenOptions::new().read(true).write(true).open(path) {
             Ok(file) => (file, false),
             Err(read_write_error) => match OpenOptions::new().read(true).open(path) {
                 Ok(file) => (file, true),
@@ -56,7 +56,7 @@ impl RawFileMedia {
         Ok(Self {
             file: Mutex::new(file),
             size_bytes,
-            read_only,
+            read_only: force_read_only || source_read_only,
         })
     }
 
@@ -162,6 +162,8 @@ fn write_all_at(file: &File, mut offset: u64, mut data: &[u8]) -> io::Result<()>
 mod tests {
     use super::RawFileMedia;
     use super::RawFileMediaError;
+    use backend_rust::BackendError;
+    use backend_rust::Media;
     use std::fs;
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -189,7 +191,7 @@ mod tests {
             .expect("write temp raw file should succeed");
         drop(file);
 
-        let media = RawFileMedia::open(&path).expect("open raw file media should succeed");
+        let media = RawFileMedia::open(&path, false).expect("open raw file media should succeed");
         assert_eq!(media.size_bytes(), 1024);
 
         fs::remove_file(&path).expect("remove temp raw file should succeed");
@@ -207,13 +209,34 @@ mod tests {
             .expect("write temp raw file should succeed");
         drop(file);
 
-        match RawFileMedia::open(&path) {
+        match RawFileMedia::open(&path, false) {
             Err(RawFileMediaError::NoUsableCapacity { actual_size_bytes }) => {
                 assert_eq!(actual_size_bytes, 511);
             }
             Err(other) => panic!("unexpected error: {:?}", other),
             Ok(_) => panic!("open raw file media should fail"),
         }
+
+        fs::remove_file(&path).expect("remove temp raw file should succeed");
+    }
+
+    #[test]
+    fn force_read_only_rejects_write_even_when_file_is_writable() {
+        let path = temp_file_path("raw_file_force_read_only");
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .expect("create temp raw file should succeed");
+        file.write_all(&vec![0u8; 1024])
+            .expect("write temp raw file should succeed");
+        drop(file);
+
+        let media = RawFileMedia::open(&path, true).expect("open raw file media should succeed");
+        let error = media
+            .write_locked(0, &[1, 2, 3, 4])
+            .expect_err("write should fail");
+        assert_eq!(error, BackendError::InvalidParameter);
 
         fs::remove_file(&path).expect("remove temp raw file should succeed");
     }

@@ -18,6 +18,7 @@ interface FileDiskFormModel {
   diskName: string;
   filePath: string;
   autoMount: boolean;
+  configuredReadOnly: boolean;
 }
 
 interface NewFileDiskFormModel {
@@ -50,6 +51,7 @@ const form = reactive<FileDiskFormModel>({
   diskName: "",
   filePath: "",
   autoMount: false,
+  configuredReadOnly: false,
 });
 const newFileForm = reactive<NewFileDiskFormModel>({
   diskName: "",
@@ -89,6 +91,7 @@ function resetForm() {
   form.diskName = "";
   form.filePath = "";
   form.autoMount = false;
+  form.configuredReadOnly = false;
   newFileForm.diskName = "";
   newFileForm.filePath = "";
   newFileForm.capacityMiB = null;
@@ -176,6 +179,7 @@ async function handleSubmit() {
     diskName: form.diskName.trim(),
     filePath: form.filePath.trim(),
     autoMount: form.autoMount,
+    configuredReadOnly: form.configuredReadOnly,
   };
 
   submitting.value = true;
@@ -268,6 +272,10 @@ async function handleCreateNewFileSubmit() {
 
             <el-form-item class="app-dialog-form__switch" label="启动自动挂载">
               <el-switch v-model="form.autoMount" />
+            </el-form-item>
+
+            <el-form-item class="app-dialog-form__switch" label="只读">
+              <el-switch v-model="form.configuredReadOnly" />
             </el-form-item>
           </el-form>
 

@@ -21,14 +21,14 @@ export type HomeDiskMedia =
       serverAddr: string;
       remoteDiskId: string;
       capacityBytes: number;
-      readOnly: boolean;
     };
 
 export interface HomeDiskListItem {
   localDiskId: string;
   diskName: string;
   autoMount: boolean;
-  readOnly: boolean;
+  configuredReadOnly: boolean;
+  sourceReadOnly: boolean;
   status: DiskStatus;
   invalidReason: string | null;
   online: boolean;
@@ -57,6 +57,7 @@ export interface CreateFileDiskRequest {
   diskName: string;
   filePath: string;
   autoMount: boolean;
+  configuredReadOnly: boolean;
 }
 
 export interface CreateFileDiskResponse {
@@ -108,6 +109,7 @@ export interface UpdateDiskRequest {
   localDiskId: string;
   diskName: string;
   autoMount: boolean;
+  configuredReadOnly: boolean;
 }
 
 export interface PickRawFilePathResponse {

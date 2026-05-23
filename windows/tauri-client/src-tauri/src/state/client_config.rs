@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
-pub const CONFIG_VERSION: u32 = 2;
+pub const CONFIG_VERSION: u32 = 3;
 const CONFIG_DIR_NAME: &str = ".yumedisk";
 const CONFIG_FILE_NAME: &str = "client.json";
 
@@ -50,8 +50,8 @@ pub enum PersistedDiskMediaConfig {
         auth_material: String,
         #[serde(rename = "capacityBytes")]
         capacity_bytes: u64,
-        #[serde(rename = "readOnly")]
-        read_only: bool,
+        #[serde(rename = "sourceReadOnly")]
+        source_read_only: bool,
     },
 }
 
@@ -61,6 +61,7 @@ pub struct PersistedDiskRecord {
     pub local_disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
+    pub configured_read_only: bool,
     pub media: PersistedDiskMediaConfig,
 }
 

@@ -35,6 +35,7 @@ impl NetworkMedia {
         remote_disk_id: impl Into<String>,
         session: DiskSession,
         metadata: SessionMetadata,
+        configured_read_only: bool,
     ) -> Result<Self, NetworkClientError> {
         let remote_disk_id = remote_disk_id.into();
         if remote_disk_id.is_empty() {
@@ -51,7 +52,7 @@ impl NetworkMedia {
             remote_disk_id,
             session,
             disk_size_bytes: metadata.disk_size_bytes,
-            read_only: metadata.read_only,
+            read_only: configured_read_only || metadata.read_only,
             max_io_bytes: metadata.max_io_bytes,
             invalidation_handler: None,
         })
@@ -197,6 +198,7 @@ mod tests {
                 read_only: false,
                 max_io_bytes: 4096,
             },
+            false,
         )
         .expect("bind should succeed")
         .with_invalidation_handler({
@@ -212,5 +214,28 @@ mod tests {
             .expect_err("read should fail");
         assert_eq!(error, BackendError::SessionNotOpen);
         assert_eq!(invalidations.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn configured_read_only_rejects_write_when_metadata_is_writable() {
+        let connection = stage_connection(TransportEndpoint::new("127.0.0.1:2"), 19);
+        let session = DiskSession::new(connection, 19).expect("session should build");
+
+        let media = NetworkMedia::bind(
+            "Z9y8X7w6V5u4T3s2",
+            session,
+            SessionMetadata {
+                disk_size_bytes: 4096,
+                read_only: false,
+                max_io_bytes: 4096,
+            },
+            true,
+        )
+        .expect("bind should succeed");
+
+        let error = media
+            .write_locked(0, &[1, 2, 3, 4])
+            .expect_err("write should be rejected");
+        assert_eq!(error, BackendError::InvalidParameter);
     }
 }

@@ -27,7 +27,8 @@ pub struct HomeDiskListItemSnapshot {
     pub local_disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
-    pub read_only: bool,
+    pub configured_read_only: bool,
+    pub source_read_only: bool,
     pub status: DiskRuntimeStatus,
     pub invalid_reason: Option<String>,
     pub online: bool,
@@ -41,6 +42,7 @@ pub struct HomeDiskListSnapshot {
     pub disks: Vec<HomeDiskListItemSnapshot>,
 }
 
+#[derive(Debug)]
 pub struct UpdatedDiskState {
     pub previous_snapshot: DiskRuntimeSnapshot,
 }
@@ -65,6 +67,7 @@ pub struct CreateFileDiskRequest {
     pub disk_name: String,
     pub file_path: String,
     pub auto_mount: bool,
+    pub configured_read_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +94,7 @@ pub struct UpdateDiskRequest {
     pub local_disk_id: String,
     pub disk_name: String,
     pub auto_mount: bool,
+    pub configured_read_only: bool,
 }
 
 const MIB_BYTES: u64 = 1024 * 1024;
@@ -153,6 +157,7 @@ pub fn create_memory_disk(
         local_disk_id.clone(),
         disk_name.to_string(),
         request.auto_mount,
+        false,
         memory_kind,
         capacity_bytes,
         media,
@@ -196,6 +201,7 @@ pub fn create_file_disk(
             local_disk_id.clone(),
             disk_name.to_string(),
             request.auto_mount,
+            request.configured_read_only,
             FileMediaKind::RawFile,
             file_path.to_string(),
             probe.capacity_bytes,
@@ -207,6 +213,7 @@ pub fn create_file_disk(
             local_disk_id.clone(),
             disk_name.to_string(),
             request.auto_mount,
+            request.configured_read_only,
             FileMediaKind::RawFile,
             file_path.to_string(),
             0,
@@ -293,6 +300,7 @@ pub fn create_new_file_disk(
             disk_name: request.disk_name,
             file_path: request.file_path,
             auto_mount: request.auto_mount,
+            configured_read_only: false,
         },
     ) {
         Ok(local_disk_id) => Ok(local_disk_id),
@@ -342,8 +350,11 @@ pub fn mount_local_disk(
                 Some(local_disk_id.to_string()),
             )
         })?;
-        let media = persistence_service::open_raw_file_media(file_path)
-            .map(|media| Box::new(media) as Box<dyn Media>)?;
+        let media = persistence_service::open_raw_file_media(
+            file_path,
+            runtime.configured_read_only() || runtime.source_read_only(),
+        )
+        .map(|media| Box::new(media) as Box<dyn Media>)?;
         runtime.restore_media(media);
     }
 
@@ -491,8 +502,21 @@ pub fn update_disk(
             )
         })?;
 
+    if runtime.source_read_only() && request.configured_read_only != runtime.configured_read_only()
+    {
+        return Err(ApiError::new(
+            "disk-read-only-locked",
+            "源介质当前为只读，不能修改只读选项",
+            Some(request.local_disk_id),
+        ));
+    }
+
     let previous_snapshot = runtime.snapshot();
-    runtime.set_identity(disk_name.to_string(), request.auto_mount);
+    runtime.set_user_config(
+        disk_name.to_string(),
+        request.auto_mount,
+        request.configured_read_only,
+    );
 
     Ok(UpdatedDiskState { previous_snapshot })
 }
@@ -609,7 +633,8 @@ fn map_home_disk_list_item_snapshot(
         local_disk_id: runtime.local_disk_id,
         disk_name: runtime.disk_name,
         auto_mount: runtime.auto_mount,
-        read_only: runtime.read_only,
+        configured_read_only: runtime.configured_read_only,
+        source_read_only: runtime.source_read_only,
         invalid_reason: match &runtime.status {
             DiskRuntimeStatus::Invalid { reason } => Some(reason.clone()),
             DiskRuntimeStatus::Unmounted | DiskRuntimeStatus::Mounted { .. } => None,
@@ -629,7 +654,79 @@ fn map_home_disk_list_item_snapshot(
 fn build_disk_config(runtime: &DiskRuntime) -> DiskConfig {
     DiskConfig {
         disk_size_bytes: runtime.capacity_bytes(),
-        read_only: runtime.read_only(),
+        read_only: runtime.configured_read_only() || runtime.source_read_only(),
         ..DiskConfig::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::update_disk;
+    use super::UpdateDiskRequest;
+    use crate::state::disk_runtime::DiskRuntime;
+    use crate::state::disk_runtime::DiskRuntimeStore;
+
+    #[test]
+    fn update_disk_rejects_configured_read_only_change_when_source_is_locked() {
+        let mut runtime_store = DiskRuntimeStore::default();
+        runtime_store.insert_runtime(DiskRuntime::new_network(
+            "disk-1".to_string(),
+            "network-disk".to_string(),
+            false,
+            "127.0.0.1:9001".to_string(),
+            "A1b2C3d4E5f6G7h8".to_string(),
+            "claim-1".to_string(),
+            4096,
+            false,
+            true,
+        ));
+
+        let error = update_disk(
+            &mut runtime_store,
+            UpdateDiskRequest {
+                local_disk_id: "disk-1".to_string(),
+                disk_name: "network-disk".to_string(),
+                auto_mount: false,
+                configured_read_only: true,
+            },
+        )
+        .expect_err("configured read only change should be rejected");
+
+        assert_eq!(error.code, "disk-read-only-locked");
+    }
+
+    #[test]
+    fn update_disk_allows_renaming_when_source_is_locked() {
+        let mut runtime_store = DiskRuntimeStore::default();
+        runtime_store.insert_runtime(DiskRuntime::new_network(
+            "disk-1".to_string(),
+            "network-disk".to_string(),
+            false,
+            "127.0.0.1:9001".to_string(),
+            "A1b2C3d4E5f6G7h8".to_string(),
+            "claim-1".to_string(),
+            4096,
+            false,
+            true,
+        ));
+
+        update_disk(
+            &mut runtime_store,
+            UpdateDiskRequest {
+                local_disk_id: "disk-1".to_string(),
+                disk_name: "renamed-disk".to_string(),
+                auto_mount: true,
+                configured_read_only: false,
+            },
+        )
+        .expect("rename should succeed");
+
+        let runtime = runtime_store
+            .find_runtime("disk-1")
+            .expect("runtime should exist");
+        assert_eq!(runtime.disk_name(), "renamed-disk");
+        assert!(runtime.auto_mount());
+        assert!(!runtime.configured_read_only());
+        assert!(runtime.source_read_only());
     }
 }
