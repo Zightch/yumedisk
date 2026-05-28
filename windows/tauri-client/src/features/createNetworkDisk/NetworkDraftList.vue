@@ -31,7 +31,7 @@ function formatBytes(value: number): string {
 }
 
 function formatCapacityText(value: number, readOnly: boolean): string {
-  return `${formatBytes(value)}${readOnly ? "·只读" : "·读写"}`;
+  return `${formatBytes(value)} · ${readOnly ? "只读" : "读写"}`;
 }
 </script>
 
