@@ -47,6 +47,7 @@
 
 ### 2.2 常量
 
+- `SECTOR_ALIGNMENT_BYTES`
 - `DEFAULT_SECTOR_SIZE`
 - `DEFAULT_QUEUE_DEPTH`
 - `DEFAULT_WRITE_SLOT_BYTES`
@@ -131,7 +132,7 @@ pub struct DiskConfig {
 | `write_slot_bytes` | `1048576` | `> 0` | 单写槽字节数 |
 | `read_worker_count` | `12` | `> 0` | 读 worker 数 |
 | `write_worker_count` | `12` | `> 0` | 写 worker 数 |
-| `ack_batch_max_ranges` | `32` | `> 0` | 单次 ack 最多 range 数 |
+| `ack_batch_max_ranges` | `96` | `> 0` | 单次 ack 最多 range 数 |
 | `read_only` | `false` | `true/false` | 是否系统级只读 |
 
 `disk_size_bytes` 必须和 `Media::size_bytes()` 完全相等。
@@ -172,6 +173,7 @@ pub struct ManagedDiskSnapshot {
 | `open()` | `bool` | 打开 session 并启动事件线程 |
 | `close()` | `()` | 关闭 session、事件线程和所有盘 |
 | `query_session_state_text()` | `String` | 文本化 session 状态 |
+| `query_component_version_snapshot()` | `ComponentVersionSnapshot` | 查询 `AppKernel/KMDF/SCSI` 版本快照 |
 | `snapshot_log_lines()` | `Vec<String>` | 当前缓冲日志 |
 | `snapshot_managed_disks()` | `Vec<ManagedDiskSnapshot>` | 当前所有管理盘 |
 | `query_backend_stats()` | `bool` | 查询统计，失败时写 `out_error_text` |
@@ -179,9 +181,51 @@ pub struct ManagedDiskSnapshot {
 | `find_first_free_target()` | `u32` | 找首个空闲 target |
 | `create_managed_disk()` | `bool` | 建盘 |
 | `try_create_managed_disk()` | `Result<u32, Box<dyn Media>>` | 建盘，失败时返还 media |
+| `notify_managed_disk_data_changed()` | `bool` | 对单盘同步下发 `data_changed` 通知 |
 | `remove_managed_disk()` | `bool` | 删单盘 |
 | `remove_managed_disk_with_media()` | `Option<Box<dyn Media>>` | 删单盘并返还 media |
 | `remove_all_managed_disks()` | `bool` | 删全部宿主持有盘 |
+
+### 7.1 `notify_managed_disk_data_changed()`
+
+```rust
+pub fn notify_managed_disk_data_changed(
+    &self,
+    target_id: u32,
+    out_error_text: Option<&mut String>,
+) -> bool
+```
+
+固定语义：
+
+- 这是一条宿主显式发起的 per-disk 下行通知，只表达“该盘底层内容已被别处改动”。
+- `BackendRust` 只负责把目标盘解析到现有 runtime / `AK_DISK*`，再同步下发给 `AppKernel`。
+- 当前版本只支持单盘 `data_changed`，不承载 `smid`、共享组、sibling 集合或批量 fanout。
+- `WriteFinalCommitted` 事件线程仍只处理当前盘 staged write commit，不会隐式调用这条 API。
+
+入口约束：
+
+- `BackendContext` session 必须已打开。
+- `target_id` 必须仍存在于当前 `BackendRust` 管理盘集合内。
+- 目标盘必须已有有效 `AK_DISK*` 句柄。
+- 目标盘当前生命周期必须是 `running`。
+
+失败返回：
+
+- 返回 `false`，并可通过 `out_error_text` 取得当前错误文本。
+- 当前实现已使用的错误文本包括：
+  - `session-not-open`
+  - `target-not-found`
+  - `disk-handle-not-ready`
+  - `disk-not-running(<lifecycle>)`
+  - `query-disk-state-failed(0xXXXXXXXX)`
+  - `notify-data-changed-failed(0xXXXXXXXX)`
+
+边界说明：
+
+- 这条调用成功或失败，都不会回滚当前盘已经 committed 的写。
+- 这条调用也不会修改 `BackendRust` 内部 staged write、共享组关系或额外事件队列。
+- 是否需要把一次写入 fanout 到其他盘，由更上层宿主自己决定。
 
 ## 8. 推荐调用流程
 
@@ -192,9 +236,10 @@ pub struct ManagedDiskSnapshot {
 5. 组装 `DiskConfig`
 6. `create_managed_disk()` 或 `try_create_managed_disk()`
 7. 通过 `snapshot_managed_disks()` 读取 target/lifecycle/online
-8. 执行宿主侧业务
-9. `remove_managed_disk()` 或 `remove_all_managed_disks()`
-10. `close()`
+8. 如需通知某块已存在盘“底层内容已被别处改动”，调用 `notify_managed_disk_data_changed()`
+9. 执行宿主侧业务
+10. `remove_managed_disk()` 或 `remove_all_managed_disks()`
+11. `close()`
 
 ## 9. 错误模型
 
@@ -227,3 +272,4 @@ pub struct ManagedDiskSnapshot {
 - `read_only = true` 是对上层系统暴露的只读盘，不只是 UI 标记。
 - 建盘成功不代表宿主需要等待系统设备路径；当前 SDK 不提供这类路径。
 - 如果宿主直接校验内存介质，应允许 staged write 到最终 commit 之间存在短暂窗口。
+- `notify_managed_disk_data_changed()` 只接单盘目标，不提供共享组或 sibling 批量语义。
