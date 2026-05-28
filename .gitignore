@@ -58,9 +58,6 @@ jsoncpp/
 **/tmp*/
 **/.tmp*/
 !docs/tmp/
-docs/tmp/*
-!docs/tmp/todo.md
-!docs/tmp/todo-*.md
 
 # Local environment
 **/env.cmake
