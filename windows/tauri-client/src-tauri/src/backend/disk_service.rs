@@ -9,6 +9,7 @@ use backend_rust::Media;
 use rfd::FileDialog;
 
 use crate::api_error::ApiError;
+use crate::backend::config_service;
 use crate::backend::memory_media::DenseMemoryMedia;
 use crate::backend::memory_media::DenseMemoryMediaError;
 use crate::backend::memory_media::SparseMemoryMedia;
@@ -653,6 +654,7 @@ fn map_home_disk_list_item_snapshot(
 
 fn build_disk_config(runtime: &DiskRuntime) -> DiskConfig {
     DiskConfig {
+        sector_size: config_service::query_disk_sector_size_bytes(),
         disk_size_bytes: runtime.capacity_bytes(),
         read_only: runtime.configured_read_only() || runtime.source_read_only(),
         ..DiskConfig::default()

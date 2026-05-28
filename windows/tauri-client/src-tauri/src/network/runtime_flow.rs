@@ -8,6 +8,7 @@ use backend_rust::Media;
 use network_core::client::NetworkClientError;
 
 use crate::api_error::ApiError;
+use crate::backend::config_service;
 use crate::backend::network_media::NetworkMedia;
 use crate::state::disk_runtime::DiskRuntimeStore;
 use crate::state::disk_runtime::RemovedDiskRuntime;
@@ -113,6 +114,7 @@ pub fn mount_network_disk(
     })
     .map_err(map_mount_error)?;
     let disk_config = DiskConfig {
+        sector_size: config_service::query_disk_sector_size_bytes(),
         disk_size_bytes: opened_session.metadata.disk_size_bytes,
         read_only: configured_read_only || opened_session.metadata.read_only,
         ..DiskConfig::default()

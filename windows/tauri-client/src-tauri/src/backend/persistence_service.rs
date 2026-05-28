@@ -6,6 +6,7 @@ use backend_rust::Media;
 use backend_rust::SessionConfig;
 
 use crate::api_error::ApiError;
+use crate::backend::config_service;
 use crate::backend::memory_media::DenseMemoryMedia;
 use crate::backend::memory_media::DenseMemoryMediaError;
 use crate::backend::memory_media::SparseMemoryMedia;
@@ -245,8 +246,12 @@ pub fn probe_raw_file_media(file_path: &str) -> Result<RawFileProbe, ApiError> {
         ));
     }
 
-    let media = RawFileMedia::open(&file_path_buf, false)
-        .map_err(|error| map_raw_file_media_error(error, file_path))?;
+    let media = RawFileMedia::open(
+        &file_path_buf,
+        false,
+        config_service::query_disk_sector_size_bytes(),
+    )
+    .map_err(|error| map_raw_file_media_error(error, file_path))?;
 
     Ok(RawFileProbe {
         capacity_bytes: media.size_bytes(),
@@ -267,8 +272,12 @@ pub fn open_raw_file_media(
         ));
     }
 
-    RawFileMedia::open(&file_path_buf, force_read_only)
-        .map_err(|error| map_raw_file_media_error(error, file_path))
+    RawFileMedia::open(
+        &file_path_buf,
+        force_read_only,
+        config_service::query_disk_sector_size_bytes(),
+    )
+    .map_err(|error| map_raw_file_media_error(error, file_path))
 }
 
 fn map_dense_memory_media_error(error: DenseMemoryMediaError, capacity_bytes: u64) -> ApiError {
@@ -306,7 +315,7 @@ fn map_raw_file_media_error(error: RawFileMediaError, file_path: &str) -> ApiErr
         ),
         RawFileMediaError::NoUsableCapacity { actual_size_bytes } => ApiError::new(
             "raw-file-no-usable-capacity",
-            "RAW 文件至少需要一个完整的 512 字节盘块",
+            "RAW 文件不能为空",
             Some(format!("{} | actualBytes={}", file_path, actual_size_bytes)),
         ),
     }

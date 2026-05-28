@@ -27,3 +27,7 @@ pub fn query_backend_defaults() -> BackendDefaultsSnapshot {
 pub fn query_app_session_config(backend: &BackendContext) -> SessionConfig {
     backend.session_config()
 }
+
+pub fn query_disk_sector_size_bytes() -> u32 {
+    DiskConfig::default().sector_size
+}
