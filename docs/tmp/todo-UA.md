@@ -8,7 +8,12 @@
 
 执行顺序固定为两阶段：
 
-1. 先打通本地 `rust-cli -> BackendRust -> AppKernel -> YumeDiskKMDF -> YumeDiskSCSI -> Windows` 链路。
+1. 先按驱动链自底向上顺序打通本地链路：
+   - `YumeDiskSCSI`
+   - `YumeDiskKMDF`
+   - `AppKernel`
+   - `BackendRust`
+   - `rust-cli`
 2. 本地共享 `MemoryMedia` 最小闭环稳定后，再接入网络侧 `rw -> ro` 的变更传播。
 
 当前版本固定只做一种变化：
@@ -27,6 +32,7 @@
 - `AsyncNotificationSupported + StorPortAsyncNotificationDetected(..., RAID_ASYNC_NOTIFY_FLAG_MEDIA_STATUS)` 只做系统感知加速。
 - 正式设备语义仍然靠 `Unit Attention` 收口。
 - `Unit Attention` 表达的是“该 target 底层内容可能已变”，不是“盘失效”。
+- 本轮 `YumeDiskSCSI / YumeDiskKMDF / AppKernel` 版本口径统一升级到 `0.1.0.1`。
 
 ## 2. 适用原则
 
@@ -237,11 +243,16 @@
 
 ## 4. 重建边界
 
-### 4.1 先本地，后网络
+### 4.1 先本地，后网络，且本地固定自底向上
 
 顺序固定为：
 
-1. `rust-cli` 本地共享 `MemoryMedia` 验证链路
+1. 本地 `Unit Attention / data_changed` 驱动链
+   - `YumeDiskSCSI`
+   - `YumeDiskKMDF`
+   - `AppKernel`
+   - `BackendRust`
+   - `rust-cli`
 2. 再把同一条 `data_changed` 语义接到网络链路
 
 本清单中的阶段 A-F 属于第一步。
@@ -267,6 +278,25 @@
 
 - 对外公开面直接叫 `NotifyDataChanged`
 - 不先造一套“未来也许能扩展”的大抽象
+
+### 4.2.1 当前版本升级口径
+
+由于本轮会同时改动：
+
+- `YumeDiskSCSI` 对系统暴露的正式设备语义
+- `YumeDiskKMDF <-> YumeDiskSCSI` 私有控制命令集合
+- `AppKernel` 对宿主暴露的正式公开 API
+
+因此这一版版本号不再停留在 `0.1.0.0`，而是统一升级到：
+
+- `0.1.0.1`
+
+当前口径固定为：
+
+- 版本升级动作只在真正开始实现本轮 UA / data_changed 主线时执行
+- 不做“先改行为、后补版本”的滞后做法
+- 不保留旧版本并存兼容桥
+- `YumeDiskSCSI / YumeDiskKMDF / AppKernel` 三者必须保持同一 `VersionBe`
 
 ### 4.3 Async Notification 只是加速层
 
@@ -554,51 +584,55 @@ Windows WRITE(target=A)
 
 ## 8. 分阶段工作
 
-### 阶段 A：重建 rust-cli 本地共享内存命令面
+### 阶段 A：先重建 SCSI 的 Unit Attention 正式语义
 
 目标：
 
-- 先建立正式的本地共享内存区模型
+- 先让最底层设备模型具备正式 `pending data_changed -> Unit Attention` 语义
 
 任务：
 
-- 删除旧 `ct <disk-size-mib> ...` 解析口径
-- 删除旧 `rm all` 口径
-- 新增 `sm <size-mib>`
-- 新增 `ct size=...`
-- 新增 `ct smid=...`
-- 新增 `rm target=...`
-- 新增 `rm smid=...`
-- 建立 `smid` 注册表
-- 建立 `smid -> bound targets` 成员关系
-
-边界：
-
-- `sm` 只创建共享内存区，不自动建盘
-- `ct size=...` 不进入共享注册表
-- `ct smid=...` 必须复用已存在共享内存区
-
-### 阶段 B：重建 BackendRust 的 host-side 绑定与 fanout
-
-目标：
-
-- 在 `WriteFinalCommitted` 后找出同 `smid` 的 sibling target
-
-任务：
-
-- 补 `ManagedDiskBinding` 或等价 host-side binding
-- `create_managed_disk` 时把 `local_shared_media_id` 写入 runtime 真状态
-- event thread 处理 `AkEventWriteFinalCommitted` 时：
-  - 先 commit 当前盘 staged write
-  - 再判断是否属于共享内存组
-  - 找出 sibling targets
-  - 对除自己外的 sibling target 调 `notify_disk_data_changed(target)`
+- 将 `YumeDiskSCSI / YumeDiskKMDF / AppKernel` 共享版本口径从 `0.1.0.0` 升级到 `0.1.0.1`
+- `YUME_DISK` 增加 `PendingDataChangedUa`
+- `control/control.c` 处理 `YumeDiskCommandNotifyDataChanged`
+- target 首次从 `false -> true` 时：
+  - 置 pending
+  - best-effort 调 `StorPortAsyncNotificationDetected(...MEDIA_STATUS)`
+- 在 `scsi/scsi.c` 增加：
+  - `FillUnitAttentionSenseDataChanged`
+  - `TryConsumePendingDataChangedUa`
+  - `REQUEST SENSE` 专门处理
+  - `TEST UNIT READY` / `READ` / `WRITE` / `READ CAPACITY` / `MODE SENSE` / `VERIFY` 前置 UA
+- `adapter/adapter.c` 或合适初始化点接入 `StorPortSetUnitAttributes`
 
 固定约束：
 
-- sibling notify 失败只记日志
-- 不能回滚已 committed 的写
-- 不允许把 sibling group 状态复制到多个地方并行维护
+- 同一 target 连续多次外部写入，在 pending 尚未消费时只保留一个 pending 位
+- 不把内容变化扩大成 `BusChangeDetected`
+- 不删盘
+- 不 complete pending read/write 失败
+
+### 阶段 B：重建 KMDF 的同步代理命令
+
+目标：
+
+- 在 miniport 语义就位后，把 host 的 `NotifyDataChanged` 正式代理到 miniport
+
+任务：
+
+- `yumedisk_proto.h` 增加 `YumeDiskCommandNotifyDataChanged`
+- `control/ioctl.c` 接入 command 白名单
+- 走现有 `ControlProxyMessage` 同步代理路径
+- 在唯一入口校验：
+  - payload length must be zero
+  - `Header.TargetId` 合法
+
+固定约束：
+
+- 不引入异步 slot transport
+- 不在 KMDF 镜像维护 target pending UA
+- 不新增 generic “device event” 总线
+- 继续沿用“兼容性只看版本相等”的当前正式口径；既然命令集合已变化，本轮版本必须已经提升到 `0.1.0.1`
 
 ### 阶段 C：重建 AppKernel 的 NotifyDataChanged API
 
@@ -621,54 +655,53 @@ Windows WRITE(target=A)
 - 不新增 event queue 上行事件
 - 不新增 generic change kind
 - 不把“数据已变”伪装成 remove/recreate
+- `AK_VERSION_BE` 必须随本轮同步提升到 `0.1.0.1`
 
-### 阶段 D：重建 KMDF 的同步代理命令
-
-目标：
-
-- 把 host 的 `NotifyDataChanged` 正式代理到 miniport
-
-任务：
-
-- `yumedisk_proto.h` 增加 `YumeDiskCommandNotifyDataChanged`
-- `control/ioctl.c` 接入 command 白名单
-- 走现有 `ControlProxyMessage` 同步代理路径
-- 在唯一入口校验：
-  - payload length must be zero
-  - `Header.TargetId` 合法
-
-固定约束：
-
-- 不引入异步 slot transport
-- 不在 KMDF 镜像维护 target pending UA
-- 不新增 generic “device event” 总线
-
-### 阶段 E：重建 SCSI 的 Unit Attention 正式语义
+### 阶段 D：重建 BackendRust 的 host-side 绑定与 fanout
 
 目标：
 
-- 把“内容已变”固定表达成标准设备行为
+- 在下行 API 就位后，于 `WriteFinalCommitted` 后找出同 `smid` 的 sibling target
 
 任务：
 
-- `YUME_DISK` 增加 `PendingDataChangedUa`
-- `control/control.c` 处理 `YumeDiskCommandNotifyDataChanged`
-- target 首次从 `false -> true` 时：
-  - 置 pending
-  - best-effort 调 `StorPortAsyncNotificationDetected(...MEDIA_STATUS)`
-- 在 `scsi/scsi.c` 增加：
-  - `FillUnitAttentionSenseDataChanged`
-  - `TryConsumePendingDataChangedUa`
-  - `REQUEST SENSE` 专门处理
-  - `TEST UNIT READY` / `READ` / `WRITE` / `READ CAPACITY` / `MODE SENSE` / `VERIFY` 前置 UA
-- `adapter/adapter.c` 或合适初始化点接入 `StorPortSetUnitAttributes`
+- 补 `ManagedDiskBinding` 或等价 host-side binding
+- `create_managed_disk` 时把 `local_shared_media_id` 写入 runtime 真状态
+- event thread 处理 `AkEventWriteFinalCommitted` 时：
+  - 先 commit 当前盘 staged write
+  - 再判断是否属于共享内存组
+  - 找出 sibling targets
+  - 对除自己外的 sibling target 调 `notify_disk_data_changed(target)`
 
 固定约束：
 
-- 同一 target 连续多次外部写入，在 pending 尚未消费时只保留一个 pending 位
-- 不把内容变化扩大成 `BusChangeDetected`
-- 不删盘
-- 不 complete pending read/write 失败
+- sibling notify 失败只记日志
+- 不能回滚已 committed 的写
+- 不允许把 sibling group 状态复制到多个地方并行维护
+
+### 阶段 E：最后重建 rust-cli 本地共享内存命令面
+
+目标：
+
+- 在下层链路全部稳定后，再建立正式的本地共享内存区模型与验收入口
+
+任务：
+
+- 删除旧 `ct <disk-size-mib> ...` 解析口径
+- 删除旧 `rm all` 口径
+- 新增 `sm <size-mib>`
+- 新增 `ct size=...`
+- 新增 `ct smid=...`
+- 新增 `rm target=...`
+- 新增 `rm smid=...`
+- 建立 `smid` 注册表
+- 建立 `smid -> bound targets` 成员关系
+
+边界：
+
+- `sm` 只创建共享内存区，不自动建盘
+- `ct size=...` 不进入共享注册表
+- `ct smid=...` 必须复用已存在共享内存区
 
 ### 阶段 F：重建本地最小闭环验收
 
@@ -769,14 +802,15 @@ Windows WRITE(target=A)
 
 满足以下条件才算 UA 第一阶段重建完成：
 
-- `rust-cli` 已按 `sm / ct(size|smid) / rm(target|smid)` 收成唯一正式命令面
-- 本地共享内存区已成为正式注册表模型，而不是临时对象拼接
-- `BackendRust` 已能在 `WriteFinalCommitted` 后对 sibling target 发起 dedicated downward notify
-- `AppKernel` 已提供 `AkNotifyDiskDataChanged`
-- `KMDF` 已正式代理 `YumeDiskCommandNotifyDataChanged`
+- `YumeDiskSCSI / YumeDiskKMDF / AppKernel` 已统一升级到版本 `0.1.0.1`
 - `SCSI` 已持有 per-target `PendingDataChangedUa`
 - `SCSI` 已能对系统命令返回一次正式 `Unit Attention`
 - `StorPortAsyncNotificationDetected(...MEDIA_STATUS)` 已作为加速层接入
+- `KMDF` 已正式代理 `YumeDiskCommandNotifyDataChanged`
+- `AppKernel` 已提供 `AkNotifyDiskDataChanged`
+- `BackendRust` 已能在 `WriteFinalCommitted` 后对 sibling target 发起 dedicated downward notify
+- `rust-cli` 已按 `sm / ct(size|smid) / rm(target|smid)` 收成唯一正式命令面
+- 本地共享内存区已成为正式注册表模型，而不是临时对象拼接
 - 本地双 target 共享 `MemoryMedia` 已完成最小闭环验收
 - 文档与测试已同步到当前唯一正式口径
 
