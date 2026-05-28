@@ -9,10 +9,12 @@ use std::time::Duration;
 
 use backend_rust::YUMEDISK_MAX_USABLE_TARGET_ID;
 
-use super::command::PlannedNetworkCommand;
 use super::host::AppResult;
 use super::host::CliHost;
-use super::host::CreateDenseDiskRequest;
+use super::host::CreateLocalDiskRequest;
+use super::host::CreateLocalDiskSource;
+use super::host::RemoveSharedMemorySelector;
+use super::host::RemoveTargetSelector;
 
 enum LoopControl {
     Continue,
@@ -37,7 +39,9 @@ pub fn run_shell() -> AppResult<()> {
     loop_result
 }
 
-pub fn run_shell_with_startup_command(planned: PlannedNetworkCommand) -> AppResult<()> {
+pub fn run_shell_with_startup_command(
+    planned: super::command::PlannedNetworkCommand,
+) -> AppResult<()> {
     let host = Arc::new(Mutex::new(CliHost::open()?));
     let reaper = start_dead_network_reaper(Arc::clone(&host));
     println!("state=ready(rust-cli)");
@@ -78,6 +82,7 @@ fn run_command_loop(host: &Arc<Mutex<CliHost>>) -> AppResult<()> {
     let stdin = io::stdin();
 
     loop {
+        reap_host_events(host);
         reap_dead_network_disks(host);
         print!("> ");
         io::stdout()
@@ -102,6 +107,7 @@ fn run_command_loop(host: &Arc<Mutex<CliHost>>) -> AppResult<()> {
         match execute_command(&mut host_guard, tokens[0], &tokens[1..]) {
             Ok(LoopControl::Continue) => {
                 drop(host_guard);
+                reap_host_events(host);
                 reap_dead_network_disks(host);
             }
             Ok(LoopControl::Exit) => {
@@ -136,9 +142,21 @@ fn execute_command(host: &mut CliHost, command: &str, args: &[&str]) -> AppResul
             print_debug(host)?;
             Ok(LoopControl::Continue)
         }
+        "sm" => {
+            if args.len() != 1 {
+                return Err("sm requires <size-mib>".to_string());
+            }
+            let size_mib = parse_u64_value(args.first().copied(), "size mib")?;
+            let result = host.create_shared_memory(size_mib)?;
+            println!(
+                "created smid={}, size_bytes={}",
+                result.smid, result.size_bytes
+            );
+            Ok(LoopControl::Continue)
+        }
         "ct" => {
-            let request = parse_create_dense_disk_args(args)?;
-            let target_id = host.create_dense_disk(request)?;
+            let request = parse_create_local_disk_args(args)?;
+            let target_id = host.create_local_disk(request)?;
             println!("created target={}", target_id);
             Ok(LoopControl::Continue)
         }
@@ -158,22 +176,57 @@ fn execute_command(host: &mut CliHost, command: &str, args: &[&str]) -> AppResul
             Ok(LoopControl::Continue)
         }
         "rm" => {
-            let Some(arg) = args.first() else {
-                return Err("rm requires <target>|all".to_string());
-            };
-            if arg.eq_ignore_ascii_case("all") {
-                host.remove_all_disks()?;
-                println!("removed_all=true");
-                return Ok(LoopControl::Continue);
+            let selector = parse_remove_args(args)?;
+            match selector {
+                RemoveCommand::Target(target_selector) => {
+                    let removed = host.remove_targets(target_selector)?;
+                    println!("removed_targets={}", removed.len());
+                }
+                RemoveCommand::SharedMemory(smid_selector) => {
+                    let removed = host.remove_shared_memory(smid_selector)?;
+                    println!("removed_smid={}", removed.len());
+                }
             }
-
-            let target_id = parse_target_value(arg)?;
-            host.remove_disk(target_id)?;
-            println!("removed target={}", target_id);
             Ok(LoopControl::Continue)
         }
         "exit" | "quit" => Ok(LoopControl::Exit),
         other => Err(format!("unknown command: {}", other)),
+    }
+}
+
+enum RemoveCommand {
+    Target(RemoveTargetSelector),
+    SharedMemory(RemoveSharedMemorySelector),
+}
+
+fn parse_remove_args(args: &[&str]) -> AppResult<RemoveCommand> {
+    if args.len() != 1 {
+        return Err("rm requires target=<id>|target=all|smid=<id>|smid=all".to_string());
+    }
+    let Some(arg) = args.first().copied() else {
+        return Err("rm requires target=<id>|target=all|smid=<id>|smid=all".to_string());
+    };
+    let (key, value) = split_key_value(arg)?;
+    match key {
+        "target" => {
+            if value.eq_ignore_ascii_case("all") {
+                Ok(RemoveCommand::Target(RemoveTargetSelector::All))
+            } else {
+                Ok(RemoveCommand::Target(RemoveTargetSelector::One(
+                    parse_target_value(value)?,
+                )))
+            }
+        }
+        "smid" => {
+            if value.eq_ignore_ascii_case("all") {
+                Ok(RemoveCommand::SharedMemory(RemoveSharedMemorySelector::All))
+            } else {
+                Ok(RemoveCommand::SharedMemory(
+                    RemoveSharedMemorySelector::One(parse_u64_value(Some(value), "smid")?),
+                ))
+            }
+        }
+        _ => Err("rm requires target=<id>|target=all|smid=<id>|smid=all".to_string()),
     }
 }
 
@@ -225,6 +278,14 @@ fn print_debug(host: &CliHost) -> AppResult<()> {
             mount.max_io_bytes
         );
     }
+    for shared in host.snapshot_shared_memory() {
+        println!(
+            "debug_shared_memory smid={}, size_bytes={}, bound_targets={}",
+            shared.smid,
+            shared.size_bytes,
+            format_target_list(&shared.bound_targets)
+        );
+    }
     Ok(())
 }
 
@@ -249,10 +310,15 @@ pub fn print_runtime_help() {
     println!("  help                               show this help");
     println!("  query                              print AppKernel session state");
     println!("  auth <addr> <claim_code> [target]  authenticate and mount one network disk");
-    println!("  ct <disk-size-mib> [dense|auto] [true|false] [target]");
+    println!("  sm <size-mib>                      create one shared memory area");
+    println!("  ct size=<mib> [ro=<true|false>] [target=<id>]");
     println!("                                     create one denseMem disk");
-    println!("  rm <target>                        remove one disk target");
-    println!("  rm all                             remove all disk targets");
+    println!("  ct smid=<id> [ro=<true|false>] [target=<id>]");
+    println!("                                     create one disk from shared memory");
+    println!("  rm target=<id>                     remove one disk target");
+    println!("  rm target=all                      remove all disk targets");
+    println!("  rm smid=<id>                       remove one shared memory area");
+    println!("  rm smid=all                        remove all shared memory areas");
     println!("  ls                                 list managed targets");
     println!("  stats                              print aggregated AppKernel counters");
     println!("  debug                              print backend snapshot");
@@ -273,54 +339,54 @@ fn parse_auth_args<'a>(args: &'a [&'a str]) -> AppResult<(&'a str, &'a str, Opti
     Ok((addr, claim_code, target_id))
 }
 
-fn parse_create_dense_disk_args(args: &[&str]) -> AppResult<CreateDenseDiskRequest> {
-    let Some(first) = args.first() else {
-        return Err("ct requires <disk-size-mib> [dense|auto] [true|false] [target]".to_string());
+fn parse_create_local_disk_args(args: &[&str]) -> AppResult<CreateLocalDiskRequest> {
+    let Some(first) = args.first().copied() else {
+        return Err("ct requires size=<mib>|smid=<id> [ro=<true|false>] [target=<id>]".to_string());
     };
 
-    let disk_size_mib = parse_u64_value(first, "disk size mib")?;
-    if disk_size_mib == 0 {
-        return Err("disk size mib must be > 0".to_string());
-    }
+    let (key, value) = split_key_value(first)?;
+    let source = match key {
+        "size" => CreateLocalDiskSource::SizeMib(parse_u64_value(Some(value), "size mib")?),
+        "smid" => CreateLocalDiskSource::SharedMemoryId(parse_u64_value(Some(value), "smid")?),
+        _ => {
+            return Err(
+                "ct requires size=<mib>|smid=<id> [ro=<true|false>] [target=<id>]".to_string(),
+            );
+        }
+    };
 
     let mut read_only = false;
     let mut target_id = None;
-    let mut mode_seen = false;
     let mut read_only_seen = false;
     let mut target_seen = false;
 
     for token in args.iter().skip(1) {
-        if token.eq_ignore_ascii_case("dense") || token.eq_ignore_ascii_case("auto") {
-            if mode_seen {
-                return Err("duplicate media mode".to_string());
+        let (key, value) = split_key_value(token)?;
+        match key {
+            "ro" => {
+                if read_only_seen {
+                    return Err("duplicate ro".to_string());
+                }
+                read_only = parse_bool_value(value)?;
+                read_only_seen = true;
             }
-            mode_seen = true;
-            continue;
-        }
-        if token.eq_ignore_ascii_case("sparse") {
-            return Err(
-                "sparse not supported; rust-cli currently only supports denseMem".to_string(),
-            );
-        }
-        if token.eq_ignore_ascii_case("true") || token.eq_ignore_ascii_case("false") {
-            if read_only_seen {
-                return Err("duplicate readOnly".to_string());
+            "target" => {
+                if target_seen {
+                    return Err("duplicate target".to_string());
+                }
+                target_id = Some(parse_target_value(value)?);
+                target_seen = true;
             }
-            read_only = token.eq_ignore_ascii_case("true");
-            read_only_seen = true;
-            continue;
+            _ => {
+                return Err(
+                    "ct requires size=<mib>|smid=<id> [ro=<true|false>] [target=<id>]".to_string(),
+                );
+            }
         }
-
-        let parsed_target = parse_target_value(token)?;
-        if target_seen {
-            return Err("duplicate target".to_string());
-        }
-        target_id = Some(parsed_target);
-        target_seen = true;
     }
 
-    Ok(CreateDenseDiskRequest {
-        disk_size_mib,
+    Ok(CreateLocalDiskRequest {
+        source,
         read_only,
         target_id,
     })
@@ -339,13 +405,59 @@ fn parse_u32_value(text: &str, name: &str) -> AppResult<u32> {
         .map_err(|_| format!("invalid {}: {}", name, text))
 }
 
-fn parse_u64_value(text: &str, name: &str) -> AppResult<u64> {
+fn parse_u64_value(text: Option<&str>, name: &str) -> AppResult<u64> {
+    let Some(text) = text else {
+        return Err(format!("missing {}", name));
+    };
     text.parse::<u64>()
         .map_err(|_| format!("invalid {}: {}", name, text))
 }
 
+fn parse_bool_value(text: &str) -> AppResult<bool> {
+    match text {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(format!("invalid bool: {}", other)),
+    }
+}
+
+fn split_key_value(text: &str) -> AppResult<(&str, &str)> {
+    let Some((key, value)) = text.split_once('=') else {
+        return Err(format!("invalid argument: {}", text));
+    };
+    Ok((key, value))
+}
+
 fn bool_to_text(value: bool) -> &'static str {
     if value { "true" } else { "false" }
+}
+
+fn format_target_list(targets: &[u32]) -> String {
+    if targets.is_empty() {
+        return "none".to_string();
+    }
+    targets
+        .iter()
+        .map(|target_id| target_id.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn reap_host_events(host: &Arc<Mutex<CliHost>>) {
+    loop {
+        let result = host
+            .lock()
+            .expect("host poisoned")
+            .poll_managed_disk_event();
+        match result {
+            Ok(Some(_event)) => {}
+            Ok(None) => break,
+            Err(error) => {
+                eprintln!("error: host-event-poll-failed: {}", error);
+                break;
+            }
+        }
+    }
 }
 
 fn reap_dead_network_disks(host: &Arc<Mutex<CliHost>>) {
@@ -373,6 +485,7 @@ fn start_dead_network_reaper(host: Arc<Mutex<CliHost>>) -> DeadNetworkReaper {
     let stop_flag = Arc::clone(&stop);
     let thread = thread::spawn(move || {
         while !stop_flag.load(Ordering::Acquire) {
+            reap_host_events(&host);
             reap_dead_network_disks(&host);
             thread::sleep(Duration::from_millis(200));
         }
@@ -387,7 +500,13 @@ fn stop_dead_network_reaper(reaper: DeadNetworkReaper) {
 
 #[cfg(test)]
 mod tests {
+    use super::CreateLocalDiskSource;
+    use super::RemoveCommand;
+    use super::RemoveSharedMemorySelector;
+    use super::RemoveTargetSelector;
     use super::parse_auth_args;
+    use super::parse_create_local_disk_args;
+    use super::parse_remove_args;
 
     #[test]
     fn parse_auth_args_accepts_optional_target() {
@@ -405,5 +524,43 @@ mod tests {
     fn parse_auth_args_requires_addr_and_claim_code() {
         let error = parse_auth_args(&["127.0.0.1:9736"]).expect_err("parse should fail");
         assert_eq!(error, "auth requires <addr> <claim_code> [target]");
+    }
+
+    #[test]
+    fn parse_create_local_disk_args_accepts_size_and_target() {
+        let parsed = parse_create_local_disk_args(&["size=64", "ro=true", "target=5"])
+            .expect("parse should succeed");
+        match parsed.source {
+            CreateLocalDiskSource::SizeMib(size_mib) => assert_eq!(size_mib, 64),
+            other => panic!("unexpected source: {:?}", other),
+        }
+        assert!(parsed.read_only);
+        assert_eq!(parsed.target_id, Some(5));
+    }
+
+    #[test]
+    fn parse_create_local_disk_args_accepts_smid() {
+        let parsed = parse_create_local_disk_args(&["smid=7"]).expect("parse should succeed");
+        match parsed.source {
+            CreateLocalDiskSource::SharedMemoryId(smid) => assert_eq!(smid, 7),
+            other => panic!("unexpected source: {:?}", other),
+        }
+        assert!(!parsed.read_only);
+        assert_eq!(parsed.target_id, None);
+    }
+
+    #[test]
+    fn parse_remove_args_accepts_target_and_smid_selectors() {
+        match parse_remove_args(&["target=all"]).expect("target=all should parse") {
+            RemoveCommand::Target(RemoveTargetSelector::All) => {}
+            _ => panic!("unexpected remove target selector"),
+        }
+
+        match parse_remove_args(&["smid=9"]).expect("smid=9 should parse") {
+            RemoveCommand::SharedMemory(RemoveSharedMemorySelector::One(smid)) => {
+                assert_eq!(smid, 9)
+            }
+            _ => panic!("unexpected remove shared selector"),
+        }
     }
 }

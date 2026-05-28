@@ -1,5 +1,22 @@
 # Unit Attention / DataChanged 重建执行清单
 
+## 0. 当前进度（2026-05-28）
+
+- 阶段 A-D：已完成
+  - `YumeDiskSCSI / YumeDiskKMDF / AppKernel / BackendRust` 的 `data_changed -> Unit Attention` 主链已接通
+  - `BackendRust` 已具备单盘 `notify_managed_disk_data_changed(...)` 下行能力
+- 阶段 E：已完成，待阶段 F 闭环验收
+  - `rust-cli` 本地命令面已切到正式口径：`sm / ct size= / ct smid= / rm target= / rm smid=`
+  - 旧 `ct <disk-size-mib> ...` 与旧 `rm all` 已删除
+  - 本地共享内存已收成 `windows/rust-cli/src/cli/local/memory/`
+  - `smid` 注册表、`smid -> bound targets`、target 删除解绑、`rm smid`/`rm smid=all` 拒绝策略已落地
+  - `WriteFinalCommitted` 后的 sibling fanout 已由 `rust-cli` 负责，通过 `BackendRust` 的宿主事件轮询口触发 `notify_managed_disk_data_changed(...)`
+- 当前验证状态：
+  - `windows/BackendRust` 与 `windows/rust-cli` 的 `cargo check --tests` 已通过
+  - `cargo test` 当前仍受本机 `appkernel` 静态库导出限制阻断：链接阶段缺少 `AkNotifyDiskDataChanged` 符号
+- 下一步：
+  - 进入阶段 F，按 `sm 64 -> ct smid=... -> ct smid=... -> 真实写入 -> 观察 sibling UA` 做本地最小闭环验收
+
 ## 1. 目标
 
 本清单只服务于 `Unit Attention` 与“底层内容已变更”感知链路的重建。

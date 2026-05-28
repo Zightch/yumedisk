@@ -16,6 +16,26 @@ pub const YUMEDISK_MIN_TARGET_ID: u32 = appkernel::YUMEDISK_MIN_TARGET_ID;
 pub const YUMEDISK_MAX_USABLE_TARGET_ID: u32 = appkernel::YUMEDISK_MAX_USABLE_TARGET_ID;
 pub const YUMEDISK_MAX_TARGETS: u32 = appkernel::YUMEDISK_MAX_TARGETS;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedDiskEventType {
+    DiskOnline,
+    DiskRemoved,
+    WriteFinalCommitted,
+    WriteFinalRejected,
+    SessionBroken,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManagedDiskEvent {
+    pub event_type: ManagedDiskEventType,
+    pub target_id: u32,
+    pub disk_runtime_id: u64,
+    pub event_id: u64,
+    pub total_seq: u32,
+    pub flags: u32,
+    pub status: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionConfig {
     pub heartbeat_interval_ms: u32,

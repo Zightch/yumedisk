@@ -1,3 +1,5 @@
-mod dense_mem;
+mod memory;
 
-pub use dense_mem::DenseMem;
+pub use memory::LocalBindingKind;
+pub use memory::SharedMemoryRegistry;
+pub use memory::SharedMemorySnapshot;

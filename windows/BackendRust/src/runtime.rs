@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
@@ -39,6 +40,20 @@ fn lifecycle_to_text(lifecycle: appkernel::AkLifecycleState) -> &'static str {
         appkernel::AkLifecycleState::Closing => "closing",
         appkernel::AkLifecycleState::Closed => "closed",
         appkernel::AkLifecycleState::Broken => "broken",
+    }
+}
+
+fn map_host_event_type(event_type: appkernel::AkEventType) -> types::ManagedDiskEventType {
+    match event_type {
+        appkernel::AkEventType::DiskOnline => types::ManagedDiskEventType::DiskOnline,
+        appkernel::AkEventType::DiskRemoved => types::ManagedDiskEventType::DiskRemoved,
+        appkernel::AkEventType::WriteFinalCommitted => {
+            types::ManagedDiskEventType::WriteFinalCommitted
+        }
+        appkernel::AkEventType::WriteFinalRejected => {
+            types::ManagedDiskEventType::WriteFinalRejected
+        }
+        appkernel::AkEventType::SessionBroken => types::ManagedDiskEventType::SessionBroken,
     }
 }
 
@@ -154,6 +169,7 @@ struct Inner {
     stop_event: Mutex<usize>,
     stop: AtomicBool,
     disk_runtimes: Mutex<BTreeMap<u32, Arc<RwLock<DiskRuntime>>>>,
+    host_events: Mutex<VecDeque<types::ManagedDiskEvent>>,
     log_lines: Mutex<Vec<String>>,
     event_thread: Mutex<Option<JoinHandle<()>>>,
     open_status: Mutex<appkernel::AkStatus>,
@@ -186,6 +202,7 @@ impl BackendContext {
                 stop_event: Mutex::new(0),
                 stop: AtomicBool::new(false),
                 disk_runtimes: Mutex::new(BTreeMap::new()),
+                host_events: Mutex::new(VecDeque::new()),
                 log_lines: Mutex::new(Vec::new()),
                 event_thread: Mutex::new(None),
                 open_status: Mutex::new(appkernel::AK_STATUS_SUCCESS),
@@ -277,6 +294,7 @@ impl BackendContext {
     }
 
     fn handle_appkernel_event(&self, event_record: &appkernel::AkEvent) {
+        self.enqueue_host_event(event_record);
         if matches!(
             event_record.event_type,
             appkernel::AkEventType::SessionBroken
@@ -313,6 +331,23 @@ impl BackendContext {
             }
             appkernel::AkEventType::DiskRemoved | appkernel::AkEventType::SessionBroken => {}
         }
+    }
+
+    fn enqueue_host_event(&self, event_record: &appkernel::AkEvent) {
+        let host_event = types::ManagedDiskEvent {
+            event_type: map_host_event_type(event_record.event_type),
+            target_id: event_record.target_id,
+            disk_runtime_id: event_record.disk_runtime_id,
+            event_id: event_record.event_id,
+            total_seq: event_record.total_seq,
+            flags: event_record.flags,
+            status: event_record.status,
+        };
+        self.inner
+            .host_events
+            .lock()
+            .expect("host_events poisoned")
+            .push_back(host_event);
     }
 
     fn run_event_loop(inner: Arc<Inner>) {
@@ -380,6 +415,11 @@ impl BackendContext {
             .disk_runtimes
             .lock()
             .expect("disk map poisoned")
+            .clear();
+        self.inner
+            .host_events
+            .lock()
+            .expect("host_events poisoned")
             .clear();
     }
 
@@ -675,6 +715,14 @@ impl BackendContext {
             .lock()
             .expect("log_lines poisoned")
             .clone()
+    }
+
+    pub fn poll_managed_disk_event(&self) -> Option<types::ManagedDiskEvent> {
+        self.inner
+            .host_events
+            .lock()
+            .expect("host_events poisoned")
+            .pop_front()
     }
 
     pub fn snapshot_managed_disks(&self) -> Vec<types::ManagedDiskSnapshot> {
@@ -1206,6 +1254,7 @@ mod tests {
     use crate::error::BackendError;
     use crate::media::Media;
     use crate::types::DiskConfig;
+    use crate::types::ManagedDiskEventType;
 
     struct DummyMedia {
         size_bytes: u64,
@@ -1436,5 +1485,44 @@ mod tests {
             .staging
             .overlay_read_locked(0, &mut overlay);
         assert_eq!(overlay, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn poll_managed_disk_event_returns_fifo_order() {
+        let context = BackendContext::new();
+        context.enqueue_host_event(&appkernel::AkEvent {
+            event_type: appkernel::AkEventType::WriteFinalCommitted,
+            target_id: 3,
+            disk_runtime_id: 44,
+            event_id: 55,
+            total_seq: 2,
+            flags: 1,
+            status: appkernel::AK_STATUS_SUCCESS,
+        });
+        context.enqueue_host_event(&appkernel::AkEvent {
+            event_type: appkernel::AkEventType::WriteFinalRejected,
+            target_id: 4,
+            disk_runtime_id: 45,
+            event_id: 56,
+            total_seq: 3,
+            flags: 2,
+            status: appkernel::AK_STATUS_UNSUCCESSFUL,
+        });
+
+        let first = context
+            .poll_managed_disk_event()
+            .expect("first event should exist");
+        assert_eq!(first.event_type, ManagedDiskEventType::WriteFinalCommitted);
+        assert_eq!(first.target_id, 3);
+        assert_eq!(first.event_id, 55);
+
+        let second = context
+            .poll_managed_disk_event()
+            .expect("second event should exist");
+        assert_eq!(second.event_type, ManagedDiskEventType::WriteFinalRejected);
+        assert_eq!(second.target_id, 4);
+        assert_eq!(second.event_id, 56);
+
+        assert!(context.poll_managed_disk_event().is_none());
     }
 }

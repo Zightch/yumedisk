@@ -7,6 +7,8 @@ use backend_rust::BackendContext;
 use backend_rust::BackendStatsSnapshot;
 use backend_rust::DebugSnapshot;
 use backend_rust::DiskConfig;
+use backend_rust::ManagedDiskEvent;
+use backend_rust::ManagedDiskEventType;
 use backend_rust::ManagedDiskSnapshot;
 use backend_rust::Media;
 use backend_rust::YUMEDISK_MAX_TARGETS;
@@ -21,15 +23,41 @@ use network_core::client::SessionOpener;
 use network_core::transport::TransportEndpoint;
 
 use crate::NetworkMedia;
-use crate::cli::local::DenseMem;
+use crate::cli::local::LocalBindingKind;
+use crate::cli::local::SharedMemoryRegistry;
+use crate::cli::local::SharedMemorySnapshot;
 
 pub type AppResult<T> = Result<T, String>;
 
 #[derive(Debug, Clone, Copy)]
-pub struct CreateDenseDiskRequest {
-    pub disk_size_mib: u64,
+pub struct CreateLocalDiskRequest {
+    pub source: CreateLocalDiskSource,
     pub read_only: bool,
     pub target_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CreateLocalDiskSource {
+    SizeMib(u64),
+    SharedMemoryId(u64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoveTargetSelector {
+    All,
+    One(u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoveSharedMemorySelector {
+    All,
+    One(u64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateSharedMemoryResult {
+    pub smid: u64,
+    pub size_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +95,7 @@ struct NetworkMountState {
 
 pub struct CliHost {
     context: BackendContext,
+    shared_memory: SharedMemoryRegistry,
     network_mounts: NetworkMountRegistry,
 }
 
@@ -84,6 +113,7 @@ impl CliHost {
 
         Ok(Self {
             context,
+            shared_memory: SharedMemoryRegistry::default(),
             network_mounts: NetworkMountRegistry::default(),
         })
     }
@@ -132,11 +162,13 @@ impl CliHost {
         Ok(snapshot)
     }
 
-    pub fn create_dense_disk(&mut self, request: CreateDenseDiskRequest) -> AppResult<u32> {
-        let disk_size_bytes = request
-            .disk_size_mib
-            .checked_mul(1024 * 1024)
-            .ok_or_else(|| "disk-size-overflow".to_string())?;
+    pub fn create_shared_memory(&mut self, size_mib: u64) -> AppResult<CreateSharedMemoryResult> {
+        let size_bytes = mib_to_bytes(size_mib)?;
+        let smid = self.shared_memory.create_shared_memory(size_bytes)?;
+        Ok(CreateSharedMemoryResult { smid, size_bytes })
+    }
+
+    pub fn create_local_disk(&mut self, request: CreateLocalDiskRequest) -> AppResult<u32> {
         let target_id = request
             .target_id
             .unwrap_or_else(|| self.context.find_first_free_target());
@@ -144,7 +176,18 @@ impl CliHost {
             return Err("no-free-target".to_string());
         }
 
-        let dense_mem = DenseMem::new(disk_size_bytes).map_err(|error| error.to_string())?;
+        let (dense_mem, disk_size_bytes, binding) = match request.source {
+            CreateLocalDiskSource::SizeMib(size_mib) => {
+                let size_bytes = mib_to_bytes(size_mib)?;
+                let (media, prepared_size) =
+                    self.shared_memory.prepare_dedicated_media(size_bytes)?;
+                (media, prepared_size, LocalBindingKind::Dedicated)
+            }
+            CreateLocalDiskSource::SharedMemoryId(smid) => {
+                let (media, size_bytes) = self.shared_memory.prepare_shared_media(smid)?;
+                (media, size_bytes, LocalBindingKind::Shared { smid })
+            }
+        };
         let disk_config = DiskConfig {
             target_id,
             disk_size_bytes,
@@ -164,6 +207,16 @@ impl CliHost {
             return Err(error_text);
         }
 
+        if let Err(error) = self
+            .shared_memory
+            .register_target_binding(target_id, binding)
+        {
+            let mut remove_error = String::new();
+            let _ = self
+                .context
+                .remove_managed_disk_with_media(target_id, Some(&mut remove_error));
+            return Err(error);
+        }
         Ok(target_id)
     }
 
@@ -274,22 +327,39 @@ impl CliHost {
             }
         }
         self.network_mounts.clear_cleanup_mark(target_id);
+        self.shared_memory.unbind_target(target_id);
 
         Ok(())
     }
 
-    pub fn remove_all_disks(&mut self) -> AppResult<()> {
-        let target_ids = self
-            .context
-            .snapshot_managed_disks()
-            .into_iter()
-            .map(|disk| disk.target_id)
-            .collect::<Vec<_>>();
+    pub fn remove_targets(&mut self, selector: RemoveTargetSelector) -> AppResult<Vec<u32>> {
+        let target_ids = match selector {
+            RemoveTargetSelector::All => self
+                .context
+                .snapshot_managed_disks()
+                .into_iter()
+                .map(|disk| disk.target_id)
+                .collect::<Vec<_>>(),
+            RemoveTargetSelector::One(target_id) => vec![target_id],
+        };
 
-        for target_id in target_ids {
-            self.remove_disk(target_id)?;
+        for target_id in &target_ids {
+            self.remove_disk(*target_id)?;
         }
-        Ok(())
+        Ok(target_ids)
+    }
+
+    pub fn remove_shared_memory(
+        &mut self,
+        selector: RemoveSharedMemorySelector,
+    ) -> AppResult<Vec<u64>> {
+        match selector {
+            RemoveSharedMemorySelector::All => self.shared_memory.remove_all_shared_memory(),
+            RemoveSharedMemorySelector::One(smid) => {
+                self.shared_memory.remove_shared_memory(smid)?;
+                Ok(vec![smid])
+            }
+        }
     }
 
     fn remove_all_disks_for_shutdown(&mut self) {
@@ -309,6 +379,7 @@ impl CliHost {
                 mounted.shutdown();
             }
             self.network_mounts.clear_cleanup_mark(target_id);
+            self.shared_memory.unbind_target(target_id);
         }
     }
 
@@ -329,6 +400,64 @@ impl CliHost {
     pub fn network_mounts(&self) -> Vec<NetworkMountResult> {
         self.network_mounts.network_mounts()
     }
+
+    pub fn poll_managed_disk_event(&mut self) -> AppResult<Option<ManagedDiskEvent>> {
+        let event = self.context.poll_managed_disk_event();
+        if let Some(event) = event {
+            self.handle_host_event(&event)?;
+            return Ok(Some(event));
+        }
+        Ok(None)
+    }
+
+    pub fn snapshot_shared_memory(&self) -> Vec<SharedMemorySnapshot> {
+        self.shared_memory.snapshots()
+    }
+
+    fn handle_host_event(&mut self, event: &ManagedDiskEvent) -> AppResult<()> {
+        match event.event_type {
+            ManagedDiskEventType::DiskRemoved => {
+                self.shared_memory.unbind_target(event.target_id);
+                return Ok(());
+            }
+            ManagedDiskEventType::WriteFinalCommitted => {}
+            _ => return Ok(()),
+        }
+        let Some((_smid, siblings)) = self.shared_memory.sibling_targets(event.target_id) else {
+            return Ok(());
+        };
+        let mut first_error = None;
+        for target_id in siblings {
+            let mut error_text = String::new();
+            if !self
+                .context
+                .notify_managed_disk_data_changed(target_id, Some(&mut error_text))
+            {
+                if error_text.is_empty() {
+                    error_text = "notify-data-changed-failed".to_string();
+                }
+                if first_error.is_none() {
+                    first_error = Some(format!(
+                        "notify sibling target={} from target={} failed: {}",
+                        target_id, event.target_id, error_text
+                    ));
+                }
+            }
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+}
+
+fn mib_to_bytes(size_mib: u64) -> AppResult<u64> {
+    if size_mib == 0 {
+        return Err("disk size mib must be > 0".to_string());
+    }
+    size_mib
+        .checked_mul(1024 * 1024)
+        .ok_or_else(|| "disk-size-overflow".to_string())
 }
 
 impl MountedNetworkDisk {
