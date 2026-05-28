@@ -23,7 +23,7 @@
 #define YUMEDISK_VERSION_MINOR(_versionBe) (((ULONG)(_versionBe) >> 16) & 0xffu)
 #define YUMEDISK_VERSION_PATCH(_versionBe) (((ULONG)(_versionBe) >> 8) & 0xffu)
 #define YUMEDISK_VERSION_BUILD(_versionBe) ((ULONG)(_versionBe) & 0xffu)
-#define YUMEDISK_COMPONENT_VERSION_BE YUMEDISK_VERSION_BE(0u, 1u, 0u, 0u)
+#define YUMEDISK_COMPONENT_VERSION_BE YUMEDISK_VERSION_BE(0u, 1u, 0u, 1u)
 
 static const GUID GUID_YUMEDISK_CONTROL = {
     0x72d587ef, 0xab50, 0x490a, { 0x9f, 0xf2, 0x90, 0x72, 0xcd, 0xe5, 0x1d, 0x42 }
@@ -37,6 +37,7 @@ typedef enum _YUMEDISK_COMMAND {
     YumeDiskCommandRemoveDisk = 4,
     YumeDiskCommandRemoveAllDisks = 5,
     YumeDiskCommandHeartbeat = 6,
+    YumeDiskCommandNotifyDataChanged = 7,
     YumeDiskCommandPostReadSlot = 20,
     YumeDiskCommandPostWriteSlot = 21,
     YumeDiskCommandReadAck = 22,

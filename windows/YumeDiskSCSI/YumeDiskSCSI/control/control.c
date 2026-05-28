@@ -62,6 +62,40 @@ DiskHandleQueryDebugState(
 
 static
 NTSTATUS
+DiskHandleNotifyDataChanged(
+    _In_ PVOID DeviceExtension,
+    _In_ PDEVICE_CONTEXT Extension,
+    _Inout_ PYUMEDISK_MESSAGE Message
+)
+{
+    UCHAR targetId;
+    PYUME_DISK disk;
+
+    if (Message->Header.PayloadLength != 0) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (Message->Header.TargetId >= Extension->MaxTargets ||
+        !DiskIsUsableTargetId(Message->Header.TargetId)) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    targetId = (UCHAR)Message->Header.TargetId;
+    if (!DiskIsTargetVisible(Extension, targetId)) {
+        return STATUS_NOT_FOUND;
+    }
+
+    disk = &Extension->Disk[targetId];
+    if (DiskTryMarkPendingDataChangedUa(disk)) {
+        DiskNotifyTargetMediaStatus(DeviceExtension, targetId);
+    }
+
+    DiskInitMessageStatus(Message, YumeDiskCommandNotifyDataChanged, STATUS_SUCCESS, 0);
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
 DiskHandleCreateDisk(
     _In_ PVOID DeviceExtension,
     _Inout_ PDEVICE_CONTEXT Extension,
@@ -100,6 +134,7 @@ DiskHandleCreateDisk(
     disk->Present = TRUE;
     disk->Removing = FALSE;
     disk->Generation++;
+    disk->PendingDataChangedUa = FALSE;
 
     DiskInitMessageStatus(Message, YumeDiskCommandCreateDisk, STATUS_SUCCESS, 0);
     StorPortNotification(BusChangeDetected, DeviceExtension, 0);
@@ -136,6 +171,7 @@ DiskHandleRemoveDisk(
     disk->Present = FALSE;
     disk->Removing = TRUE;
     disk->ReadOnly = FALSE;
+    disk->PendingDataChangedUa = FALSE;
     DiskResetDiskStorage(disk);
     disk->Generation++;
     DiskCompleteTargetPending(DeviceExtension, request->TargetId, STATUS_DEVICE_NOT_CONNECTED);
@@ -165,6 +201,7 @@ DiskHandleRemoveAllDisks(
             Extension->Disk[index].Present = FALSE;
             Extension->Disk[index].Removing = TRUE;
             Extension->Disk[index].ReadOnly = FALSE;
+            Extension->Disk[index].PendingDataChangedUa = FALSE;
             DiskResetDiskStorage(&Extension->Disk[index]);
             Extension->Disk[index].Generation++;
         }
@@ -256,6 +293,9 @@ DiskHandleIoControlSrb(
         break;
     case YumeDiskCommandCreateDisk:
         status = DiskHandleCreateDisk(DeviceExtension, extension, message);
+        break;
+    case YumeDiskCommandNotifyDataChanged:
+        status = DiskHandleNotifyDataChanged(DeviceExtension, extension, message);
         break;
     case YumeDiskCommandRemoveDisk:
         status = DiskHandleRemoveDisk(DeviceExtension, extension, message);

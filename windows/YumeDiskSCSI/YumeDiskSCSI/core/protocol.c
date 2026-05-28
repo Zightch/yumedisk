@@ -210,6 +210,89 @@ DiskResetDiskStorage(
     KeReleaseSpinLock(&Disk->BufferLock, oldIrql);
 }
 
+BOOLEAN
+DiskTryMarkPendingDataChangedUa(
+    _Inout_ PYUME_DISK Disk
+)
+{
+    KIRQL oldIrql;
+    BOOLEAN marked;
+
+    marked = FALSE;
+    KeAcquireSpinLock(&Disk->BufferLock, &oldIrql);
+    if (!Disk->PendingDataChangedUa) {
+        Disk->PendingDataChangedUa = TRUE;
+        marked = TRUE;
+    }
+    KeReleaseSpinLock(&Disk->BufferLock, oldIrql);
+    return marked;
+}
+
+BOOLEAN
+DiskTryConsumePendingDataChangedUa(
+    _Inout_ PYUME_DISK Disk
+)
+{
+    KIRQL oldIrql;
+    BOOLEAN consumed;
+
+    consumed = FALSE;
+    KeAcquireSpinLock(&Disk->BufferLock, &oldIrql);
+    if (Disk->PendingDataChangedUa) {
+        Disk->PendingDataChangedUa = FALSE;
+        consumed = TRUE;
+    }
+    KeReleaseSpinLock(&Disk->BufferLock, oldIrql);
+    return consumed;
+}
+
+static
+VOID
+DiskBuildTargetAddress(
+    _In_ UCHAR TargetId,
+    _Out_ PSTOR_ADDR_BTL8 Address
+)
+{
+    RtlZeroMemory(Address, sizeof(*Address));
+    Address->Type = STOR_ADDRESS_TYPE_BTL8;
+    Address->AddressLength = STOR_ADDR_BTL8_ADDRESS_LENGTH;
+    Address->Path = 0;
+    Address->Target = TargetId;
+    Address->Lun = 0;
+}
+
+ULONG
+DiskRegisterTargetAsyncNotifications(
+    _In_ PVOID DeviceExtension,
+    _In_ UCHAR TargetId
+)
+{
+    STOR_ADDR_BTL8 address;
+    STOR_UNIT_ATTRIBUTES attributes;
+
+    DiskBuildTargetAddress(TargetId, &address);
+    RtlZeroMemory(&attributes, sizeof(attributes));
+    attributes.DeviceAttentionSupported = 1;
+    attributes.AsyncNotificationSupported = 1;
+
+    return StorPortSetUnitAttributes(DeviceExtension, (PSTOR_ADDRESS)&address, attributes);
+}
+
+ULONG
+DiskNotifyTargetMediaStatus(
+    _In_ PVOID DeviceExtension,
+    _In_ UCHAR TargetId
+)
+{
+    STOR_ADDR_BTL8 address;
+
+    DiskBuildTargetAddress(TargetId, &address);
+    return StorPortAsyncNotificationDetected(
+        DeviceExtension,
+        (PSTOR_ADDRESS)&address,
+        RAID_ASYNC_NOTIFY_FLAG_MEDIA_STATUS);
+}
+
 NTSTATUS
 DiskClaimSessionLocked(
     _Inout_ PDEVICE_CONTEXT Extension,

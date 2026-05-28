@@ -47,3 +47,25 @@ VOID
 DiskResetDiskStorage(
     _Inout_ PYUME_DISK Disk
 );
+
+BOOLEAN
+DiskTryMarkPendingDataChangedUa(
+    _Inout_ PYUME_DISK Disk
+);
+
+BOOLEAN
+DiskTryConsumePendingDataChangedUa(
+    _Inout_ PYUME_DISK Disk
+);
+
+ULONG
+DiskRegisterTargetAsyncNotifications(
+    _In_ PVOID DeviceExtension,
+    _In_ UCHAR TargetId
+);
+
+ULONG
+DiskNotifyTargetMediaStatus(
+    _In_ PVOID DeviceExtension,
+    _In_ UCHAR TargetId
+);

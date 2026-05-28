@@ -143,6 +143,60 @@ DiskFillWriteProtectedSense(
 
 static
 VOID
+DiskFillUnitAttentionSenseDataChanged(
+    _Inout_updates_bytes_opt_(*SenseInfoBufferLength) PUCHAR SenseInfoBuffer,
+    _Inout_ UCHAR* SenseInfoBufferLength
+)
+{
+    UCHAR senseLength;
+
+    if (SenseInfoBuffer == NULL || SenseInfoBufferLength == NULL || *SenseInfoBufferLength == 0) {
+        return;
+    }
+
+    senseLength = min(*SenseInfoBufferLength, 18u);
+    RtlZeroMemory(SenseInfoBuffer, senseLength);
+    SenseInfoBuffer[0] = 0x70;
+    if (senseLength > 2) {
+        SenseInfoBuffer[2] = SCSI_SENSE_UNIT_ATTENTION;
+    }
+    if (senseLength > 7) {
+        SenseInfoBuffer[7] = (UCHAR)(senseLength - 8);
+    }
+    if (senseLength > 12) {
+        SenseInfoBuffer[12] = 0x28;
+    }
+    if (senseLength > 13) {
+        SenseInfoBuffer[13] = 0x00;
+    }
+
+    *SenseInfoBufferLength = senseLength;
+}
+
+static
+BOOLEAN
+DiskTryReturnPendingDataChangedUa(
+    _Inout_ PYUME_DISK Disk,
+    _Inout_ UCHAR* SrbStatus,
+    _Inout_ UCHAR* ScsiStatus,
+    _Inout_ ULONG* DataTransferLength,
+    _Inout_updates_bytes_opt_(*SenseInfoBufferLength) PUCHAR SenseInfoBuffer,
+    _Inout_ UCHAR* SenseInfoBufferLength
+)
+{
+    if (!DiskTryConsumePendingDataChangedUa(Disk)) {
+        return FALSE;
+    }
+
+    *SrbStatus = SRB_STATUS_ERROR;
+    *ScsiStatus = SCSISTAT_CHECK_CONDITION;
+    *DataTransferLength = 0;
+    DiskFillUnitAttentionSenseDataChanged(SenseInfoBuffer, SenseInfoBufferLength);
+    return TRUE;
+}
+
+static
+VOID
 DiskHandleReportLuns(
     _Inout_updates_bytes_(TransferLength) PUCHAR DataBuffer,
     _In_ ULONG TransferLength,
@@ -296,6 +350,7 @@ DiskHandleReadCapacity16(
 static
 VOID
 DiskHandleRequestSense(
+    _Inout_ PYUME_DISK Disk,
     _Inout_updates_bytes_(TransferLength) PUCHAR DataBuffer,
     _In_ ULONG TransferLength,
     _Out_ ULONG* DataTransferLength
@@ -306,9 +361,17 @@ DiskHandleRequestSense(
     senseLength = min(TransferLength, 18u);
     if (senseLength != 0) {
         RtlZeroMemory(DataBuffer, senseLength);
-        DataBuffer[0] = 0x70;
-        if (senseLength > 7) {
-            DataBuffer[7] = (UCHAR)(senseLength - 8);
+        if (DiskTryConsumePendingDataChangedUa(Disk)) {
+            UCHAR fixedSenseLength;
+
+            fixedSenseLength = (UCHAR)senseLength;
+            DiskFillUnitAttentionSenseDataChanged(DataBuffer, &fixedSenseLength);
+            senseLength = fixedSenseLength;
+        } else {
+            DataBuffer[0] = 0x70;
+            if (senseLength > 7) {
+                DataBuffer[7] = (UCHAR)(senseLength - 8);
+            }
         }
     }
 
@@ -363,9 +426,6 @@ DiskHandleScsiCdb(
     ULONG blockCount;
     NTSTATUS status;
 
-    UNREFERENCED_PARAMETER(SenseInfoBuffer);
-    UNREFERENCED_PARAMETER(SenseInfoBufferLength);
-
     extension = (PDEVICE_CONTEXT)DeviceExtension;
     transferLength = *DataTransferLength;
     *DataTransferLength = 0;
@@ -390,19 +450,54 @@ DiskHandleScsiCdb(
         break;
     case SCSIOP_INQUIRY:
         DiskHandleInquiry(DataBuffer, transferLength, DataTransferLength, SrbStatus);
+        DiskRegisterTargetAsyncNotifications(DeviceExtension, TargetId);
         break;
     case SCSIOP_READ_CAPACITY:
+        if (DiskTryReturnPendingDataChangedUa(
+            disk,
+            SrbStatus,
+            ScsiStatus,
+            DataTransferLength,
+            SenseInfoBuffer,
+            SenseInfoBufferLength)) {
+            break;
+        }
         DiskHandleReadCapacity10(disk, DataBuffer, transferLength, DataTransferLength, SrbStatus);
         break;
     case SCSIOP_READ_CAPACITY16:
+        if (DiskTryReturnPendingDataChangedUa(
+            disk,
+            SrbStatus,
+            ScsiStatus,
+            DataTransferLength,
+            SenseInfoBuffer,
+            SenseInfoBufferLength)) {
+            break;
+        }
         DiskHandleReadCapacity16(disk, Cdb, DataBuffer, transferLength, DataTransferLength, SrbStatus);
         break;
     case SCSIOP_TEST_UNIT_READY:
+        DiskTryReturnPendingDataChangedUa(
+            disk,
+            SrbStatus,
+            ScsiStatus,
+            DataTransferLength,
+            SenseInfoBuffer,
+            SenseInfoBufferLength);
         break;
     case SCSIOP_REQUEST_SENSE:
-        DiskHandleRequestSense(DataBuffer, transferLength, DataTransferLength);
+        DiskHandleRequestSense(disk, DataBuffer, transferLength, DataTransferLength);
         break;
     case SCSIOP_MODE_SENSE:
+        if (DiskTryReturnPendingDataChangedUa(
+            disk,
+            SrbStatus,
+            ScsiStatus,
+            DataTransferLength,
+            SenseInfoBuffer,
+            SenseInfoBufferLength)) {
+            break;
+        }
         DiskHandleModeSense(
             DataBuffer,
             transferLength,
@@ -415,6 +510,15 @@ DiskHandleScsiCdb(
             SrbStatus);
         break;
     case SCSIOP_MODE_SENSE10:
+        if (DiskTryReturnPendingDataChangedUa(
+            disk,
+            SrbStatus,
+            ScsiStatus,
+            DataTransferLength,
+            SenseInfoBuffer,
+            SenseInfoBufferLength)) {
+            break;
+        }
         DiskHandleModeSense(
             DataBuffer,
             transferLength,
@@ -429,13 +533,30 @@ DiskHandleScsiCdb(
     case SCSIOP_MEDIUM_REMOVAL:
     case SCSIOP_START_STOP_UNIT:
     case SCSIOP_SYNCHRONIZE_CACHE:
+        break;
     case SCSIOP_VERIFY:
     case SCSIOP_VERIFY16:
+        DiskTryReturnPendingDataChangedUa(
+            disk,
+            SrbStatus,
+            ScsiStatus,
+            DataTransferLength,
+            SenseInfoBuffer,
+            SenseInfoBufferLength);
         break;
     case SCSIOP_READ6:
     case SCSIOP_READ:
     case SCSIOP_READ12:
     case SCSIOP_READ16:
+        if (DiskTryReturnPendingDataChangedUa(
+            disk,
+            SrbStatus,
+            ScsiStatus,
+            DataTransferLength,
+            SenseInfoBuffer,
+            SenseInfoBufferLength)) {
+            break;
+        }
         if (!DiskTryParseReadWriteCdb(disk, Cdb, transferLength, &lba, &blockCount)) {
             *SrbStatus = SRB_STATUS_INVALID_REQUEST;
             *ScsiStatus = SCSISTAT_CHECK_CONDITION;
@@ -462,6 +583,15 @@ DiskHandleScsiCdb(
     case SCSIOP_WRITE:
     case SCSIOP_WRITE12:
     case SCSIOP_WRITE16:
+        if (DiskTryReturnPendingDataChangedUa(
+            disk,
+            SrbStatus,
+            ScsiStatus,
+            DataTransferLength,
+            SenseInfoBuffer,
+            SenseInfoBufferLength)) {
+            break;
+        }
         if (disk->ReadOnly) {
             *SrbStatus = SRB_STATUS_ERROR;
             *ScsiStatus = SCSISTAT_CHECK_CONDITION;
