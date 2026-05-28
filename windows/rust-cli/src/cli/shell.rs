@@ -142,6 +142,30 @@ fn execute_command(host: &mut CliHost, command: &str, args: &[&str]) -> AppResul
             print_debug(host)?;
             Ok(LoopControl::Continue)
         }
+        "dbg-read" => {
+            let request = parse_debug_read_args(args)?;
+            let bytes =
+                host.debug_read_target_bytes(request.target_id, request.offset, request.length)?;
+            println!(
+                "dbg-read target={}, offset={}, length={}, hex={}",
+                request.target_id,
+                request.offset,
+                bytes.len(),
+                encode_hex(&bytes)
+            );
+            Ok(LoopControl::Continue)
+        }
+        "dbg-write" => {
+            let request = parse_debug_write_args(args)?;
+            host.debug_write_target_bytes(request.target_id, request.offset, &request.bytes)?;
+            println!(
+                "dbg-write target={}, offset={}, length={}",
+                request.target_id,
+                request.offset,
+                request.bytes.len()
+            );
+            Ok(LoopControl::Continue)
+        }
         "sm" => {
             if args.len() != 1 {
                 return Err("sm requires <size-mib>".to_string());
@@ -199,6 +223,20 @@ enum RemoveCommand {
     SharedMemory(RemoveSharedMemorySelector),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DebugReadCommand {
+    target_id: u32,
+    offset: u64,
+    length: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DebugWriteCommand {
+    target_id: u32,
+    offset: u64,
+    bytes: Vec<u8>,
+}
+
 fn parse_remove_args(args: &[&str]) -> AppResult<RemoveCommand> {
     if args.len() != 1 {
         return Err("rm requires target=<id>|target=all|smid=<id>|smid=all".to_string());
@@ -228,6 +266,65 @@ fn parse_remove_args(args: &[&str]) -> AppResult<RemoveCommand> {
         }
         _ => Err("rm requires target=<id>|target=all|smid=<id>|smid=all".to_string()),
     }
+}
+
+fn parse_debug_read_args(args: &[&str]) -> AppResult<DebugReadCommand> {
+    if args.len() != 3 {
+        return Err("dbg-read requires target=<id> offset=<bytes> length=<bytes>".to_string());
+    }
+    let mut target_id = None;
+    let mut offset = None;
+    let mut length = None;
+    for token in args {
+        let (key, value) = split_key_value(token)?;
+        match key {
+            "target" => target_id = Some(parse_target_value(value)?),
+            "offset" => offset = Some(parse_u64_value(Some(value), "offset")?),
+            "length" => length = Some(parse_length_value(value)?),
+            _ => {
+                return Err(
+                    "dbg-read requires target=<id> offset=<bytes> length=<bytes>".to_string(),
+                );
+            }
+        }
+    }
+    Ok(DebugReadCommand {
+        target_id: target_id.ok_or_else(|| {
+            "dbg-read requires target=<id> offset=<bytes> length=<bytes>".to_string()
+        })?,
+        offset: offset.ok_or_else(|| {
+            "dbg-read requires target=<id> offset=<bytes> length=<bytes>".to_string()
+        })?,
+        length: length.ok_or_else(|| {
+            "dbg-read requires target=<id> offset=<bytes> length=<bytes>".to_string()
+        })?,
+    })
+}
+
+fn parse_debug_write_args(args: &[&str]) -> AppResult<DebugWriteCommand> {
+    if args.len() != 3 {
+        return Err("dbg-write requires target=<id> offset=<bytes> hex=<...>".to_string());
+    }
+    let mut target_id = None;
+    let mut offset = None;
+    let mut bytes = None;
+    for token in args {
+        let (key, value) = split_key_value(token)?;
+        match key {
+            "target" => target_id = Some(parse_target_value(value)?),
+            "offset" => offset = Some(parse_u64_value(Some(value), "offset")?),
+            "hex" => bytes = Some(parse_hex_bytes(value)?),
+            _ => return Err("dbg-write requires target=<id> offset=<bytes> hex=<...>".to_string()),
+        }
+    }
+    Ok(DebugWriteCommand {
+        target_id: target_id
+            .ok_or_else(|| "dbg-write requires target=<id> offset=<bytes> hex=<...>".to_string())?,
+        offset: offset
+            .ok_or_else(|| "dbg-write requires target=<id> offset=<bytes> hex=<...>".to_string())?,
+        bytes: bytes
+            .ok_or_else(|| "dbg-write requires target=<id> offset=<bytes> hex=<...>".to_string())?,
+    })
 }
 
 fn print_stats(host: &CliHost) -> AppResult<()> {
@@ -322,6 +419,10 @@ pub fn print_runtime_help() {
     println!("  ls                                 list managed targets");
     println!("  stats                              print aggregated AppKernel counters");
     println!("  debug                              print backend snapshot");
+    println!("  dbg-read target=<id> offset=<bytes> length=<bytes>");
+    println!("                                     read raw bytes from shared local backing");
+    println!("  dbg-write target=<id> offset=<bytes> hex=<...>");
+    println!("                                     write raw bytes into shared local backing");
     println!("  exit                               close session and quit");
 }
 
@@ -428,8 +529,54 @@ fn split_key_value(text: &str) -> AppResult<(&str, &str)> {
     Ok((key, value))
 }
 
+fn parse_length_value(value: &str) -> AppResult<usize> {
+    let length = parse_u64_value(Some(value), "length")?;
+    usize::try_from(length).map_err(|_| "length-too-large".to_string())
+}
+
+fn parse_hex_bytes(text: &str) -> AppResult<Vec<u8>> {
+    let normalized = text
+        .strip_prefix("0x")
+        .or_else(|| text.strip_prefix("0X"))
+        .unwrap_or(text)
+        .bytes()
+        .filter(|byte| !matches!(byte, b'-' | b'_' | b':'))
+        .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        return Err("hex must not be empty".to_string());
+    }
+    if normalized.len() % 2 != 0 {
+        return Err("hex length must be even".to_string());
+    }
+    let mut bytes = Vec::with_capacity(normalized.len() / 2);
+    for pair in normalized.chunks_exact(2) {
+        let high = parse_hex_nibble(pair[0])?;
+        let low = parse_hex_nibble(pair[1])?;
+        bytes.push((high << 4) | low);
+    }
+    Ok(bytes)
+}
+
+fn parse_hex_nibble(value: u8) -> AppResult<u8> {
+    match value {
+        b'0'..=b'9' => Ok(value - b'0'),
+        b'a'..=b'f' => Ok(value - b'a' + 10),
+        b'A'..=b'F' => Ok(value - b'A' + 10),
+        _ => Err(format!("invalid hex digit: {}", char::from(value))),
+    }
+}
+
 fn bool_to_text(value: bool) -> &'static str {
     if value { "true" } else { "false" }
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut text, "{:02X}", byte);
+    }
+    text
 }
 
 fn format_target_list(targets: &[u32]) -> String {
@@ -501,11 +648,15 @@ fn stop_dead_network_reaper(reaper: DeadNetworkReaper) {
 #[cfg(test)]
 mod tests {
     use super::CreateLocalDiskSource;
+    use super::DebugReadCommand;
+    use super::DebugWriteCommand;
     use super::RemoveCommand;
     use super::RemoveSharedMemorySelector;
     use super::RemoveTargetSelector;
     use super::parse_auth_args;
     use super::parse_create_local_disk_args;
+    use super::parse_debug_read_args;
+    use super::parse_debug_write_args;
     use super::parse_remove_args;
 
     #[test]
@@ -562,5 +713,33 @@ mod tests {
             }
             _ => panic!("unexpected remove shared selector"),
         }
+    }
+
+    #[test]
+    fn parse_debug_read_args_accepts_target_offset_and_length() {
+        let parsed = parse_debug_read_args(&["target=4", "offset=512", "length=16"])
+            .expect("parse should succeed");
+        assert_eq!(
+            parsed,
+            DebugReadCommand {
+                target_id: 4,
+                offset: 512,
+                length: 16,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_debug_write_args_decodes_hex_payload() {
+        let parsed = parse_debug_write_args(&["target=3", "offset=8", "hex=0xAA-bb_cc:dd"])
+            .expect("parse should succeed");
+        assert_eq!(
+            parsed,
+            DebugWriteCommand {
+                target_id: 3,
+                offset: 8,
+                bytes: vec![0xAA, 0xBB, 0xCC, 0xDD],
+            }
+        );
     }
 }

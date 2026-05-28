@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 
+use backend_rust::Media;
+
 use super::DenseMem;
 use super::LocalBindingKind;
 
@@ -106,6 +108,34 @@ impl SharedMemoryRegistry {
         Some((smid, siblings))
     }
 
+    pub fn read_bound_target_bytes(
+        &self,
+        target_id: u32,
+        offset: u64,
+        length: usize,
+    ) -> Result<Vec<u8>, String> {
+        let entry = self.shared_entry_for_target(target_id)?;
+        let mut bytes = vec![0; length];
+        entry
+            .media
+            .read_locked(offset, &mut bytes)
+            .map_err(|error| error.to_string())?;
+        Ok(bytes)
+    }
+
+    pub fn write_bound_target_bytes(
+        &self,
+        target_id: u32,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<(), String> {
+        let entry = self.shared_entry_for_target(target_id)?;
+        entry
+            .media
+            .write_locked(offset, data)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn remove_shared_memory(&mut self, smid: u64) -> Result<(), String> {
         let Some(entry) = self.shared.get(&smid) else {
             return Err("smid-not-found".to_string());
@@ -139,6 +169,17 @@ impl SharedMemoryRegistry {
                 bound_targets: entry.bound_targets.iter().copied().collect(),
             })
             .collect()
+    }
+
+    fn shared_entry_for_target(&self, target_id: u32) -> Result<&SharedMemoryEntry, String> {
+        let smid = self
+            .target_bindings
+            .get(&target_id)
+            .copied()
+            .ok_or_else(|| "target-not-shared-memory".to_string())?;
+        self.shared
+            .get(&smid)
+            .ok_or_else(|| "smid-not-found".to_string())
     }
 }
 
@@ -196,5 +237,37 @@ mod tests {
             .remove_all_shared_memory()
             .expect_err("shared memory should stay in use");
         assert_eq!(error, "smid-in-use");
+    }
+
+    #[test]
+    fn read_and_write_bound_target_bytes_share_same_backing_media() {
+        let mut registry = SharedMemoryRegistry::default();
+        let smid = registry
+            .create_shared_memory(4096)
+            .expect("shared memory should be created");
+        registry
+            .register_target_binding(3, LocalBindingKind::Shared { smid })
+            .expect("binding should succeed");
+        registry
+            .register_target_binding(4, LocalBindingKind::Shared { smid })
+            .expect("binding should succeed");
+
+        registry
+            .write_bound_target_bytes(3, 8, &[0xAA, 0xBB, 0xCC, 0xDD])
+            .expect("write should succeed");
+
+        let bytes = registry
+            .read_bound_target_bytes(4, 8, 4)
+            .expect("read should succeed");
+        assert_eq!(bytes, vec![0xAA, 0xBB, 0xCC, 0xDD]);
+    }
+
+    #[test]
+    fn read_bound_target_bytes_rejects_unbound_targets() {
+        let registry = SharedMemoryRegistry::default();
+        let error = registry
+            .read_bound_target_bytes(9, 0, 4)
+            .expect_err("unbound target should fail");
+        assert_eq!(error, "target-not-shared-memory");
     }
 }

@@ -414,6 +414,26 @@ impl CliHost {
         self.shared_memory.snapshots()
     }
 
+    pub fn debug_read_target_bytes(
+        &self,
+        target_id: u32,
+        offset: u64,
+        length: usize,
+    ) -> AppResult<Vec<u8>> {
+        self.shared_memory
+            .read_bound_target_bytes(target_id, offset, length)
+    }
+
+    pub fn debug_write_target_bytes(
+        &self,
+        target_id: u32,
+        offset: u64,
+        data: &[u8],
+    ) -> AppResult<()> {
+        self.shared_memory
+            .write_bound_target_bytes(target_id, offset, data)
+    }
+
     fn handle_host_event(&mut self, event: &ManagedDiskEvent) -> AppResult<()> {
         match event.event_type {
             ManagedDiskEventType::DiskRemoved => {

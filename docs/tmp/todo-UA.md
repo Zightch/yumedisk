@@ -5,17 +5,25 @@
 - 阶段 A-D：已完成
   - `YumeDiskSCSI / YumeDiskKMDF / AppKernel / BackendRust` 的 `data_changed -> Unit Attention` 主链已接通
   - `BackendRust` 已具备单盘 `notify_managed_disk_data_changed(...)` 下行能力
-- 阶段 E：已完成，待阶段 F 闭环验收
+- 阶段 E：已完成
   - `rust-cli` 本地命令面已切到正式口径：`sm / ct size= / ct smid= / rm target= / rm smid=`
   - 旧 `ct <disk-size-mib> ...` 与旧 `rm all` 已删除
   - 本地共享内存已收成 `windows/rust-cli/src/cli/local/memory/`
   - `smid` 注册表、`smid -> bound targets`、target 删除解绑、`rm smid`/`rm smid=all` 拒绝策略已落地
   - `WriteFinalCommitted` 后的 sibling fanout 已由 `rust-cli` 负责，通过 `BackendRust` 的宿主事件轮询口触发 `notify_managed_disk_data_changed(...)`
+- 阶段 F：已完成
+  - 运行时闭环基线已按 `sm 64 -> ct smid=1 target=3 -> ct smid=1 target=4` 建立
+  - 为 Phase F 验收补了最小调试命令：`dbg-read target=<id> offset=<bytes> length=<bytes>`、`dbg-write target=<id> offset=<bytes> hex=<...>`
+  - 使用管理员 raw disk 写入对 `\\.\PhysicalDrive1` 偏移 `4096` 与 `4608` 发起 512B 真实写入；随后 `\\.\PhysicalDrive2` 原始读取可见新字节，说明 sibling 已看到同底层新内容
+  - 同次验收中，`rust-cli debug_stats events_queued` 从建盘后的 `2` 增至写入后的 `3`，对应一次额外 `WriteFinalCommitted` 宿主事件
+  - 写入前后 `PhysicalDrive1/2` 均保持 `RAW / Online / IsOffline=False`；删除 target 3 后，target 4 仍保持 `running, online=true`，且 `PhysicalDrive2` 仍可读到已写入数据
+  - 生命周期口径已实测：`rm smid=1` 在 target 仍绑定时返回 `smid-in-use`；`rm target=all` 后 `smid` 仍保留且 `bound_targets=none`；随后 `rm smid=all` 成功
+  - 本机运行时限制：即使使用管理员句柄，`IOCTL_SCSI_PASS_THROUGH_DIRECT(TEST UNIT READY)` 对 `\\.\PhysicalDrive2` 仍返回 Win32 `1306`，因此本阶段未在黑盒 runtime 中直接抓到一次 `REQUEST SENSE 28/00`；该 UA 正式语义仍由阶段 A-D 的下层测试覆盖
 - 当前验证状态：
-  - `windows/BackendRust` 与 `windows/rust-cli` 的 `cargo check --tests` 已通过
-  - `cargo test` 当前仍受本机 `appkernel` 静态库导出限制阻断：链接阶段缺少 `AkNotifyDiskDataChanged` 符号
+  - `windows/BackendRust` 的 `cargo test` 已通过（12 tests）
+  - `windows/rust-cli` 的 `cargo test` 已通过（24 tests）
 - 下一步：
-  - 进入阶段 F，按 `sm 64 -> ct smid=... -> ct smid=... -> 真实写入 -> 观察 sibling UA` 做本地最小闭环验收
+  - 进入阶段 G，收敛网络侧 `rw -> ro` 的 dedicated notice 与 client 落盘 `data_changed` 接法
 
 ## 1. 目标
 
@@ -828,12 +836,12 @@ Phase D 允许的唯一实现形态：
 - 只允许补帮助本轮验证的最小命令
 - 不顺手扩成完整块设备测试 shell
 
-建议的最小可选调试命令：
+当前已落地的最小调试命令：
 
 - `dbg-read target=<id> offset=<bytes> length=<bytes>`
 - `dbg-write target=<id> offset=<bytes> hex=<...>`
 
-只有在纯依赖 Windows 自动探测无法稳定验收时，才补这层。
+当前这层只用于本地共享 `MemoryMedia` 的验收辅助，不扩成通用块设备测试 shell。
 
 ### 阶段 G：网络接入准备项
 
