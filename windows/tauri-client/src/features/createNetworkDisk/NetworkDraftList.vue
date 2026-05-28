@@ -30,8 +30,8 @@ function formatBytes(value: number): string {
   return `${text} ${units[unitIndex]}`;
 }
 
-function formatCapacityLabel(readOnly: boolean): string {
-  return readOnly ? "容量·只读" : "容量·读写";
+function formatCapacityText(value: number, readOnly: boolean): string {
+  return `${formatBytes(value)}${readOnly ? "·只读" : "·读写"}`;
 }
 </script>
 
@@ -68,12 +68,7 @@ function formatCapacityLabel(readOnly: boolean): string {
           </div>
 
           <div class="network-draft-card__capacity">
-            <span class="network-draft-card__capacity-label">
-              {{ formatCapacityLabel(item.readOnly) }}
-            </span>
-            <span class="network-draft-card__capacity-value">
-              {{ formatBytes(item.capacityBytes) }}
-            </span>
+            {{ formatCapacityText(item.capacityBytes, item.readOnly) }}
           </div>
 
           <el-button
@@ -166,21 +161,8 @@ function formatCapacityLabel(readOnly: boolean): string {
 }
 
 .network-draft-card__capacity {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
   align-self: center;
   justify-self: center;
-}
-
-.network-draft-card__capacity-label {
-  color: rgba(255, 255, 255, 0.7);
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.network-draft-card__capacity-value {
   font-size: 20px;
   font-weight: 600;
   line-height: 1.1;
