@@ -384,7 +384,9 @@ Windows WRITE(target=A)
 - `ct size=<mib> [ro=<true|false>] [target=<id>]`
 - `ct smid=<id> [ro=<true|false>] [target=<id>]`
 - `rm target=<id>`
+- `rm target=all`
 - `rm smid=<id>`
+- `rm smid=all`
 
 固定约束：
 
@@ -398,12 +400,28 @@ Windows WRITE(target=A)
   - `ct <disk-size-mib> ...`
   - `rm all`
 
+`rm target=all` 当前固定策略：
+
+- 删除当前 `rust-cli` 管理下的全部 target
+- target 若绑定某个 `smid`
+  - 只做解绑
+  - 不顺手删除对应 `smid`
+- 这是显式批量 target 删除，不恢复旧 `rm all` 的模糊口径
+
 `rm smid=<id>` 当前固定策略：
 
 - 如果该 `smid` 仍绑定任何 target
   - 直接拒绝
   - 返回 `smid-in-use`
 - 不做“顺手删所有 target”的副作用
+
+`rm smid=all` 当前固定策略：
+
+- 如果任意 `smid` 仍绑定任何 target
+  - 整条命令直接拒绝
+  - 不做部分成功
+- 只有在全部 `smid` 都已无绑定 target 时，才批量删除全部共享内存区
+- 这是显式批量 `smid` 删除，不承担 target 删除职责
 
 ### 6.2 BackendRust 对 host 的新 API
 
@@ -701,7 +719,9 @@ Windows WRITE(target=A)
 - 新增 `ct size=...`
 - 新增 `ct smid=...`
 - 新增 `rm target=...`
+- 新增 `rm target=all`
 - 新增 `rm smid=...`
+- 新增 `rm smid=all`
 - 建立 `smid` 注册表
 - 建立 `smid -> bound targets` 成员关系
 - 在收到 `WriteFinalCommitted` 后：
@@ -715,6 +735,8 @@ Windows WRITE(target=A)
 - `ct size=...` 不进入共享注册表
 - `ct smid=...` 必须复用已存在共享内存区
 - `smid` 只属于 `rust-cli`，不下推到 `BackendRust / AppKernel / driver`
+- `rm target=all` 只做 target 批量删除，不顺手删 `smid`
+- `rm smid=all` 只做共享内存区批量删除；若仍有 bound targets，则整条拒绝
 
 ### 阶段 F：重建本地最小闭环验收
 
@@ -768,7 +790,10 @@ Windows WRITE(target=A)
 - `rm target=...` 与 `rm smid=...` 互斥测试
 - 缺少 `size/smid` 的报错测试
 - 不存在 `smid` 的报错测试
+- `rm target=all` 删除全部 target 后，全部 `smid` 成员关系已解绑
 - `rm smid=` 在仍有 bound targets 时拒绝
+- `rm smid=all` 在任意 `smid` 仍有 bound targets 时整条拒绝
+- `rm target=all` 后再 `rm smid=all` 可清空全部共享内存区
 - target 删除后 `smid` 解绑
 
 ### 9.2 BackendRust 测试
@@ -802,6 +827,8 @@ Windows WRITE(target=A)
 - target A 删除后，target B 仍继续可用
 - `rm smid=` 在 target 未删除前拒绝
 - target 全删后 `rm smid=` 成功
+- `rm target=all` 后全部 target 清空但 `smid` 仍保留
+- `rm smid=all` 在全部 target 已清空后成功
 
 ### 9.5 网络接入停止线
 
@@ -823,7 +850,7 @@ Windows WRITE(target=A)
 - `AppKernel` 已提供 `AkNotifyDiskDataChanged`
 - `BackendRust` 已提供 per-disk `NotifyDataChanged` downward API
 - `rust-cli` 已在共享内存模型中负责 sibling 查找与 fanout
-- `rust-cli` 已按 `sm / ct(size|smid) / rm(target|smid)` 收成唯一正式命令面
+- `rust-cli` 已按 `sm / ct(size|smid) / rm(target|smid=<id>|all)` 收成唯一正式命令面
 - 本地共享内存区已成为正式注册表模型，而不是临时对象拼接
 - 本地双 target 共享 `MemoryMedia` 已完成最小闭环验收
 - 文档与测试已同步到当前唯一正式口径
