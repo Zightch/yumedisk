@@ -242,6 +242,20 @@ ControlHandleHeartbeat(
 
 static
 NTSTATUS
+ControlValidateNotifyDataChangedRequest(
+    _In_ const CTRL_INPUT_MESSAGE* InputMessage
+)
+{
+    if (InputMessage->Message->Header.PayloadLength != 0 ||
+        InputMessage->Message->Header.TargetId > YUMEDISK_MAX_USABLE_TARGET_ID) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
 ControlValidateWriteAckBatchPayload(
     _In_reads_bytes_(PayloadLength) const UCHAR* Payload,
     _In_ ULONG PayloadLength
@@ -563,8 +577,18 @@ ControlEvtIoDeviceControl(
     case YumeDiskCommandQueryScsiInfo:
     case YumeDiskCommandQueryDebugState:
     case YumeDiskCommandCreateDisk:
+    case YumeDiskCommandNotifyDataChanged:
     case YumeDiskCommandRemoveDisk:
     case YumeDiskCommandRemoveAllDisks:
+        if (command == YumeDiskCommandNotifyDataChanged) {
+            status = ControlValidateNotifyDataChangedRequest(&inputMessage);
+            if (!NT_SUCCESS(status)) {
+                ControlSessionRelease(sessionContext);
+                WdfRequestComplete(Request, status);
+                return;
+            }
+        }
+
         status = ControlProxyMessage(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
         if (!NT_SUCCESS(status)) {
             WdfRequestComplete(Request, status);
