@@ -340,6 +340,9 @@ LONG AkCreateDisk(
 LONG AkRemoveDisk(
     AK_DISK* disk);
 
+LONG AkNotifyDiskDataChanged(
+    AK_DISK* disk);
+
 LONG AkQueryDiskState(
     AK_DISK* disk,
     AK_DISK_STATE* out_state);
@@ -366,6 +369,13 @@ LONG AkQueryDiskStats(
 4. 停止该盘 worker 并回收 runtime。
 
 返回后，业务宿主可以安全销毁自己的 `media_ctx`。
+
+`AkNotifyDiskDataChanged` 的固定语义必须是：
+
+1. 只接受仍处于 `Running` 的盘 runtime。
+2. 只表达“底层内容已变”，不表达 remove / recreate / invalid。
+3. 同步下发 `YumeDiskCommandNotifyDataChanged` 到下层驱动链。
+4. 不新增上行 event，不引入 generic change kind。
 
 ## 5.4.1 会话版本准入
 

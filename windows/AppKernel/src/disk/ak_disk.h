@@ -12,6 +12,9 @@ AK_STATUS AkDiskCreate(
 AK_STATUS AkDiskRemove(
     AK_DISK* disk);
 
+AK_STATUS AkDiskNotifyDataChanged(
+    AK_DISK* disk);
+
 AK_STATUS AkDiskQueryState(
     AK_DISK* disk,
     AK_DISK_STATE* out_state);

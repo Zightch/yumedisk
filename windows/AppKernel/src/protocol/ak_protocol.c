@@ -901,6 +901,45 @@ AK_STATUS AkProtocolRemoveDisk(
     return status;
 }
 
+AK_STATUS AkProtocolNotifyDataChanged(
+    HANDLE file,
+    UINT64 session_id,
+    UINT32 target_id)
+{
+    AK_PROTOCOL_MESSAGE_BUFFER buffer;
+    AK_STATUS status;
+
+    if (target_id > YUMEDISK_MAX_USABLE_TARGET_ID) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    status = AkProtocolMessageAllocate(
+        YumeDiskCommandNotifyDataChanged,
+        0u,
+        0u,
+        &buffer);
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    status = AkProtocolMessageReset(
+        &buffer,
+        YumeDiskCommandNotifyDataChanged,
+        0u,
+        session_id,
+        0ull,
+        target_id,
+        0u);
+    if (status != AK_STATUS_SUCCESS) {
+        AkProtocolMessageRelease(&buffer);
+        return status;
+    }
+
+    status = AkProtocolSendShortCommand(file, &buffer);
+    AkProtocolMessageRelease(&buffer);
+    return status;
+}
+
 AK_STATUS AkProtocolQueryDebugState(
     HANDLE file,
     UINT64 session_id,

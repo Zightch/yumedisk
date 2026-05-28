@@ -34,6 +34,10 @@ AK_STATUS AkSessionRegisterDisk(
     AK_DISK* disk,
     UINT64* out_runtime_id);
 
+BOOLEAN AkSessionIsDiskRegistered(
+    AK_SESSION* session,
+    const AK_DISK* disk);
+
 void AkSessionUnregisterDisk(
     AK_SESSION* session,
     AK_DISK* disk);

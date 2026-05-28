@@ -347,9 +347,9 @@ Windows WRITE(target=A)
   -> AppKernel staged write
   -> WRITE_ACK_BATCH complete
   -> AkEventWriteFinalCommitted(target=A, event_id)
-  -> BackendRust commit staged write to shared MemoryMedia(smid=X)
-  -> BackendRust finds sibling targets bound to smid=X
-  -> BackendRust notifies every sibling target except A
+  -> BackendRust commit current disk staged write
+  -> rust-cli finds sibling targets bound to smid=X
+  -> rust-cli calls BackendRust notify_data_changed(disk=B)
   -> AppKernel NotifyDataChanged(target=B)
   -> YumeDiskKMDF proxy command
   -> YumeDiskSCSI mark target B pending_data_changed
@@ -363,9 +363,10 @@ Windows WRITE(target=A)
 这个链路里各层职责固定为：
 
 - `rust-cli`
-  - 管共享内存区注册表、CLI 命令面、target 绑定
+  - 管共享内存区注册表、CLI 命令面、target 绑定、sibling 查找与 fanout 策略
 - `BackendRust`
-  - 在 `WriteFinalCommitted` 后做 sibling fanout
+  - 负责当前盘 staged write commit
+  - 对上层暴露 per-disk `notify_data_changed` 下行接口
 - `AppKernel`
   - 对 host 暴露单盘 `NotifyDataChanged` API
 - `KMDF`
@@ -408,35 +409,38 @@ Windows WRITE(target=A)
 
 当前建议补一条极窄公开 API：
 
-- `notify_disk_data_changed(target_id)`
+- `notify_disk_data_changed(managed_disk)`
 
 建议对外形式：
 
-- `pub fn notify_disk_data_changed(&self, target_id: u32, out_error_text: Option<&mut String>) -> bool`
+- `pub fn notify_disk_data_changed(&self, disk: ..., out_error_text: Option<&mut String>) -> bool`
 
 要求：
 
-- 这条 API 只负责把 target 的“内容已变”下发到 `AppKernel`
+- 这条 API 只负责把某块已存在盘的“内容已变”下发到 `AppKernel`
 - 不负责 sibling 查找
 - 不负责共享内存注册表
+- 目标盘如何在 `BackendRust` 内部解析到 `AppKernel` 句柄，由它自己的盘管理模型负责
 
-### 6.3 BackendRust 的本地绑定信息
+### 6.3 BackendRust 的 `data_changed` 下行接口
 
-为了在 `WriteFinalCommitted` 后找到 sibling targets，需要在 BackendRust runtime 内补一个很窄的 host 绑定信息。
+`BackendRust` 当前只需要补一条很窄的 per-disk 能力：
 
-当前建议不要把这个塞进 `DiskConfig` 的正式通用字段。
+- 在现有盘管理模型上，对上层暴露 `notify_data_changed(...)` 或等价接口
 
-建议新增一层 host-side 运行时绑定：
+固定边界：
 
-- `ManagedDiskBinding`
-  - `local_shared_media_id: Option<u64>`
+- `BackendRust` 不负责 `smid` 注册表
+- `BackendRust` 不负责 sibling 查找
+- `BackendRust` 不保存 `local_shared_media_id`
+- `BackendRust` 不把共享组概念写进 runtime 真状态
+- `BackendRust` 继续只按“某一块盘”的粒度管理 `AppKernel` 句柄和 staged write
 
-约束：
+也就是说：
 
-- 它只属于宿主运行时
-- 不下发给 `AppKernel`
-- 不写入 driver 协议
-- 不变成跨宿主持久化配置字段
+- `WriteFinalCommitted(target=A)` 仍然只是当前盘事件
+- 是否需要通知其他盘，由上层宿主自己决定
+- 一旦上层决定通知目标盘 `B`，再调用 `BackendRust -> AppKernel -> KMDF -> SCSI` 这条 dedicated 下行路径
 
 ### 6.4 AppKernel 公开 API
 
@@ -554,7 +558,7 @@ Windows WRITE(target=A)
 - `src/runtime.rs`
 - `src/types.rs`
 
-但如果新增“创建绑定 + sibling fanout + notify downward”逻辑明显扩张，则应继续按稳定前缀收目录，而不是把 `runtime.rs` 继续平铺拉长。
+但如果新增“per-disk notify downward”逻辑明显扩张，则应继续按稳定前缀收目录，而不是把 `runtime.rs` 继续平铺拉长。
 
 建议候选目录：
 
@@ -657,33 +661,37 @@ Windows WRITE(target=A)
 - 不把“数据已变”伪装成 remove/recreate
 - `AK_VERSION_BE` 必须随本轮同步提升到 `0.1.0.1`
 
-### 阶段 D：重建 BackendRust 的 host-side 绑定与 fanout
+### 阶段 D：重建 BackendRust 的 per-disk NotifyDataChanged 下行接口
 
 目标：
 
-- 在下行 API 就位后，于 `WriteFinalCommitted` 后找出同 `smid` 的 sibling target
+- 给上层宿主补一条 per-disk `NotifyDataChanged` 下行接口，同时保持 `WriteFinalCommitted` 仍是纯 per-disk 事件
 
 任务：
 
-- 补 `ManagedDiskBinding` 或等价 host-side binding
-- `create_managed_disk` 时把 `local_shared_media_id` 写入 runtime 真状态
+- 补 `notify_disk_data_changed(...)` 或等价 host API
+- 复用现有盘 runtime / 句柄管理路径，把单盘 `NotifyDataChanged` 下发到 `AppKernel`
+- 目标盘如何从上层入参落到 `AppKernel` 句柄，继续由 `BackendRust` 自己的盘管理模型负责
 - event thread 处理 `AkEventWriteFinalCommitted` 时：
   - 先 commit 当前盘 staged write
-  - 再判断是否属于共享内存组
-  - 找出 sibling targets
-  - 对除自己外的 sibling target 调 `notify_disk_data_changed(target)`
+  - 保持当前 per-disk committed 事件语义
+  - 不查找 sibling
+  - 不直接触发其他盘的 `NotifyDataChanged`
 
 固定约束：
 
-- sibling notify 失败只记日志
+- 不引入 `smid` 注册表
+- 不把 `local_shared_media_id` 写进 `BackendRust` runtime 真状态
+- 不在 `BackendRust` 实现 sibling fanout
 - 不能回滚已 committed 的写
-- 不允许把 sibling group 状态复制到多个地方并行维护
+- `NotifyDataChanged` 成功或失败，只对调用它的上层返回结果，不隐含额外组策略
+- 不把公开 API 反向设计成承载 `smid` 或共享组概念
 
 ### 阶段 E：最后重建 rust-cli 本地共享内存命令面
 
 目标：
 
-- 在下层链路全部稳定后，再建立正式的本地共享内存区模型与验收入口
+- 在下层链路全部稳定后，由 `rust-cli` 自己建立正式共享内存区模型、sibling fanout 策略与验收入口
 
 任务：
 
@@ -696,12 +704,17 @@ Windows WRITE(target=A)
 - 新增 `rm smid=...`
 - 建立 `smid` 注册表
 - 建立 `smid -> bound targets` 成员关系
+- 在收到 `WriteFinalCommitted` 后：
+  - 判断源 target 是否属于某个 `smid`
+  - 找出 sibling targets
+  - 对除自己外的 sibling target 调 `BackendRust notify_data_changed(...)`
 
 边界：
 
 - `sm` 只创建共享内存区，不自动建盘
 - `ct size=...` 不进入共享注册表
 - `ct smid=...` 必须复用已存在共享内存区
+- `smid` 只属于 `rust-cli`，不下推到 `BackendRust / AppKernel / driver`
 
 ### 阶段 F：重建本地最小闭环验收
 
@@ -762,10 +775,10 @@ Windows WRITE(target=A)
 
 必须补：
 
-- 普通独占 `MemoryMedia` 写 committed 不触发 sibling notify
-- 同 `smid` 下 writer committed 会通知其他 target
-- writer 自己不通知自己
-- sibling notify 失败不影响当前写 committed
+- `notify_disk_data_changed(...)` 对有效盘下发成功
+- `notify_disk_data_changed(...)` 对已移除盘或无效盘返回错误
+- 普通独占盘的 `WriteFinalCommitted` 仍只处理当前盘 committed，不隐含 sibling 策略
+- `notify_disk_data_changed(...)` 失败不回滚已经 committed 的当前写
 
 ### 9.3 AppKernel / KMDF / SCSI 测试
 
@@ -808,7 +821,8 @@ Windows WRITE(target=A)
 - `StorPortAsyncNotificationDetected(...MEDIA_STATUS)` 已作为加速层接入
 - `KMDF` 已正式代理 `YumeDiskCommandNotifyDataChanged`
 - `AppKernel` 已提供 `AkNotifyDiskDataChanged`
-- `BackendRust` 已能在 `WriteFinalCommitted` 后对 sibling target 发起 dedicated downward notify
+- `BackendRust` 已提供 per-disk `NotifyDataChanged` downward API
+- `rust-cli` 已在共享内存模型中负责 sibling 查找与 fanout
 - `rust-cli` 已按 `sm / ct(size|smid) / rm(target|smid)` 收成唯一正式命令面
 - 本地共享内存区已成为正式注册表模型，而不是临时对象拼接
 - 本地双 target 共享 `MemoryMedia` 已完成最小闭环验收

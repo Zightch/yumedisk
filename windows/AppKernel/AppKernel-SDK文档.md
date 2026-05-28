@@ -161,6 +161,7 @@
 - disk 生命周期
   - `AkCreateDisk`
   - `AkRemoveDisk`
+  - `AkNotifyDiskDataChanged`
 - disk 观测
   - `AkQueryDiskState`
   - `AkQueryDiskStats`
@@ -508,7 +509,35 @@ AK_STATUS AK_CALL AkRemoveDisk(
 - `media_ctx` 不会再被访问。
 - 宿主可以安全释放该盘介质对象和 staged write 记录。
 
-### 7.3 `AkQueryDiskState` / `AkQueryDiskStats`
+### 7.3 `AkNotifyDiskDataChanged`
+
+函数：
+
+```c
+AK_STATUS AK_CALL AkNotifyDiskDataChanged(
+    AK_DISK* disk);
+```
+
+固定语义：
+
+- 这是一条 host 到驱动的显式下行通知，只表达“该盘底层内容已被别处改动”。
+- 它不创建新事件，不删除盘，不重建盘，也不替代 `AkRemoveDisk`。
+- 当前版本只支持单一变化类型：`data_changed`。
+- `AppKernel` 不理解 `smid`、共享组或 sibling 集合；宿主必须先自己确定目标盘，再按盘调用这条 API。
+
+入口约束：
+
+- `disk` 不能为空。
+- 该盘必须仍处于 `AkStateRunning`。
+- 该盘必须仍注册在所属 session 的 disk list 中。
+- `transport` 未就绪或目标 target 不存在时，调用直接失败。
+
+成功后保证：
+
+- `AppKernel` 已把 `NotifyDataChanged` 同步下发给下层驱动链。
+- 后续是否以及何时被系统侧感知，由 `SCSI Unit Attention` 与系统探测路径共同决定。
+
+### 7.4 `AkQueryDiskState` / `AkQueryDiskStats`
 
 函数：
 

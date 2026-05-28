@@ -867,6 +867,45 @@ static void AkDiskSetLastError(
     ReleaseSRWLockExclusive(&disk->Lock);
 }
 
+static AK_STATUS AkDiskPrepareNotifyDataChanged(
+    AK_DISK* disk,
+    AK_SESSION** out_session,
+    UINT32* out_target_id)
+{
+    AK_SESSION* session;
+    UINT32 target_id;
+    AK_STATUS status;
+
+    if ((disk == NULL) || (out_session == NULL) || (out_target_id == NULL)) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    session = NULL;
+    target_id = 0u;
+    status = AK_STATUS_SUCCESS;
+
+    AcquireSRWLockShared(&disk->Lock);
+    if (disk->State.Lifecycle != AkStateRunning) {
+        status = AK_STATUS_DEVICE_NOT_READY;
+    } else {
+        session = disk->Session;
+        target_id = disk->Params.TargetId;
+    }
+    ReleaseSRWLockShared(&disk->Lock);
+
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    if (!AkSessionIsDiskRegistered(session, disk)) {
+        return AK_STATUS_NOT_FOUND;
+    }
+
+    *out_session = session;
+    *out_target_id = target_id;
+    return AK_STATUS_SUCCESS;
+}
+
 static UINT32 AkDiskComputeReadWorkerSlotCount(
     const AK_DISK* disk,
     UINT32 worker_index)
@@ -2867,6 +2906,35 @@ AK_STATUS AkDiskRemove(AK_DISK* disk)
     AkSessionUnregisterDisk(disk->Session, disk);
     AkDiskDestroy(disk);
     return remove_status;
+}
+
+AK_STATUS AkDiskNotifyDataChanged(
+    AK_DISK* disk)
+{
+    AK_SESSION* session;
+    HANDLE control_file;
+    UINT64 session_id;
+    UINT32 target_id;
+    AK_STATUS status;
+
+    status = AkDiskPrepareNotifyDataChanged(disk, &session, &target_id);
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    status = AkSessionAcquireTransport(session, &control_file, &session_id);
+    if (status != AK_STATUS_SUCCESS) {
+        AkDiskRecordCommandFailure(disk, status);
+        return status;
+    }
+
+    status = AkProtocolNotifyDataChanged(control_file, session_id, target_id);
+    if (status != AK_STATUS_SUCCESS) {
+        AkDiskRecordCommandFailure(disk, status);
+        return status;
+    }
+
+    return AK_STATUS_SUCCESS;
 }
 
 AK_STATUS AkDiskQueryState(

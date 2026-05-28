@@ -122,6 +122,11 @@ AK_STATUS AkProtocolRemoveDisk(
     UINT32 target_id,
     ULONG flags);
 
+AK_STATUS AkProtocolNotifyDataChanged(
+    HANDLE file,
+    UINT64 session_id,
+    UINT32 target_id);
+
 AK_STATUS AkProtocolQueryDebugState(
     HANDLE file,
     UINT64 session_id,

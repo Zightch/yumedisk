@@ -632,6 +632,34 @@ AK_STATUS AkSessionRegisterDisk(
     return AK_STATUS_SUCCESS;
 }
 
+BOOLEAN AkSessionIsDiskRegistered(
+    AK_SESSION* session,
+    const AK_DISK* disk)
+{
+    const AK_DISK* current;
+    BOOLEAN found;
+
+    if ((session == NULL) || (disk == NULL)) {
+        return FALSE;
+    }
+
+    found = FALSE;
+
+    AcquireSRWLockShared(&session->Lock);
+    current = session->DiskListHead;
+    while (current != NULL) {
+        if (current == disk) {
+            found = TRUE;
+            break;
+        }
+
+        current = current->SessionNext;
+    }
+    ReleaseSRWLockShared(&session->Lock);
+
+    return found;
+}
+
 void AkSessionUnregisterDisk(
     AK_SESSION* session,
     AK_DISK* disk)
