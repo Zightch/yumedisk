@@ -80,6 +80,18 @@ fn read_only_to_text(read_only: bool) -> &'static str {
     if read_only { "true" } else { "false" }
 }
 
+fn make_empty_disk_state() -> appkernel::AkDiskState {
+    appkernel::AkDiskState {
+        lifecycle: appkernel::AkLifecycleState::Init,
+        target_id: 0,
+        disk_runtime_id: 0,
+        read_workers_running: 0,
+        write_workers_running: 0,
+        ack_flusher_running: 0,
+        last_error: 0,
+    }
+}
+
 fn append_log_inner(inner: &Inner, text: String) {
     {
         let mut log_lines = inner.log_lines.lock().expect("log_lines poisoned");
@@ -246,15 +258,7 @@ impl BackendContext {
         };
 
         if runtime.lifecycle.handle != 0 {
-            let mut disk_state = appkernel::AkDiskState {
-                lifecycle: appkernel::AkLifecycleState::Init,
-                target_id: 0,
-                disk_runtime_id: 0,
-                read_workers_running: 0,
-                write_workers_running: 0,
-                ack_flusher_running: 0,
-                last_error: 0,
-            };
+            let mut disk_state = make_empty_disk_state();
             // SAFETY: valid AppKernel handle while runtime exists.
             let status = unsafe {
                 appkernel::AkQueryDiskState(
@@ -847,6 +851,25 @@ impl BackendContext {
             .is_ok()
     }
 
+    pub fn notify_managed_disk_data_changed(
+        &self,
+        target_id: u32,
+        out_error_text: Option<&mut String>,
+    ) -> bool {
+        self.notify_managed_disk_data_changed_with(
+            target_id,
+            out_error_text,
+            |disk, out_state| {
+                // SAFETY: validated by BackendContext runtime lookup and handle checks.
+                unsafe { appkernel::AkQueryDiskState(disk, out_state) }
+            },
+            |disk| {
+                // SAFETY: validated by BackendContext runtime lookup and handle checks.
+                unsafe { appkernel::AkNotifyDiskDataChanged(disk) }
+            },
+        )
+    }
+
     pub fn remove_managed_disk_with_media(
         &self,
         target_id: u32,
@@ -972,6 +995,95 @@ impl BackendContext {
         self.append_log("[backend] removedAll=true".to_string());
         ok || closing
     }
+
+    fn notify_managed_disk_data_changed_with<QueryDiskStateFn, NotifyDiskDataChangedFn>(
+        &self,
+        target_id: u32,
+        out_error_text: Option<&mut String>,
+        mut query_disk_state_fn: QueryDiskStateFn,
+        mut notify_disk_data_changed_fn: NotifyDiskDataChangedFn,
+    ) -> bool
+    where
+        QueryDiskStateFn:
+            FnMut(*mut appkernel::AkDisk, &mut appkernel::AkDiskState) -> appkernel::AkStatus,
+        NotifyDiskDataChangedFn: FnMut(*mut appkernel::AkDisk) -> appkernel::AkStatus,
+    {
+        let session = *self.inner.session.lock().expect("session poisoned");
+        if session == 0 {
+            if let Some(out_error_text) = out_error_text {
+                *out_error_text = String::from("session-not-open");
+            }
+            return false;
+        }
+
+        let Some(runtime) = self.find_disk_runtime(target_id) else {
+            if let Some(out_error_text) = out_error_text {
+                *out_error_text = String::from("target-not-found");
+            }
+            return false;
+        };
+
+        let runtime_guard = runtime.read().expect("disk runtime poisoned");
+        if runtime_guard.lifecycle.handle == 0 {
+            if let Some(out_error_text) = out_error_text {
+                *out_error_text = String::from("disk-handle-not-ready");
+            }
+            return false;
+        }
+        let disk = runtime_guard.lifecycle.handle as *mut appkernel::AkDisk;
+
+        let mut disk_state = make_empty_disk_state();
+        let query_status = query_disk_state_fn(disk, &mut disk_state);
+        if query_status != appkernel::AK_STATUS_SUCCESS {
+            if let Some(out_error_text) = out_error_text {
+                *out_error_text = format!(
+                    "query-disk-state-failed({})",
+                    format_status_hex(query_status)
+                );
+            }
+            self.append_log(format!(
+                "[backend] query disk state before notify failed, target={}, status={}",
+                target_id,
+                format_status_hex(query_status)
+            ));
+            return false;
+        }
+
+        if !matches!(disk_state.lifecycle, appkernel::AkLifecycleState::Running) {
+            if let Some(out_error_text) = out_error_text {
+                *out_error_text = format!(
+                    "disk-not-running({})",
+                    lifecycle_to_text(disk_state.lifecycle)
+                );
+            }
+            self.append_log(format!(
+                "[backend] notify data changed rejected, target={}, lifecycle={}",
+                target_id,
+                lifecycle_to_text(disk_state.lifecycle)
+            ));
+            return false;
+        }
+
+        let status = notify_disk_data_changed_fn(disk);
+        if status != appkernel::AK_STATUS_SUCCESS {
+            if let Some(out_error_text) = out_error_text {
+                *out_error_text =
+                    format!("notify-data-changed-failed({})", format_status_hex(status));
+            }
+            self.append_log(format!(
+                "[backend] notify data changed failed, target={}, status={}",
+                target_id,
+                format_status_hex(status)
+            ));
+            return false;
+        }
+
+        self.append_log(format!(
+            "[backend] notify data changed, target={}",
+            target_id
+        ));
+        true
+    }
 }
 
 unsafe extern "C" fn appkernel_log_callback(log_ctx: *mut c_void, level: i32, text: *const i8) {
@@ -1084,7 +1196,13 @@ fn reject_disk_runtime_staging(runtime: &Arc<RwLock<DiskRuntime>>, event_id: u64
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::RwLock;
+
     use super::BackendContext;
+    use super::DiskRuntime;
+    use crate::appkernel;
     use crate::error::BackendError;
     use crate::media::Media;
     use crate::types::DiskConfig;
@@ -1106,6 +1224,47 @@ mod tests {
         fn write_locked(&self, _offset: u64, _data: &[u8]) -> Result<(), BackendError> {
             Ok(())
         }
+    }
+
+    struct FakeOpenSessionGuard<'a> {
+        context: &'a BackendContext,
+    }
+
+    impl Drop for FakeOpenSessionGuard<'_> {
+        fn drop(&mut self) {
+            *self.inner_session_guard() = 0;
+        }
+    }
+
+    impl FakeOpenSessionGuard<'_> {
+        fn inner_session_guard(&self) -> std::sync::MutexGuard<'_, usize> {
+            self.context.inner.session.lock().expect("session poisoned")
+        }
+    }
+
+    fn open_fake_session(context: &BackendContext) -> FakeOpenSessionGuard<'_> {
+        *context.inner.session.lock().expect("session poisoned") = 1;
+        FakeOpenSessionGuard { context }
+    }
+
+    fn insert_test_runtime(
+        context: &BackendContext,
+        target_id: u32,
+        handle: usize,
+    ) -> Arc<RwLock<DiskRuntime>> {
+        let disk_config = DiskConfig {
+            target_id,
+            disk_size_bytes: 4096,
+            ..DiskConfig::default()
+        };
+        let runtime = Arc::new(RwLock::new(DiskRuntime::new(&disk_config)));
+        runtime
+            .write()
+            .expect("disk runtime poisoned")
+            .lifecycle
+            .handle = handle;
+        context.insert_disk_runtime(Arc::clone(&runtime));
+        runtime
     }
 
     #[test]
@@ -1137,5 +1296,145 @@ mod tests {
         );
         assert!(!ok);
         assert_eq!(error, "session-not-open");
+    }
+
+    #[test]
+    fn notify_data_changed_requires_open_session() {
+        let context = BackendContext::new();
+        let mut error = String::new();
+        let ok = context.notify_managed_disk_data_changed(0, Some(&mut error));
+        assert!(!ok);
+        assert_eq!(error, "session-not-open");
+    }
+
+    #[test]
+    fn notify_data_changed_rejects_unknown_target() {
+        let context = BackendContext::new();
+        let _guard = open_fake_session(&context);
+        let mut error = String::new();
+        let ok = context.notify_managed_disk_data_changed(3, Some(&mut error));
+        assert!(!ok);
+        assert_eq!(error, "target-not-found");
+    }
+
+    #[test]
+    fn notify_data_changed_rejects_runtime_without_handle() {
+        let context = BackendContext::new();
+        let _guard = open_fake_session(&context);
+        insert_test_runtime(&context, 7, 0);
+        let mut error = String::new();
+        let ok = context.notify_managed_disk_data_changed(7, Some(&mut error));
+        assert!(!ok);
+        assert_eq!(error, "disk-handle-not-ready");
+    }
+
+    #[test]
+    fn notify_data_changed_rejects_non_running_disk() {
+        let context = BackendContext::new();
+        let _guard = open_fake_session(&context);
+        insert_test_runtime(&context, 11, 0x1000);
+
+        let mut error = String::new();
+        let ok = context.notify_managed_disk_data_changed_with(
+            11,
+            Some(&mut error),
+            |_disk, out_state| {
+                out_state.lifecycle = appkernel::AkLifecycleState::Removing;
+                appkernel::AK_STATUS_SUCCESS
+            },
+            |_disk| panic!("notify should not run for non-running disk"),
+        );
+        assert!(!ok);
+        assert_eq!(error, "disk-not-running(removing)");
+    }
+
+    #[test]
+    fn notify_data_changed_success_stays_single_disk_and_calls_notify_once() {
+        let context = BackendContext::new();
+        let _guard = open_fake_session(&context);
+        insert_test_runtime(&context, 19, 0x2000);
+
+        let queried = Mutex::new(Vec::new());
+        let notified = Mutex::new(Vec::new());
+        let mut error = String::new();
+        let ok = context.notify_managed_disk_data_changed_with(
+            19,
+            Some(&mut error),
+            |disk, out_state| {
+                queried
+                    .lock()
+                    .expect("queried poisoned")
+                    .push(disk as usize);
+                out_state.lifecycle = appkernel::AkLifecycleState::Running;
+                appkernel::AK_STATUS_SUCCESS
+            },
+            |disk| {
+                notified
+                    .lock()
+                    .expect("notified poisoned")
+                    .push(disk as usize);
+                appkernel::AK_STATUS_SUCCESS
+            },
+        );
+        assert!(ok);
+        assert!(error.is_empty());
+        assert_eq!(
+            queried.lock().expect("queried poisoned").as_slice(),
+            &[0x2000]
+        );
+        assert_eq!(
+            notified.lock().expect("notified poisoned").as_slice(),
+            &[0x2000]
+        );
+    }
+
+    #[test]
+    fn notify_data_changed_failure_keeps_existing_staging_state() {
+        let context = BackendContext::new();
+        let _guard = open_fake_session(&context);
+        let runtime = insert_test_runtime(&context, 23, 0x3000);
+
+        {
+            let mut runtime_guard = runtime.write().expect("disk runtime poisoned");
+            let disk_size_bytes = runtime_guard.metadata.disk_size_bytes;
+            let op = appkernel::AkWriteOp {
+                target_id: 23,
+                disk_runtime_id: 0,
+                event_id: 99,
+                seq: 0,
+                total_seq: 1,
+                lba: 0,
+                offset_bytes: 0,
+                byte_offset_in_write: 0,
+                data_length: 4,
+                flags: 0,
+            };
+            let status =
+                runtime_guard
+                    .staging
+                    .stage_write_locked(&op, &[1, 2, 3, 4], disk_size_bytes);
+            assert_eq!(status, appkernel::AK_STATUS_SUCCESS);
+        }
+
+        let mut error = String::new();
+        let ok = context.notify_managed_disk_data_changed_with(
+            23,
+            Some(&mut error),
+            |_disk, out_state| {
+                out_state.lifecycle = appkernel::AkLifecycleState::Running;
+                appkernel::AK_STATUS_SUCCESS
+            },
+            |_disk| appkernel::AK_STATUS_UNSUCCESSFUL,
+        );
+        assert!(!ok);
+        assert_eq!(error, "notify-data-changed-failed(0xC0000001)");
+
+        let mut overlay = [0u8; 4];
+        runtime
+            .read()
+            .expect("disk runtime poisoned")
+            .staging
+            .overlay_read_locked(0, &mut overlay);
+        assert_eq!(overlay, [1, 2, 3, 4]);
     }
 }

@@ -183,5 +183,6 @@ unsafe extern "C" {
         out_disk: *mut *mut AkDisk,
     ) -> AkStatus;
     pub fn AkRemoveDisk(disk: *mut AkDisk) -> AkStatus;
+    pub fn AkNotifyDiskDataChanged(disk: *mut AkDisk) -> AkStatus;
     pub fn AkQueryDiskState(disk: *mut AkDisk, out_state: *mut AkDiskState) -> AkStatus;
 }
