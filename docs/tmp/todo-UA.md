@@ -440,6 +440,21 @@ Windows WRITE(target=A)
 - 不负责共享内存注册表
 - 目标盘如何在 `BackendRust` 内部解析到 `AppKernel` 句柄，由它自己的盘管理模型负责
 
+进一步收口：
+
+- API 的入参必须是 `BackendRust` 现有盘管理模型里天然已经存在的 per-disk 对象或等价标识
+- 不为了这条 API 反向引入新的“共享盘专用盘句柄”或 group handle
+- 如果当前实现天然更适合用 `target_id` 查盘，也只允许把它作为内部查找细节，不把“共享组定位”混进公开面
+
+成功与失败语义：
+
+- 成功：只表示当前目标盘的 `NotifyDataChanged` 已同步下发到 `AppKernel`
+- 失败：只表示这次单盘通知失败
+- 无论成功失败：
+  - 都不改当前盘 staged write 内容
+  - 都不改 sibling 关系
+  - 都不隐含任何批量策略
+
 ### 6.3 BackendRust 的 `data_changed` 下行接口
 
 `BackendRust` 当前只需要补一条很窄的 per-disk 能力：
@@ -453,12 +468,26 @@ Windows WRITE(target=A)
 - `BackendRust` 不保存 `local_shared_media_id`
 - `BackendRust` 不把共享组概念写进 runtime 真状态
 - `BackendRust` 继续只按“某一块盘”的粒度管理 `AppKernel` 句柄和 staged write
+- `BackendRust` 不新增 data-changed 专用后台线程
+- `BackendRust` 不新增 data-changed 专用队列 / outbox / retry 状态机
+- `BackendRust` 不缓存“某盘已有 pending UA 未消费”这类事实
+- `BackendRust` 不把 `NotifyDataChanged` 做成事件队列回灌
 
 也就是说：
 
 - `WriteFinalCommitted(target=A)` 仍然只是当前盘事件
 - 是否需要通知其他盘，由上层宿主自己决定
 - 一旦上层决定通知目标盘 `B`，再调用 `BackendRust -> AppKernel -> KMDF -> SCSI` 这条 dedicated 下行路径
+
+Phase D 允许的唯一实现形态：
+
+1. 上层给出某块已存在盘
+2. `BackendRust` 用现有盘管理模型解析到对应 runtime / `AK_DISK*`
+3. 做单盘生命周期与句柄可用性校验
+4. 直接同步调用 `AkNotifyDiskDataChanged`
+5. 把结果返回给上层
+
+除这条同步链外，不再并行增加第二套通知推进机制
 
 ### 6.4 AppKernel 公开 API
 
@@ -588,6 +617,15 @@ Windows WRITE(target=A)
 
 是否执行这一步，取决于本轮改动后 `runtime.rs` 是否已明显失控。
 
+进一步约束：
+
+- 若拆 `runtime/data_changed.rs`
+  - 只承载单盘 `NotifyDataChanged` 下行调用
+  - 不承载 `smid`、共享组、fanout
+- `events.rs`
+  - 只承载 `AkPollEvent` 消费与当前盘 committed/rejected 处理
+  - 不在这里直接写共享组策略
+
 ### 7.3 AppKernel / KMDF / SCSI
 
 这三层本轮新增能力都很窄，当前建议：
@@ -690,6 +728,15 @@ Windows WRITE(target=A)
 - 补 `notify_disk_data_changed(...)` 或等价 host API
 - 复用现有盘 runtime / 句柄管理路径，把单盘 `NotifyDataChanged` 下发到 `AppKernel`
 - 目标盘如何从上层入参落到 `AppKernel` 句柄，继续由 `BackendRust` 自己的盘管理模型负责
+- 入口固定校验：
+  - 目标盘 runtime 存在
+  - 目标盘未进入 removing / closed / broken 等不可用生命周期
+  - 当前 `AK_DISK*` 句柄仍有效
+- 失败时：
+  - 返回单盘失败
+  - 允许记日志
+  - 不修改当前盘 staged write
+  - 不修改任何共享组信息
 - event thread 处理 `AkEventWriteFinalCommitted` 时：
   - 先 commit 当前盘 staged write
   - 保持当前 per-disk committed 事件语义
@@ -704,6 +751,9 @@ Windows WRITE(target=A)
 - 不能回滚已 committed 的写
 - `NotifyDataChanged` 成功或失败，只对调用它的上层返回结果，不隐含额外组策略
 - 不把公开 API 反向设计成承载 `smid` 或共享组概念
+- 不为 `NotifyDataChanged` 单独引入新的 host event type
+- 不把 `WriteFinalCommitted` 改造成“顺手触发通知”的复合事件
+- 不在 `BackendRust` 维护“待通知 sibling 列表”
 
 ### 阶段 E：最后重建 rust-cli 本地共享内存命令面
 
@@ -774,7 +824,7 @@ Windows WRITE(target=A)
 
 - server `rw` 写 committed 后，对同 backend 的其他活跃 `ro session` 发 dedicated notice
 - gateway 只透传
-- client 收到后只调用本地 `notify_disk_data_changed(target)`
+- client 收到后只对对应本地盘调用 `notify_disk_data_changed(...)`
 - 不 invalid
 - 不 close session
 
@@ -802,8 +852,10 @@ Windows WRITE(target=A)
 
 - `notify_disk_data_changed(...)` 对有效盘下发成功
 - `notify_disk_data_changed(...)` 对已移除盘或无效盘返回错误
+- `notify_disk_data_changed(...)` 对 session broken / 句柄不可用场景返回错误
 - 普通独占盘的 `WriteFinalCommitted` 仍只处理当前盘 committed，不隐含 sibling 策略
 - `notify_disk_data_changed(...)` 失败不回滚已经 committed 的当前写
+- `WriteFinalCommitted` 事件线程不直接调用 sibling notify
 
 ### 9.3 AppKernel / KMDF / SCSI 测试
 
