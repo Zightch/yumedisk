@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Delete } from "@element-plus/icons-vue";
 import type { NetworkDraftItem } from "../../entities/disk/model";
 
 defineProps<{
@@ -27,6 +28,10 @@ function formatBytes(value: number): string {
 
   const text = size >= 100 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1);
   return `${text} ${units[unitIndex]}`;
+}
+
+function formatCapacityLabel(readOnly: boolean): string {
+  return readOnly ? "容量·只读" : "容量·读写";
 }
 </script>
 
@@ -63,15 +68,23 @@ function formatBytes(value: number): string {
           </div>
 
           <div class="network-draft-card__capacity">
-            {{ formatBytes(item.capacityBytes) }}
+            <span class="network-draft-card__capacity-label">
+              {{ formatCapacityLabel(item.readOnly) }}
+            </span>
+            <span class="network-draft-card__capacity-value">
+              {{ formatBytes(item.capacityBytes) }}
+            </span>
           </div>
 
           <el-button
             class="network-draft-card__remove"
+            aria-label="删除草稿项"
             :loading="removingRemoteDiskId === item.remoteDiskId"
             @click="emit('remove', item.remoteDiskId)"
           >
-            删除
+            <el-icon>
+              <Delete />
+            </el-icon>
           </el-button>
         </article>
       </div>
@@ -125,7 +138,7 @@ function formatBytes(value: number): string {
 
 .network-draft-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(110px, 140px) auto;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 148px) auto;
   gap: 16px;
   align-items: start;
   padding: 14px 18px;
@@ -153,15 +166,55 @@ function formatBytes(value: number): string {
 }
 
 .network-draft-card__capacity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   align-self: center;
   justify-self: center;
-  font-size: 20px;
-  font-weight: 600;
 }
 
-.network-draft-card__remove {
+.network-draft-card__capacity-label {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.network-draft-card__capacity-value {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+
+.network-draft-card__remove.el-button {
   align-self: center;
   justify-self: end;
-  min-width: 92px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: 8px;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.72);
+  box-shadow: none;
+}
+
+.network-draft-card__remove.el-button:hover:not(.is-disabled),
+.network-draft-card__remove.el-button:focus-visible:not(.is-disabled) {
+  border-color: rgba(248, 113, 113, 0.42);
+  background: rgba(248, 113, 113, 0.12);
+  color: #fca5a5;
+}
+
+.network-draft-card__remove.el-button.is-loading,
+.network-draft-card__remove.el-button.is-loading:hover,
+.network-draft-card__remove.el-button.is-loading:focus-visible {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.network-draft-card__remove .el-icon {
+  font-size: 14px;
 }
 </style>
