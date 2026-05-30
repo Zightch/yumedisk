@@ -9,6 +9,8 @@
 - `tauri-client` 的网络真状态边界
 - `DiskRuntime`、`disksession`、`NetworkMedia` 的职责划分
 - 创建网络盘对话框的 draft 生命周期
+- `remote_backend_id` 的唯一性口径
+- `SessionDataChangedNotice` 的宿主处理策略
 - 重扫、挂载、拔出、删除的当前宿主策略
 - 故障与 connection cleanup 的当前实现口径
 
@@ -22,7 +24,7 @@
 ClientState
   -> NetworkClientState
     -> connection_pool[server_addr]
-    -> opened_disk_sessions[(server_addr, remote_disk_id)]
+    -> opened_disk_sessions[*]
     -> network_create_drafts[draft_id]
   -> DiskCatalog
     -> DiskRuntime[*]
@@ -61,19 +63,23 @@ DiskRuntime
   - 服务器地址领域名
 - `remote_disk_id`
   - 远端网盘标识
+- `remote_backend_id`
+  - 最近一次成功 `SessionDescribe` 获得的 backend 身份
 - `auth_material`
   - 当前最小闭环直接保存原始 `claim_code`
 
-当前全局唯一键固定为：
+当前重复拒绝固定为两个条件：
 
-```text
-(server_addr, remote_disk_id)
-```
+- `(server_addr, remote_disk_id)` 相同
+- `(server_addr, remote_backend_id)` 相同
 
 直接结果：
 
 - 不允许重复添加同一远端盘
+- 不允许同时添加同一 backend 的 `rw` 和 `ro`
+- 不允许同时添加同一 backend 的多个 `ro`
 - 检查范围至少覆盖正式 `DiskRuntime` 和当前 draft 项
+- `remote_backend_id` 只在完成 `SessionDescribe` 后才能参与判断
 
 ## `NetworkClientState`
 
@@ -82,7 +88,7 @@ DiskRuntime
 - 连接复用
 - 已打开 `disksession` 复用
 - draft 生命周期
-- `SessionCloseNotice` / disconnect 收束
+- `SessionDataChangedNotice` / `SessionCloseNotice` / disconnect 收束
 - `NetworkMedia` 终态错误失效队列
 - 网络盘重扫任务汇总与分发
 
@@ -110,12 +116,12 @@ DiskRuntime
   - `drafts.rs`
     - draft 表与 `draft_id` 分配
   - `pending_events.rs`
-    - `SessionCloseNotice` / disconnect / media invalidation 暂存队列
+    - `SessionDataChangedNotice` / `SessionCloseNotice` / disconnect / media invalidation 暂存队列
 - `src-tauri/src/network/`
   - `validation.rs`
     - 边界输入校验
   - `uniqueness.rs`
-    - `(server_addr, remote_disk_id)` 唯一键检查
+    - `(server_addr, remote_disk_id)` 与 `(server_addr, remote_backend_id)` 唯一键检查
   - `gateway_ops.rs`
     - connect / auth / open / describe 最小网络操作
   - `cleanup.rs`
@@ -149,6 +155,7 @@ DiskRuntime
 - `disk_name`
 - `server_addr`
 - `remote_disk_id`
+- `remote_backend_id`
 - `auth_material`
 - `capacity_bytes`
 - `read_only`
@@ -228,7 +235,7 @@ find connection by server_addr
 authenticate(claim_code)
   -> SessionOpen(auth_id)
   -> SessionDescribe(session_id)
-  -> duplicate check by (server_addr, remote_disk_id)
+  -> duplicate check by (server_addr, remote_disk_id) and (server_addr, remote_backend_id)
   -> write draft item
 ```
 
@@ -342,6 +349,7 @@ find DiskRuntime by local_disk_id
 
 - `server_addr`
 - `remote_disk_id`
+- `remote_backend_id`
 - `auth_material`
 
 如果要改变这些字段，固定走“删除旧盘，再重新添加新盘”。
@@ -361,6 +369,9 @@ find DiskRuntime by local_disk_id
 
 当前 `tauri-client` 采用的具体策略是：
 
+- 收到 `SessionDataChangedNotice` 时：
+  - 若目标 session 当前已挂载，则调用本地 data-changed 通知入口
+  - 若目标 session 仅处于已打开未挂载状态，则当前最小闭环直接忽略
 - 已挂载或未挂载网络盘收到 `SessionCloseNotice` 或 connection 死亡后，直接转为 `invalid`
 - `NetworkMedia` 读写遇到终态错误时，只上报失效事件，再由后台收束器统一转为 `invalid`
 - 若当前已挂载，则先 eject
@@ -393,5 +404,6 @@ find DiskRuntime by local_disk_id
 - 挂载时才创建 `NetworkMedia`
 - 拔出后保留 live `disksession`
 - 删除后关闭 live `disksession`
+- `SessionDataChangedNotice` 只驱动本地 data-changed 通知，不驱动 invalidation
 - 故障后盘直接转 `invalid`
 - 恢复入口统一回到 rescan

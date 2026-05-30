@@ -10,7 +10,7 @@
 - gateway 内部真源状态
 - storer 的注册、watchdog 与重连策略
 - `whole` 的内嵌网关方式
-- 当前 bootstrap payload 与 metadata 来源
+- 当前 bootstrap payload、metadata 真源与 `backend_id` 生成口径
 
 ## 程序关系
 
@@ -40,7 +40,7 @@
 - 对 client 提供 `Hello -> transport -> auth -> session -> data plane`
 - 接收外部 storer 的 `StorerRegister`
 - 持有 route / auth grant / session 三张真源表
-- 负责 route 选择、认证、会话建立、metadata 查询与故障传播
+- 负责 route 选择、认证、会话建立、`SessionDescribe` 转发、notice 转发与故障传播
 
 ### storer 程序 `role=storer`
 
@@ -49,7 +49,8 @@
 - 打开本地介质
 - 主动连接 gateway
 - 发送 `StorerRegister`
-- 在 route connection 上承接 `SessionOpen / ReadAt / WriteAt / SessionCloseNotice`
+- 在 route connection 上承接 `SessionOpen / SessionDescribe / ReadAt / WriteAt / SessionCloseNotice`
+- 在 `rw` 写入 committed 后，向受影响 `ro session` 发 `SessionDataChangedNotice`
 - 维护 gateway 主动喂狗的 `LinkHeartbeat` watchdog
 
 当前共享导出口径为：
@@ -77,6 +78,7 @@
 约束固定为：
 
 - `whole` 对 client 仍完整走 `Hello -> transport -> auth -> session -> SessionDescribe -> data plane`
+- `whole` 的 metadata 真源和 `data changed` 决策真源仍在自己的 storer/backend 侧
 - `whole` 不对其他 storer 暴露 storer listener
 - `whole` 不走外部 `StorerRegister` 网络注册
 - `whole` 的本地 route 注册表里只承载自己的本地导出
@@ -99,7 +101,15 @@
 
 ## 真源状态
 
-当前唯一控制真源都在 gateway 侧。
+### gateway 真源
+
+gateway 的唯一控制真源固定为：
+
+- `route_registry`
+- `auth_grant_registry`
+- `session_registry`
+
+它们只承载路由、授权和会话映射，不再承载 metadata snapshot。
 
 ### `route_registry`
 
@@ -108,9 +118,6 @@
 - `disk_id`
 - `route_connection_id`
 - `auth_verifier`
-- `disk_size_bytes`
-- `read_only`
-- `max_io_bytes`
 - `route_state`
 
 当前正式约束：
@@ -120,7 +127,6 @@
 - 当前一个 storer 进程可围绕同一个本地 backend 暴露一组本地导出：
   - 必有一个 `rw disk_id`
   - 可选一个 `ro disk_id`
-- route metadata 在当前 route 生命周期内视为不可变
 
 ### `auth_grant_registry`
 
@@ -141,23 +147,50 @@
 - `route_connection_id`
 - `storer_session_id`
 - `disk_id`
-- session metadata snapshot
 - `session_state`
 
-## metadata 当前口径
+### storer 真源
+
+metadata 与 `data changed` 决策真源固定在 storer/backend 侧：
+
+- `SessionDescribe` 的返回内容由 storer 直接生成
+- `rw committed` 后哪些 `ro session` 需要收到 `SessionDataChangedNotice`，由 storer 直接决定
+- gateway 不保存 metadata snapshot
+- gateway 不维护 backend 分组表
+
+## metadata 与 `backend_id` 当前口径
 
 当前项目采用单一真实来源原则，metadata 路径固定为：
 
-1. `role=storer` 在 `StorerRegister` 上送 `disk_size_bytes / read_only / max_io_bytes`
-2. gateway 将其写入 `route_registry`
-3. `SessionOpen` 成功时，gateway 把 route metadata 复制到 `session_registry` 作为 session snapshot
-4. `SessionDescribe(session_id)` 由 gateway 从本地 session snapshot 回答
+```text
+client SessionDescribe(gateway_session_id)
+  -> gateway 查 session_registry
+  -> gateway 转发 SessionDescribe(storer_session_id)
+  -> storer 直接返回 metadata
+  -> gateway 原样回给 client
+```
+
+当前最小 metadata 集固定为：
+
+- `disk_size_bytes`
+- `max_io_bytes`
+- `read_only`
+- `backend_id`
+
+其中：
+
+- `backend_id` 由 storer 在程序启动时为本地 backend 临时生成
+- 同一个本地 backend 下的 `rw` 和 `ro` 导出必须共用同一个 `backend_id`
+- `backend_id` 不要求跨重启稳定
+- `backend_id` 不进入 route registry
+- `backend_id` 不进入 auth grant
+- `backend_id` 不进入 gateway session registry
 
 因此当前不做：
 
 - `SessionOpen` 顺带返回 metadata
-- `SessionDescribe` 再向 storer 发额外 round-trip
-- route metadata 与 session metadata 双向同步
+- gateway 本地回答 `SessionDescribe`
+- route metadata 与 session metadata 双份维护
 
 ## 当前 bootstrap 口径
 
@@ -227,6 +260,7 @@ gateway 当前实现策略为：
 - gateway 验证 `gateway_token`
 - 注册成功后，把这条连接视为 route connection
 - `gateway -> storer` 的 `SessionOpen` 不再带 `disk_id` 或 `auth_id`
+- `gateway -> storer` 的 `SessionDescribe` 只按 `storer_session_id` 转发
 
 当前 `role=whole` 的固定路由口径为：
 
@@ -242,13 +276,46 @@ gateway 当前实现策略为：
 2. 查本地 `session_registry`
 3. 还原 `(route_connection_id, storer_session_id)`
 4. 改写上游 `request_id / session_id`
-5. 把结果回传给 client
+5. 把结果或 notice 回传给 client
+
+当前这条职责同时覆盖：
+
+- `SessionDescribe`
+- `ReadAt`
+- `WriteAt`
+- `SessionDataChangedNotice`
+- `SessionCloseNotice`
 
 当前明确不做：
 
 - 缓存盘数据
 - 改写成功/失败业务语义
 - 替 client 做跨请求重组
+- 缓存 metadata snapshot
+- 按 backend 做 fanout 决策
+
+## `data changed` 当前口径
+
+当前共享盘的 `data changed` 路径固定为：
+
+```text
+rw client WriteAt
+  -> gateway
+  -> rw storer session
+  -> backend committed
+  -> storer 找到受影响 ro session
+  -> storer 向 gateway 逐个发送 SessionDataChangedNotice(storer_session_id)
+  -> gateway 查 session 映射
+  -> gateway 向目标 client 转发 SessionDataChangedNotice(gateway_session_id)
+```
+
+固定约束：
+
+- `data changed` 决策只在 storer/backend 侧发生
+- gateway 只做 session 映射与 notice 转发
+- gateway 不按 `backend_id` 维护 fanout 表
+- 若目标 client 已离线或 session 已失效，gateway 按幂等忽略
+- `SessionDataChangedNotice` 不触发 server 侧 session 清理
 
 ## 心跳与故障传播
 
@@ -275,6 +342,7 @@ gateway 返回普通 response，不再派生其他 client 心跳分支。
 - gateway heartbeat 超时未收到回复时，把该 route 视为死亡连接
 - `role=storer` 的 route worker 在连接结束后按固定 `5s` 间隔重连
 - `rw` 与 `ro` 各自维护独立重连状态机，不做混合重连
+- 重连期间只静默失败重连日志，其他日志正常输出
 
 `role=whole` 的本地 fixed route 不走外部 `LinkHeartbeat` 网络链路。
 
@@ -310,4 +378,5 @@ gateway 返回普通 response，不再派生其他 client 心跳分支。
 - client 不需要知道对端是独立 gateway 还是 `whole`
 - `whole` 对 client 的心跳超时与连接失效，按 gateway 的 client-connection 语义收束，只关闭该条连接和其名下 session，不结束整个进程
 - `whole` 内部本地导出或 shared backend 失效时，也必须映射成标准 session / connection 失效结果
+- `whole` 内部 metadata 真源与 `data changed` 决策路径，与独立 storer 模式保持同一语义
 - 对 client 的故障表达仍通过已有状态码与 `SessionCloseNotice` 完成

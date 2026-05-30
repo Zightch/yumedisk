@@ -67,6 +67,7 @@
 - `AuthStart / AuthFinish / SessionOpen / ConnHeartbeat` 固定为 `0`
 - `SessionDescribe / ReadAt / WriteAt` 必须带有效非 `0` `session_id`
 - `SessionOpen` 成功响应在响应头写入新分配的 `session_id`
+- `SessionDataChangedNotice` 在 notice 头中写目标 `session_id`
 - `SessionCloseNotice` 在 notice 头中写目标 `session_id`
 
 ## 业务对象与字段边界
@@ -93,6 +94,7 @@
 | `0x03` | `SessionOpen` | req/resp |
 | `0x04` | `SessionDescribe` | req/resp |
 | `0x05` | `SessionCloseNotice` | notice |
+| `0x06` | `SessionDataChangedNotice` | notice |
 | `0x10` | `ReadAt` | req/resp |
 | `0x11` | `WriteAt` | req/resp |
 | `0x12` | `ConnHeartbeat` | req/resp |
@@ -231,7 +233,7 @@
 
 ### 成功响应 body
 
-固定长度 `16` 字节：
+固定长度 `32` 字节：
 
 | 偏移 | 长度 | 字段 | 类型 |
 | --- | --- | --- | --- |
@@ -239,10 +241,17 @@
 | `8` | 4 | `max_io_bytes` | `u32` |
 | `12` | 2 | `flags` | `u16` |
 | `14` | 2 | `reserved` | `u16` |
+| `16` | 16 | `backend_id` | `bytes[16]` |
 
 当前定义的 flag：
 
 - bit0：只读
+
+`backend_id` 的协议语义固定为：
+
+- session 可见 backend 身份
+- client 只能做等值比较，不能解释其内部结构
+- 不承诺跨 storer 重启稳定
 
 ## ConnHeartbeat
 
@@ -256,6 +265,27 @@
 它只表示 connection 级保活，不表示某个 session 保活。
 
 若实现把 `ConnHeartbeat` 超时判定为 connection 死亡，这属于允许实现策略。
+
+## SessionDataChangedNotice
+
+### 主动发起边界
+
+在这条边上，当前正式方向固定为：
+
+- `gateway -> client`
+
+### notice body
+
+- 固定为空
+
+### 语义
+
+- `SessionDataChangedNotice` 是 dedicated data notice，不复用 close
+- notice 头 `session_id` 指向目标 session
+- notice 一旦送达，只表示目标 session 的底层数据内容已经变化
+- 它不表示 session 已失效
+- 它不表示 metadata 已变化
+- 它不等待回复
 
 ## SessionCloseNotice
 

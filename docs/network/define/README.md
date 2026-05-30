@@ -80,6 +80,7 @@ TCP
   -> session_id
   -> SessionDescribe(session_id)
   -> ReadAt / WriteAt
+  <- SessionDataChangedNotice
   <-> SessionCloseNotice
 ```
 
@@ -100,6 +101,13 @@ TCP
 - `SessionOpen` 只负责打开会话
 - `SessionOpen` 不返回 metadata 语义
 - `SessionDescribe(session_id)` 单独返回 session 绑定 metadata
+- 当前最小 metadata 集固定为：
+  - `disk_size_bytes`
+  - `max_io_bytes`
+  - `read_only`
+  - `backend_id`
+
+其中 `backend_id` 是 session 可见 backend 身份，只用于等值比较，不承诺跨重启稳定。
 
 `SessionOpen` 成功时的最小协议结果为：
 
@@ -119,6 +127,8 @@ TCP
 
 - client-gateway connection 死亡时，该 connection 下 `auth_id` 与 session 一起失效
 - route connection 死亡时，该 route 下 session 一起失效
+- `SessionDataChangedNotice` 是独立于 close 的 data notice
+- `SessionDataChangedNotice` 到达时，目标 session 仍然有效
 - `SessionCloseNotice` 是唯一正式 close 语义
 - `SessionCloseNotice` 可由某条协议边的任意一端主动发出
 - `SessionCloseNotice` 一旦到达，目标 session 已经失效

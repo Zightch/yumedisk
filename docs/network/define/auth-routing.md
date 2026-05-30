@@ -80,7 +80,7 @@ client 如何从本地输入恢复 `auth_verifier`，由具体实现定义。
 
 - connection 永久进入 authenticated 状态
 - session 已经存在
-- metadata 已经返回
+- `SessionDescribe` 已经完成
 
 ### 生命周期
 
@@ -111,7 +111,7 @@ granted
 3. `SessionOpen(auth_id)` 时，gateway 用 `auth_id` 还原目标盘并选择 route
 4. gateway 在选中的 route 上发起 route-facing `SessionOpen`
 
-至于 route 从哪里来、如何保存、如何和 metadata 绑定，都属于 server 实现。
+至于 route 从哪里来、如何保存、如何和 session 映射绑定，都属于 server 实现。
 
 ## 认证与 route 失效
 

@@ -31,8 +31,15 @@ client 进入数据面前必须已经完成：
 - `disk_size_bytes`
 - `max_io_bytes`
 - `read_only`
+- `backend_id`
 
 它描述的是这个 session 的可见视图，不额外承诺动态 metadata 刷新模型。
+
+其中 `backend_id` 的固定语义为：
+
+- 标识当前 session 看到的 backend 身份
+- 只用于等值比较
+- 不承诺跨 storer 重启稳定
 
 ## ReadAt
 
@@ -66,6 +73,23 @@ client 进入数据面前必须已经完成：
 ### 成功响应 body
 
 - 当前不要求固定负载
+
+## SessionDataChangedNotice
+
+### notice
+
+- header `session_id` 为目标 session
+- header `request_id = 0`
+- body 固定为空
+
+### 语义
+
+- `SessionDataChangedNotice` 只表达底层数据内容已经变化
+- 它不表示目标 session 失效
+- 它不表示 metadata 已变化
+- 它不直接等于容量变化或其他 media 事件
+- 它是单向 notice，不等待回复
+- 具体在哪条边上允许哪个方向，由各边界文档定义
 
 ## SessionCloseNotice
 

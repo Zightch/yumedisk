@@ -9,6 +9,8 @@
 - connection 复用边界
 - auth/open lane 的本地对象组织
 - `NetworkMedia` 如何绑定 metadata
+- `remote_backend_id` 如何参与本地重复拒绝
+- `SessionDataChangedNotice` 的宿主处理方式
 - session / connection 故障后的当前清理策略
 - session 关闭后何时回收 connection
 
@@ -37,7 +39,7 @@ CliHost
 - `ConnHeartbeat`
 - auth/open in-flight lane 互斥
 - connection 内 `auth_id` 与 `session_id` 生命周期追踪
-- `SessionCloseNotice` / disconnect 事件上报
+- `SessionDataChangedNotice` / `SessionCloseNotice` / disconnect 事件上报
 
 它不负责：
 
@@ -82,6 +84,7 @@ CliHost
 - `disk_size_bytes`
 - `read_only`
 - `max_io_bytes`
+- `remote_backend_id`
 
 `NetworkMedia` 不负责：
 
@@ -126,6 +129,7 @@ acquire/reuse GatewayConnection
   -> SessionOpen(auth_id)
   -> build DiskSession
   -> SessionDescribe(session_id)
+  -> duplicate check by (server_addr, remote_disk_id) and (server_addr, remote_backend_id)
   -> bind NetworkMedia(disk_id, session, metadata)
   -> create managed disk
 ```
@@ -134,7 +138,21 @@ acquire/reuse GatewayConnection
 
 - `SessionOpen` 成功后一定再做一次 `SessionDescribe`
 - rust-cli 不从 `SessionOpen` 推导 metadata
+- `remote_backend_id` 只从 `SessionDescribe` 获取
 - `NetworkMedia` 一定显式记录 `disk_id`
+
+## 唯一性口径
+
+当前 `rust-cli` 对同一 gateway 地址上的网络盘冲突收口为：
+
+- `(server_addr, remote_disk_id)` 相同则拒绝
+- `(server_addr, remote_backend_id)` 相同则拒绝
+
+直接结果：
+
+- 不允许同时添加同一 backend 的 `rw` 和 `ro`
+- 不允许同时添加同一 backend 的多个 `ro`
+- `remote_backend_id` 只参与本地重复拒绝，不参与协议建连、认证或开会话
 
 ## 并发与 lane 规则
 
@@ -167,6 +185,7 @@ acquire/reuse GatewayConnection
 - `disk_size_bytes`
 - `read_only`
 - `max_io_bytes`
+- `backend_id`
 
 大块 I/O 的当前策略为：
 
@@ -233,8 +252,15 @@ connection 清理工作当前只发生在 session 关闭路径。
 
 当前 `NetworkMountRegistry` 的事件传播固定为：
 
+- `SessionDataChangedNotice(session_id)` 只作用于匹配 `(addr, session_id)` 的挂载
+- 若目标 session 当前已挂载到本地 managed disk，则调用本地 data-changed 通知入口
+- 若目标 session 当前仅处于已打开未挂载状态，则当前最小闭环直接忽略
 - `SessionCloseNotice(session_id)` 只标记匹配 `(addr, session_id)` 的挂载
 - disconnect 只标记匹配 `addr` 的全部挂载
 - 真实卸载动作在 `reap_dead_network_disks` / remove 流程中完成
 
-这保证了网络事件只负责标记失效，真正的 backend 卸载仍走宿主自己的删除路径。
+这保证了：
+
+- `SessionDataChangedNotice` 只表达数据变化，不触发 invalidation
+- `SessionCloseNotice` / disconnect 只负责标记失效
+- 真正的 backend 卸载仍走宿主自己的删除路径
