@@ -839,7 +839,7 @@ mod tests {
             assert_eq!(close_notice.reason_code, SESSION_CLOSE_REASON_NORMAL_CLOSE);
         });
 
-        let mut runtime_store = DiskRuntimeStore::default();
+        let runtime_store = DiskRuntimeStore::default();
         let mut network_client = NetworkClientState::default();
         let existing_connection = stage_connection(TransportEndpoint::new(&server_addr), 13);
         let existing_session =

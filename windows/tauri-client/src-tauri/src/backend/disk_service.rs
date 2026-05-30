@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
@@ -195,6 +196,8 @@ pub fn create_file_disk(
         return Err(ApiError::new("invalid-file-path", "文件路径不能为空", None));
     }
 
+    ensure_unique_file_path(runtime_store, file_path)?;
+
     let local_disk_id = runtime_store.allocate_local_disk_id();
 
     let runtime = match persistence_service::probe_raw_file_media(file_path) {
@@ -243,6 +246,8 @@ pub fn create_new_file_disk(
     if file_path.is_empty() {
         return Err(ApiError::new("invalid-file-path", "文件路径不能为空", None));
     }
+
+    ensure_unique_file_path(runtime_store, file_path)?;
 
     if request.capacity_mib == 0 {
         return Err(ApiError::new(
@@ -523,8 +528,24 @@ pub fn update_disk(
 }
 
 pub fn rescan_local_runtime_disks(backend: &BackendContext, runtime_store: &mut DiskRuntimeStore) {
+    let duplicate_runtime_ids = collect_duplicate_file_runtime_ids(runtime_store);
+
     for runtime in runtime_store.runtimes_mut() {
-        if runtime.is_memory() {
+        if runtime.is_memory() || runtime.is_network() {
+            continue;
+        }
+
+        if duplicate_runtime_ids.contains(runtime.local_disk_id()) {
+            if let Some(target_id) = runtime.mounted_target_id() {
+                let mut error_text = String::new();
+                if let Some(media) =
+                    backend.remove_managed_disk_with_media(target_id, Some(&mut error_text))
+                {
+                    drop(media);
+                }
+            }
+
+            runtime.set_file_invalid(persistence_service::DUPLICATE_FILE_REASON.to_string());
             continue;
         }
 
@@ -552,6 +573,57 @@ pub fn rescan_local_runtime_disks(backend: &BackendContext, runtime_store: &mut 
             Err(_) => runtime.set_file_invalid(INVALID_FILE_REASON.to_string()),
         }
     }
+}
+
+fn ensure_unique_file_path(
+    runtime_store: &DiskRuntimeStore,
+    file_path: &str,
+) -> Result<(), ApiError> {
+    let normalized_candidate = persistence_service::normalize_full_file_path(file_path)?;
+
+    for runtime in runtime_store.runtimes() {
+        let Some(existing_file_path) = runtime.file_path() else {
+            continue;
+        };
+        let Ok(normalized_existing) =
+            persistence_service::normalize_full_file_path(existing_file_path)
+        else {
+            continue;
+        };
+
+        if normalized_existing == normalized_candidate {
+            return Err(ApiError::new(
+                "file-disk-duplicate",
+                persistence_service::DUPLICATE_FILE_REASON,
+                Some(existing_file_path.to_string()),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_duplicate_file_runtime_ids(runtime_store: &DiskRuntimeStore) -> BTreeSet<String> {
+    let mut seen_file_paths = HashMap::<String, String>::new();
+    let mut duplicate_runtime_ids = BTreeSet::new();
+
+    for runtime in runtime_store.runtimes() {
+        let Some(file_path) = runtime.file_path() else {
+            continue;
+        };
+        let Ok(normalized_path) = persistence_service::normalize_full_file_path(file_path) else {
+            continue;
+        };
+
+        if seen_file_paths.contains_key(&normalized_path) {
+            duplicate_runtime_ids.insert(runtime.local_disk_id().to_string());
+            continue;
+        }
+
+        seen_file_paths.insert(normalized_path, runtime.local_disk_id().to_string());
+    }
+
+    duplicate_runtime_ids
 }
 
 fn resolve_memory_kind(
@@ -663,8 +735,24 @@ fn build_disk_config(runtime: &DiskRuntime) -> DiskConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
+
+    use backend_rust::BackendContext;
+
+    use super::create_file_disk;
+    use super::create_new_file_disk;
+    use super::rescan_local_runtime_disks;
+    use super::CreateFileDiskRequest;
+    use super::CreateFileFormat;
+    use super::CreateNewFileDiskRequest;
     use super::update_disk;
     use super::UpdateDiskRequest;
+    use crate::backend::persistence_service;
+    use crate::state::disk_runtime::DiskRuntimeStatus;
+    use crate::state::disk_runtime::FileMediaKind;
     use crate::state::disk_runtime::DiskRuntime;
     use crate::state::disk_runtime::DiskRuntimeStore;
 
@@ -730,5 +818,145 @@ mod tests {
         assert!(runtime.auto_mount());
         assert!(!runtime.configured_read_only());
         assert!(runtime.source_read_only());
+    }
+
+    #[test]
+    fn create_file_disk_rejects_duplicate_normalized_path() {
+        let mut runtime_store = DiskRuntimeStore::default();
+        let file_path = unique_test_file_path("create_file_disk_duplicate.img");
+        fs::write(&file_path, vec![0u8; 4096]).expect("test file should be created");
+
+        create_file_disk(
+            &mut runtime_store,
+            CreateFileDiskRequest {
+                disk_name: "disk-1".to_string(),
+                file_path: file_path.display().to_string(),
+                auto_mount: false,
+                configured_read_only: false,
+            },
+        )
+        .expect("first file disk should be created");
+
+        let duplicate_path = file_path
+            .parent()
+            .expect("temp file should have parent")
+            .join(".")
+            .join(file_path.file_name().expect("temp file should have name"));
+        let error = create_file_disk(
+            &mut runtime_store,
+            CreateFileDiskRequest {
+                disk_name: "disk-2".to_string(),
+                file_path: duplicate_path.display().to_string(),
+                auto_mount: false,
+                configured_read_only: false,
+            },
+        )
+        .expect_err("duplicate file path should be rejected");
+
+        assert_eq!(error.code, "file-disk-duplicate");
+
+        let _ = fs::remove_file(file_path);
+    }
+
+    #[test]
+    fn create_new_file_disk_rejects_duplicate_runtime_path() {
+        let mut runtime_store = DiskRuntimeStore::default();
+        let duplicate_path = unique_test_file_path("create_new_file_disk_duplicate.img");
+
+        runtime_store.insert_runtime(DiskRuntime::new_file(
+            "disk-1".to_string(),
+            "existing".to_string(),
+            false,
+            false,
+            FileMediaKind::RawFile,
+            duplicate_path.display().to_string(),
+            0,
+            false,
+            DiskRuntimeStatus::Invalid {
+                reason: "placeholder".to_string(),
+            },
+            None,
+        ));
+
+        let error = create_new_file_disk(
+            &mut runtime_store,
+            CreateNewFileDiskRequest {
+                disk_name: "new".to_string(),
+                file_path: duplicate_path.display().to_string(),
+                capacity_mib: 1,
+                file_format: CreateFileFormat::Raw,
+                auto_mount: false,
+            },
+        )
+        .expect_err("duplicate runtime path should reject new file disk creation");
+
+        assert_eq!(error.code, "file-disk-duplicate");
+    }
+
+    #[test]
+    fn rescan_local_runtime_disks_keeps_duplicate_runtime_invalid() {
+        let backend = BackendContext::default();
+        let mut runtime_store = DiskRuntimeStore::default();
+        let file_path = unique_test_file_path("rescan_duplicate_file_disk.img");
+        fs::write(&file_path, vec![0u8; 4096]).expect("test file should be created");
+        let duplicate_path = file_path
+            .parent()
+            .expect("temp file should have parent")
+            .join(".")
+            .join(file_path.file_name().expect("temp file should have name"));
+
+        runtime_store.insert_runtime(DiskRuntime::new_file(
+            "disk-1".to_string(),
+            "primary".to_string(),
+            false,
+            false,
+            FileMediaKind::RawFile,
+            file_path.display().to_string(),
+            0,
+            false,
+            DiskRuntimeStatus::Invalid {
+                reason: "pending".to_string(),
+            },
+            None,
+        ));
+        runtime_store.insert_runtime(DiskRuntime::new_file(
+            "disk-2".to_string(),
+            "duplicate".to_string(),
+            false,
+            false,
+            FileMediaKind::RawFile,
+            duplicate_path.display().to_string(),
+            0,
+            false,
+            DiskRuntimeStatus::Unmounted,
+            None,
+        ));
+
+        rescan_local_runtime_disks(&backend, &mut runtime_store);
+
+        let first = runtime_store
+            .find_runtime("disk-1")
+            .expect("first runtime should exist");
+        assert_eq!(first.status(), &DiskRuntimeStatus::Unmounted);
+
+        let second = runtime_store
+            .find_runtime("disk-2")
+            .expect("second runtime should exist");
+        assert_eq!(
+            second.status(),
+            &DiskRuntimeStatus::Invalid {
+                reason: persistence_service::DUPLICATE_FILE_REASON.to_string(),
+            },
+        );
+
+        let _ = fs::remove_file(file_path);
+    }
+
+    fn unique_test_file_path(file_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be valid")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{}_{}", unique, file_name))
     }
 }

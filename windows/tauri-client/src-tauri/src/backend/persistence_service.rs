@@ -1,4 +1,6 @@
 use std::collections::BTreeSet;
+use std::path::Component;
+use std::path::Path;
 use std::path::PathBuf;
 
 use backend_rust::BackendContext;
@@ -25,6 +27,7 @@ use crate::state::disk_runtime::FileMediaKind;
 use crate::state::disk_runtime::MemoryMediaKind;
 
 const INVALID_FILE_REASON: &str = "文件路径必须指向已存在文件";
+pub(crate) const DUPLICATE_FILE_REASON: &str = "文件路径重复";
 
 pub struct RestoredClientState {
     pub session_config: SessionConfig,
@@ -67,6 +70,7 @@ fn build_restored_runtime_store(
 ) -> Result<DiskRuntimeStore, ApiError> {
     let mut runtime_store = DiskRuntimeStore::default();
     let mut local_disk_ids = BTreeSet::new();
+    let mut restored_file_paths = BTreeSet::new();
 
     for persisted_disk in persisted_config.disks {
         if !local_disk_ids.insert(persisted_disk.local_disk_id.clone()) {
@@ -77,14 +81,17 @@ fn build_restored_runtime_store(
             ));
         }
 
-        let runtime = restore_disk_runtime(persisted_disk)?;
+        let runtime = restore_disk_runtime(persisted_disk, &mut restored_file_paths)?;
         runtime_store.insert_runtime(runtime);
     }
 
     Ok(runtime_store)
 }
 
-fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRuntime, ApiError> {
+fn restore_disk_runtime(
+    persisted_disk: PersistedDiskRecord,
+    restored_file_paths: &mut BTreeSet<String>,
+) -> Result<DiskRuntime, ApiError> {
     match persisted_disk.media {
         PersistedDiskMediaConfig::Memory {
             memory_kind,
@@ -113,6 +120,42 @@ fn restore_disk_runtime(persisted_disk: PersistedDiskRecord) -> Result<DiskRunti
             let file_kind = match file_kind {
                 PersistedFileMediaKind::RawFile => FileMediaKind::RawFile,
             };
+            let normalized_file_path = match normalize_full_file_path(&file_path) {
+                Ok(value) => value,
+                Err(error) => {
+                    return Ok(DiskRuntime::new_file(
+                        persisted_disk.local_disk_id,
+                        persisted_disk.disk_name,
+                        persisted_disk.auto_mount,
+                        persisted_disk.configured_read_only,
+                        file_kind,
+                        file_path,
+                        0,
+                        false,
+                        crate::state::disk_runtime::DiskRuntimeStatus::Invalid {
+                            reason: error.message,
+                        },
+                        None,
+                    ));
+                }
+            };
+
+            if !restored_file_paths.insert(normalized_file_path) {
+                return Ok(DiskRuntime::new_file(
+                    persisted_disk.local_disk_id,
+                    persisted_disk.disk_name,
+                    persisted_disk.auto_mount,
+                    persisted_disk.configured_read_only,
+                    file_kind,
+                    file_path,
+                    0,
+                    false,
+                    crate::state::disk_runtime::DiskRuntimeStatus::Invalid {
+                        reason: DUPLICATE_FILE_REASON.to_string(),
+                    },
+                    None,
+                ));
+            }
 
             match probe_raw_file_media(&file_path) {
                 Ok(probe) => Ok(DiskRuntime::new_file(
@@ -236,6 +279,37 @@ pub struct RawFileProbe {
     pub read_only: bool,
 }
 
+pub(crate) fn normalize_full_file_path(file_path: &str) -> Result<String, ApiError> {
+    let trimmed = file_path.trim();
+    if trimmed.is_empty() {
+        return Err(ApiError::new("invalid-file-path", "文件路径不能为空", None));
+    }
+
+    let raw_path = PathBuf::from(trimmed);
+    let absolute_path = if raw_path.is_absolute() {
+        raw_path
+    } else {
+        std::env::current_dir()
+            .map_err(|io_error| {
+                ApiError::new(
+                    "invalid-file-path",
+                    "无法解析文件路径",
+                    Some(io_error.to_string()),
+                )
+            })?
+            .join(raw_path)
+    };
+
+    let normalized_path = normalize_path_components(&absolute_path);
+    let normalized_text = normalized_path.display().to_string();
+
+    if cfg!(windows) {
+        Ok(normalized_text.to_ascii_lowercase())
+    } else {
+        Ok(normalized_text)
+    }
+}
+
 pub fn probe_raw_file_media(file_path: &str) -> Result<RawFileProbe, ApiError> {
     let file_path_buf = PathBuf::from(file_path);
     if !file_path_buf.is_file() {
@@ -321,6 +395,24 @@ fn map_raw_file_media_error(error: RawFileMediaError, file_path: &str) -> ApiErr
     }
 }
 
+fn normalize_path_components(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                let _ = normalized.pop();
+            }
+            Component::Normal(segment) => normalized.push(segment),
+        }
+    }
+
+    normalized
+}
+
 fn map_client_config_error(error: ClientConfigStoreError) -> ApiError {
     match error {
         ClientConfigStoreError::HomeDirectoryNotFound => ApiError::new(
@@ -358,5 +450,111 @@ fn map_client_config_error(error: ClientConfigStoreError) -> ApiError {
             "序列化配置文件失败",
             Some(source.to_string()),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
+
+    use crate::state::client_config::PersistedAppSessionConfig;
+    use crate::state::client_config::PersistedClientConfig;
+    use crate::state::client_config::PersistedDiskMediaConfig;
+    use crate::state::client_config::PersistedDiskRecord;
+    use crate::state::client_config::PersistedFileMediaKind;
+    use crate::state::disk_runtime::DiskRuntimeStatus;
+
+    use super::build_restored_runtime_store;
+    use super::normalize_full_file_path;
+    use super::DUPLICATE_FILE_REASON;
+
+    #[test]
+    fn normalize_full_file_path_collapses_relative_segments() {
+        let current_dir = std::env::current_dir().expect("current dir should exist");
+        let expected = current_dir.join("alpha").join("beta.img");
+        let input = current_dir
+            .join("alpha")
+            .join(".")
+            .join("gamma")
+            .join("..")
+            .join("beta.img");
+
+        let normalized = normalize_full_file_path(&input.display().to_string())
+            .expect("path normalization should succeed");
+
+        assert_eq!(
+            normalized,
+            normalize_full_file_path(&expected.display().to_string())
+                .expect("expected path should normalize"),
+        );
+    }
+
+    #[test]
+    fn restore_marks_duplicate_file_path_runtime_invalid() {
+        let file_path = unique_test_file_path("restore_duplicate_file_path_runtime_invalid.img");
+        fs::write(&file_path, vec![0u8; 4096]).expect("test file should be created");
+
+        let normalized = normalize_full_file_path(&file_path.display().to_string())
+            .expect("path normalization should succeed");
+        let duplicate_path = if cfg!(windows) {
+            normalized.to_ascii_uppercase()
+        } else {
+            normalized.clone()
+        };
+        let config = PersistedClientConfig {
+            version: crate::state::client_config::CONFIG_VERSION,
+            session_config: PersistedAppSessionConfig {
+                heartbeat_interval_ms: 1000,
+                initial_event_queue_capacity: 16,
+            },
+            disks: vec![
+                PersistedDiskRecord {
+                    local_disk_id: "disk-1".to_string(),
+                    disk_name: "primary".to_string(),
+                    auto_mount: false,
+                    configured_read_only: false,
+                    media: PersistedDiskMediaConfig::File {
+                        file_kind: PersistedFileMediaKind::RawFile,
+                        file_path: file_path.display().to_string(),
+                    },
+                },
+                PersistedDiskRecord {
+                    local_disk_id: "disk-2".to_string(),
+                    disk_name: "duplicate".to_string(),
+                    auto_mount: false,
+                    configured_read_only: false,
+                    media: PersistedDiskMediaConfig::File {
+                        file_kind: PersistedFileMediaKind::RawFile,
+                        file_path: duplicate_path,
+                    },
+                },
+            ],
+        };
+
+        let runtime_store =
+            build_restored_runtime_store(config).expect("restore should succeed with invalid loser");
+        let snapshots = runtime_store.snapshots();
+
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].status, DiskRuntimeStatus::Unmounted);
+        assert_eq!(
+            snapshots[1].status,
+            DiskRuntimeStatus::Invalid {
+                reason: DUPLICATE_FILE_REASON.to_string(),
+            },
+        );
+
+        let _ = fs::remove_file(file_path);
+    }
+
+    fn unique_test_file_path(file_name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be valid")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{}_{}", unique, file_name))
     }
 }
