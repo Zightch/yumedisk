@@ -1,944 +1,339 @@
-# Unit Attention / DataChanged 重建执行清单
+# 网络 `rw -> ro` DataChanged / `remote_backend_id` 重建执行清单
 
-## 0. 当前进度（2026-05-28）
+## 0. 当前范围
 
-- 阶段 A-D：已完成
-  - `YumeDiskSCSI / YumeDiskKMDF / AppKernel / BackendRust` 的 `data_changed -> Unit Attention` 主链已接通
-  - `BackendRust` 已具备单盘 `notify_managed_disk_data_changed(...)` 下行能力
-- 阶段 E：已完成
-  - `rust-cli` 本地命令面已切到正式口径：`sm / ct size= / ct smid= / rm target= / rm smid=`
-  - 旧 `ct <disk-size-mib> ...` 与旧 `rm all` 已删除
-  - 本地共享内存已收成 `windows/rust-cli/src/cli/local/memory/`
-  - `smid` 注册表、`smid -> bound targets`、target 删除解绑、`rm smid`/`rm smid=all` 拒绝策略已落地
-  - `WriteFinalCommitted` 后的 sibling fanout 已由 `rust-cli` 负责，通过 `BackendRust` 的宿主事件轮询口触发 `notify_managed_disk_data_changed(...)`
-- 阶段 F：已完成
-  - 运行时闭环基线已按 `sm 64 -> ct smid=1 target=3 -> ct smid=1 target=4` 建立
-  - 为 Phase F 验收补了最小调试命令：`dbg-read target=<id> offset=<bytes> length=<bytes>`、`dbg-write target=<id> offset=<bytes> hex=<...>`
-  - 使用管理员 raw disk 写入对 `\\.\PhysicalDrive1` 偏移 `4096` 与 `4608` 发起 512B 真实写入；随后 `\\.\PhysicalDrive2` 原始读取可见新字节，说明 sibling 已看到同底层新内容
-  - 同次验收中，`rust-cli debug_stats events_queued` 从建盘后的 `2` 增至写入后的 `3`，对应一次额外 `WriteFinalCommitted` 宿主事件
-  - 写入前后 `PhysicalDrive1/2` 均保持 `RAW / Online / IsOffline=False`；删除 target 3 后，target 4 仍保持 `running, online=true`，且 `PhysicalDrive2` 仍可读到已写入数据
-  - 生命周期口径已实测：`rm smid=1` 在 target 仍绑定时返回 `smid-in-use`；`rm target=all` 后 `smid` 仍保留且 `bound_targets=none`；随后 `rm smid=all` 成功
-  - 本机运行时限制：即使使用管理员句柄，`IOCTL_SCSI_PASS_THROUGH_DIRECT(TEST UNIT READY)` 对 `\\.\PhysicalDrive2` 仍返回 Win32 `1306`，因此本阶段未在黑盒 runtime 中直接抓到一次 `REQUEST SENSE 28/00`；该 UA 正式语义仍由阶段 A-D 的下层测试覆盖
-- 当前验证状态：
-  - `windows/BackendRust` 的 `cargo test` 已通过（12 tests）
-  - `windows/rust-cli` 的 `cargo test` 已通过（24 tests）
-  - `2026-05-30` 已通过临时 `DbgPrint` + `R6` 重跑补齐 runtime `28/00` 证据：`YumeDiskSCSI` 已打印 `ua pending marked ...` 与 `ua returned ... sense_key=0x06 asc=0x28 ascq=0x00 ...`
-- 下一步：
-  - 进入阶段 G，收敛网络侧 `rw -> ro` 的 dedicated notice 与 client 落盘 `data_changed` 接法
+本清单只服务于网络共享盘这条主线：
 
-## 1. 目标
+- `rw` 写入 committed 后，如何把 `data changed` 从 `storer` 传到 `ro` client
+- `SessionDescribe` metadata 如何补 `remote_backend_id`
+- client 如何基于 `remote_backend_id` 拒绝同 backend 的重复盘
 
-本清单只服务于 `Unit Attention` 与“底层内容已变更”感知链路的重建。
+以下内容已经完成并已归档到 `docs/progress/`，不再继续写在当前 `todo` 中：
 
-本轮目标不是在现有“盘失效 / invalidation / 热拔”语义上继续打补丁，而是按重建口径把“盘仍然活着，但底层内容被别处写过”单独收成一条正式能力。
+- 本地 `Unit Attention / data_changed` 驱动链
+- 本地共享内存 `sm / ct smid= / rm smid=` 最小闭环
+- `28/00` runtime 验证
 
-执行顺序固定为两阶段：
+参考归档：
 
-1. 先按驱动链自底向上顺序打通本地链路：
-   - `YumeDiskSCSI`
-   - `YumeDiskKMDF`
-   - `AppKernel`
-   - `BackendRust`
-   - `rust-cli`
-2. 本地共享 `MemoryMedia` 最小闭环稳定后，再接入网络侧 `rw -> ro` 的变更传播。
+- `docs/progress/2026-05-28.md`
+- `docs/progress/2026-05-30.md`
 
-当前版本固定只做一种变化：
+## 1. 当前总目标
+
+按重建口径完成网络共享盘的最小正式闭环：
+
+1. `docs/network` 正式定义 `SessionDataChangedNotice`
+2. `docs/network` 正式定义 `SessionDescribe` metadata 增加 `backend_id`
+3. `metadata` 真源从 `gateway` 完全摘除，改为由 `storer` 直接提供
+4. `server` 补齐 `rw write committed -> ro notice fanout`
+5. `rust-cli` 补齐 `data changed` 接收与 `remote_backend_id` 冲突检查
+6. 用多机 `rust-cli` 联调验证 `rw -> ro` 变化感知
+7. 用单机 `rust-cli` 验证 `rw/ro` 与多 `ro` 冲突拒绝
+
+## 2. 固定边界
+
+### 2.1 本轮只做的事
 
 - `data_changed`
+- `remote_backend_id`
+- `SessionDescribe` metadata 真源改造
+- `rw -> ro` notice 传播
+- client 唯一性拒绝
 
-当前版本明确不做：
+### 2.2 本轮明确不做
 
 - `capacity_changed`
-- metadata changed
-- generic media change framework
-- 盘删除 / session close / connection lost 的复用表达
+- metadata changed 以外的其他 notice reason
+- 通用 media change framework
+- 用 `SessionCloseNotice` 复用 `data_changed`
+- gateway 维护 backend 分组表
+- gateway 持有 metadata snapshot
+- 按历史兼容方式保留旧 metadata 路线
 
-同时固定以下正式口径：
+### 2.3 当前正式口径
 
-- `AsyncNotificationSupported + StorPortAsyncNotificationDetected(..., RAID_ASYNC_NOTIFY_FLAG_MEDIA_STATUS)` 只做系统感知加速。
-- 正式设备语义仍然靠 `Unit Attention` 收口。
-- `Unit Attention` 表达的是“该 target 底层内容可能已变”，不是“盘失效”。
-- 本轮 `YumeDiskSCSI / YumeDiskKMDF / AppKernel` 版本口径统一升级到 `0.1.0.1`。
+- `data_changed` 不是 `SessionCloseNotice`
+- `data_changed` 不等于 session 失效
+- `data_changed` 不触发 network disk invalidation
+- `remote_backend_id` 只通过 `SessionDescribe` 暴露
+- `remote_backend_id` 不进入 `AuthStart / AuthFinish / SessionOpen`
+- `remote_backend_id` 不进入 gateway 的 route/auth/session 真状态
+- `gateway` 只做 session 映射与 notice 转发
+- `metadata` 唯一真实来源是 `storer`
 
-## 2. 适用原则
+## 3. 适用原则
 
-本清单严格按 [开发原则](../development/development-principles.md) 执行，重点适用以下条目：
+本清单严格按 [开发原则](../development/development-principles.md) 执行，重点收口如下：
 
-- 第 1 点“极简核心原则”
-  - 当前只收一条最小可验证主路径：`data_changed`
-  - 不提前做 `capacity_changed`、多 reason、多模式切换
-- 第 2 点“激进更新原则”
-  - 旧 `ct` 位置参数口径、旧 `rm all` 口径、旧“invalid 就等于一切外部变化”口径都不保留兼容桥
-- 第 3 点“单一真实来源原则”
-  - target 的 `pending Unit Attention` 只能由 `YumeDiskSCSI` 持有
-  - 共享 `MemoryMedia` 的成员关系只能由 `rust-cli` 本地共享注册表持有
-  - 某次系统写是否最终 committed，只能以 `AkEventWriteFinalCommitted` 为准
-- 第 4 点“边界闸口原则”
-  - CLI 参数互斥约束在 `rust-cli` 命令入口一次收住
-  - `NotifyDataChanged` 的 target 有效性在 `AppKernel/KMDF/SCSI` 各自唯一边界入口校验
-- 第 5 点“结构重构与层次依赖原则”
-  - 新增本地共享内存相关代码时，优先收成稳定目录组件，不继续平铺 `shared_xxx`
-  - 变更传播链必须按层次下沉，不允许把 UA 决策散落到 host、KMDF、SCSI 多处并列维护
-- 第 6 点“删除优先原则”
-  - 不保留旧 `ct <disk-size-mib> [dense|auto]`、`rm all` 的兼容命令面
-  - 不保留“用 invalidation 模拟 data_changed”的旧思路
-- 第 7 点“测试覆盖原则”
-  - 当前重建必须补覆盖：同底层多 target、单次写入后的单次 UA、重复写合并、`REQUEST SENSE`、异步通知加速、共享内存删除拒绝
-- 第 8 点“文档跟随实现原则”
-  - `todo-UA.md` 只写当前正式打算落地的链路，不记录旧草路
+- 极简核心原则
+  - 当前只收一条最小网络主线：`rw committed -> ro data_changed notice -> client notify_managed_disk_data_changed`
+- 激进更新原则
+  - 直接删除 gateway metadata snapshot 口径，不保留双轨
+- 单一真实来源原则
+  - metadata 只由 `storer` 提供
+  - `remote_backend_id` 只由 `storer` 生成并通过 `SessionDescribe` 返回
+  - `rw` 写入是否 committed 只以本地 backend 的真实提交结果为准
+- 边界闸口原则
+  - 重复盘拒绝统一收在 client 唯一入口
+  - `SessionDataChangedNotice` 的协议校验统一收在各自协议边入口
+- 结构重构与层次依赖原则
+  - `data changed` 链路必须按 `storer -> gateway -> client` 单向下沉
+  - 不允许再让 `gateway` 同时承担 metadata 真源与 data changed 决策
+- 删除优先原则
+  - 删除“gateway 保存 metadata snapshot”的旧正式口径
 
-## 3. 当前现状
+## 4. 当前现状
 
-### 3.1 rust-cli 当前只支持独占本地内存盘
+### 4.1 `docs/network` 还没有正式 `data changed` notice
 
-当前 `windows/rust-cli` 的本地盘命令面是：
+当前正式网络协议只有：
 
-- `ct <disk-size-mib> [dense|auto] [true|false] [target]`
-- `rm <target>`
-- `rm all`
-
-当前问题：
-
-- `ct` 只会创建当前盘独占的 `DenseMem`
-- 没有 `sm` 命令
-- 没有 `smid`
-- 没有“多个 target 绑定同一底层内存区”的正式模型
-- `rm` 只能按 target 或 `all` 处理，不能按共享内存区处理
-
-相关现状文件：
-
-- `windows/rust-cli/src/cli/shell.rs`
-- `windows/rust-cli/src/cli/host.rs`
-- `windows/rust-cli/src/cli/local/dense_mem.rs`
-
-### 3.2 本地内存介质本身已具备共享基础，但没有注册表和成员关系
-
-当前 `DenseMem` 本质上已经是：
-
-- `Arc<RwLock<Vec<u8>>>`
-
-这意味着：
-
-- 底层字节区天然可以被多个对象共享
-
-但当前缺失：
-
-- 共享内存区 ID 分配
-- `smid -> media` 注册表
-- `smid -> bound targets` 成员表
-- target 删除后的解绑收口
-- 共享内存区删除规则
-
-也就是说：
-
-- 目前“能共享底层字节”
-- 但“不能以正式产品语义管理共享介质”
-
-### 3.3 BackendRust 当前没有“外部内容已变”下行 API
-
-当前 `windows/BackendRust` 的事件线程只处理：
-
-- `AkEventDiskOnline`
-- `AkEventDiskRemoved`
-- `AkEventWriteFinalCommitted`
-- `AkEventWriteFinalRejected`
-- `AkEventSessionBroken`
-
-当前问题：
-
-- 没有 `notify_disk_data_changed(target)` 这类对下 API
-- `DiskRuntime` 不携带本地共享内存组信息
-- `WriteFinalCommitted` 后只能做当前盘的 staged write commit
-- 不能在 commit 后继续 fanout 到 sibling target
-
-相关现状文件：
-
-- `windows/BackendRust/src/runtime.rs`
-- `windows/BackendRust/src/media.rs`
-- `windows/BackendRust/src/types.rs`
-
-### 3.4 AppKernel 当前没有“通知某盘内容已变”的公开接口
-
-当前 `windows/AppKernel/include/appkernel.h` 公开 API 只有：
-
-- `AkOpen / AkClose`
-- `AkCreateDisk / AkRemoveDisk / AkRemoveAllDisks`
-- `AkWaitEvent / AkPollEvent`
-- query state / stats
-
-当前问题：
-
-- 没有 `AkNotifyDiskDataChanged(AK_DISK*)`
-- 事件队列里也没有“内容已变”相关 event
-- `AK_EVENT_TYPE` 当前只承载 lifecycle 和 write final
-
-当前结论：
-
-- 本轮不需要新增上行 event
-- 只需要补一条从 host 下行到驱动的显式 API
-
-相关现状文件：
-
-- `windows/AppKernel/include/appkernel.h`
-- `windows/AppKernel/src/appkernel.c`
-- `windows/AppKernel/src/disk/ak_disk.c`
-- `windows/AppKernel/src/protocol/ak_protocol.c`
-
-### 3.5 KMDF 当前命令白名单里没有 NotifyDataChanged
-
-当前 `YumeDiskKMDF` 的 `ControlEvtIoDeviceControl` 已正式支持：
-
-- `QueryKmdfInfo`
-- `QueryScsiInfo`
-- `CreateDisk`
-- `RemoveDisk`
-- `RemoveAllDisks`
-- `Heartbeat`
-- `PostReadSlot`
-- `PostWriteSlot`
-- `ReadAck`
-- `WriteAckBatch`
-- `CancelSlot`
-- `QueryDebugState`
-
-当前问题：
-
-- 没有 `YumeDiskCommandNotifyDataChanged`
-- 没有对应 payload 校验与代理路径
-
-但当前有利点：
-
-- `QueryScsiInfo / CreateDisk / RemoveDisk / RemoveAllDisks / QueryDebugState` 已经走稳定同步代理路径
-- `NotifyDataChanged` 可以复用这条同步控制面
-- 不需要介入 slot transport runtime
-
-相关现状文件：
-
-- `windows/YumeDiskKMDF/YumeDiskKMDF/control/ioctl.c`
-- `windows/YumeDiskKMDF/YumeDiskKMDF/session/session.c`
-- `windows/YumeDiskKMDF/YumeDiskKMDF/transport/transport.c`
-
-### 3.6 SCSI 当前没有 per-target Unit Attention 状态
-
-当前 `YumeDiskSCSI` 已经具备：
-
-- per-target queue
-- 标准 `READ/WRITE` 数据面
-- `ReadOnly` 写保护 sense
-- `BusChangeDetected` 建盘删盘通知
-- `AutoRequestSense = TRUE`
+- `SessionCloseNotice`
+- `SessionDescribe`
+- `ReadAt / WriteAt`
+- `ConnHeartbeat`
 
 当前缺失：
 
-- per-target `pending_data_changed` 状态
-- `TEST UNIT READY` 对外部内容变化的提前失败能力
-- `REQUEST SENSE` 对 pending UA 的正式返回
-- `READ/READ CAPACITY/MODE SENSE/VERIFY` 前置 UA
-- `StorPortSetUnitAttributes`
-- `StorPortAsyncNotificationDetected`
+- dedicated `SessionDataChangedNotice`
+- `data_changed` 的正式边界、方向、非目标和宿主责任
 
-当前实际行为：
+### 4.2 `SessionDescribe` 当前仍写成 gateway 本地回答
 
-- `TEST UNIT READY` 直接成功
-- `REQUEST SENSE` 只回零填充 sense header
-- `INQUIRY / REPORT LUNS / READ CAPACITY / MODE SENSE` 都不考虑外部内容变化状态
+当前 server 文档口径仍是：
 
-相关现状文件：
+- storer 注册 metadata
+- gateway 存 route metadata
+- `SessionOpen` 时复制到 session snapshot
+- `SessionDescribe` 由 gateway 本地回答
 
-- `windows/YumeDiskSCSI/YumeDiskSCSI/scsi/scsi.c`
-- `windows/YumeDiskSCSI/YumeDiskSCSI/control/control.c`
-- `windows/YumeDiskSCSI/YumeDiskSCSI/core/defs.h`
-- `windows/YumeDiskSCSI/YumeDiskSCSI/adapter/adapter.c`
+这条口径需要删除，因为它与本轮目标冲突：
 
-### 3.7 当前没有正式“内容已变但盘仍有效”的系统模型
+- `backend_id` 不应进入 gateway 真状态
+- metadata 不应在 gateway 与 storer 双份维护
 
-当前本地与网络两侧已有的失效表达更偏向：
+### 4.3 server 当前没有网络共享盘 `data changed` 通知链
 
-- session close
-- connection lost
-- media invalidation -> runtime invalid
+当前 server 侧已有：
 
-这些都不适合当前目标。
+- `rw` / `ro` 双导出
+- route 独立 session 生命周期
+- `SessionCloseNotice` 故障链
 
-当前要补的是一条新语义：
+当前缺失：
 
-- target 仍然存在
-- session 仍然存在
-- 盘不 invalid
-- 只是底层内容已经被别处写过
+- `rw` 写 committed 后，找到同 backend 下受影响 `ro session`
+- `storer -> gateway` 的 `SessionDataChangedNotice`
+- `gateway -> client` 的 `SessionDataChangedNotice`
 
-## 4. 重建边界
+### 4.4 client 当前没有 `remote_backend_id` 唯一性收口
 
-### 4.1 先本地，后网络，且本地固定自底向上
+当前 client 正式口径仍是：
 
-顺序固定为：
+- 唯一键：`(server_addr, remote_disk_id)`
 
-1. 本地 `Unit Attention / data_changed` 驱动链
-   - `YumeDiskSCSI`
-   - `YumeDiskKMDF`
-   - `AppKernel`
-   - `BackendRust`
-   - `rust-cli`
-2. 再把同一条 `data_changed` 语义接到网络链路
+当前缺失：
 
-本清单中的阶段 A-F 属于第一步。
+- `SessionDescribe` metadata 里的 `remote_backend_id`
+- `(server_addr, remote_backend_id)` 冲突检查
 
-网络接入只列准备项，不在本轮先做。
+## 5. 目标结构
 
-### 4.2 当前只收 data_changed
+### 5.1 metadata 路线
 
-当前版本固定为：
-
-- dedicated command
-- dedicated host API
-- dedicated SCSI pending bit
-
-当前不做：
-
-- `enum change_kind` 下挂多种未来 reason
-- 通用 media change router
-- capability switch
-- 配置开关
-
-也就是说：
-
-- 对外公开面直接叫 `NotifyDataChanged`
-- 不先造一套“未来也许能扩展”的大抽象
-
-### 4.2.1 当前版本升级口径
-
-由于本轮会同时改动：
-
-- `YumeDiskSCSI` 对系统暴露的正式设备语义
-- `YumeDiskKMDF <-> YumeDiskSCSI` 私有控制命令集合
-- `AppKernel` 对宿主暴露的正式公开 API
-
-因此这一版版本号不再停留在 `0.1.0.0`，而是统一升级到：
-
-- `0.1.0.1`
-
-当前口径固定为：
-
-- 版本升级动作只在真正开始实现本轮 UA / data_changed 主线时执行
-- 不做“先改行为、后补版本”的滞后做法
-- 不保留旧版本并存兼容桥
-- `YumeDiskSCSI / YumeDiskKMDF / AppKernel` 三者必须保持同一 `VersionBe`
-
-### 4.3 Async Notification 只是加速层
-
-当前正式顺序固定为：
-
-1. 先把 target 标成 `pending UA`
-2. 再 best-effort 发异步通知加速系统感知
-
-约束：
-
-- 即使异步通知失败，也不能影响 pending UA 正式语义
-- 即使系统没立刻来探测命令，pending UA 也必须继续保留
-
-### 4.4 当前不承诺文件系统级实时一致
-
-当前能力只到块设备层：
-
-- 目标是让 Windows storage stack 感知“设备内容可能已变”
-
-当前不承诺：
-
-- 已挂载文件系统像集群文件系统一样强一致
-- 任意用户态缓存、卷缓存、文件系统缓存的业务级同步
-
-### 4.5 当前不在本地共享内存阶段引入单 writer 约束
-
-本地共享 `MemoryMedia` 阶段只是驱动链验证 harness。
-
-因此：
-
-- 允许多个 target 绑定同一 `smid`
-- 允许多个 target 都是可写
-
-当前明确不做：
-
-- 本地 `smid` 的单 writer 独占策略
-- 本地 claim code / auth / ro-rw 导出模型
-
-这些属于后续网络共享盘语义，不在本地 UA harness 中提前展开。
-
-## 5. 目标链路
-
-第一阶段的目标链路固定如下：
+正式结构改为：
 
 ```text
-Windows WRITE(target=A)
-  -> YumeDiskSCSI queue
-  -> AppKernel staged write
-  -> WRITE_ACK_BATCH complete
-  -> AkEventWriteFinalCommitted(target=A, event_id)
-  -> BackendRust commit current disk staged write
-  -> rust-cli finds sibling targets bound to smid=X
-  -> rust-cli calls BackendRust notify_data_changed(disk=B)
-  -> AppKernel NotifyDataChanged(target=B)
-  -> YumeDiskKMDF proxy command
-  -> YumeDiskSCSI mark target B pending_data_changed
-  -> YumeDiskSCSI best-effort StorPortAsyncNotificationDetected(...MEDIA_STATUS)
-  -> Windows later probes/reads target=B
-  -> YumeDiskSCSI returns CHECK CONDITION + UNIT ATTENTION + ASC/ASCQ 28/00 once
-  -> pending_data_changed cleared
-  -> subsequent READ reads new bytes from shared MemoryMedia
+client SessionDescribe(gateway_session_id)
+  -> gateway 查 session 映射
+  -> gateway 转发 SessionDescribe(storer_session_id)
+  -> storer 直接返回 metadata
+  -> gateway 原样回给 client
 ```
 
-这个链路里各层职责固定为：
-
-- `rust-cli`
-  - 管共享内存区注册表、CLI 命令面、target 绑定、sibling 查找与 fanout 策略
-- `BackendRust`
-  - 负责当前盘 staged write commit
-  - 对上层暴露 per-disk `notify_data_changed` 下行接口
-- `AppKernel`
-  - 对 host 暴露单盘 `NotifyDataChanged` API
-- `KMDF`
-  - 只做同步控制面代理
-- `SCSI`
-  - 真正持有 `pending UA` 状态并对系统命令表达标准设备语义
-
-## 6. 公开接口与协议收口
-
-### 6.1 rust-cli 命令面
-
-新命令面固定为：
-
-- `sm <size-mib>`
-- `ct size=<mib> [ro=<true|false>] [target=<id>]`
-- `ct smid=<id> [ro=<true|false>] [target=<id>]`
-- `rm target=<id>`
-- `rm target=all`
-- `rm smid=<id>`
-- `rm smid=all`
-
-固定约束：
-
-- `ct`：
-  - `size` 和 `smid` 互斥
-  - 必须二选一
-- `rm`：
-  - `target` 和 `smid` 互斥
-  - 必须二选一
-- 不再保留：
-  - `ct <disk-size-mib> ...`
-  - `rm all`
-
-`rm target=all` 当前固定策略：
-
-- 删除当前 `rust-cli` 管理下的全部 target
-- target 若绑定某个 `smid`
-  - 只做解绑
-  - 不顺手删除对应 `smid`
-- 这是显式批量 target 删除，不恢复旧 `rm all` 的模糊口径
-
-`rm smid=<id>` 当前固定策略：
-
-- 如果该 `smid` 仍绑定任何 target
-  - 直接拒绝
-  - 返回 `smid-in-use`
-- 不做“顺手删所有 target”的副作用
-
-`rm smid=all` 当前固定策略：
-
-- 如果任意 `smid` 仍绑定任何 target
-  - 整条命令直接拒绝
-  - 不做部分成功
-- 只有在全部 `smid` 都已无绑定 target 时，才批量删除全部共享内存区
-- 这是显式批量 `smid` 删除，不承担 target 删除职责
-
-### 6.2 BackendRust 对 host 的新 API
-
-当前建议补一条极窄公开 API：
-
-- `notify_disk_data_changed(managed_disk)`
-
-建议对外形式：
-
-- `pub fn notify_disk_data_changed(&self, disk: ..., out_error_text: Option<&mut String>) -> bool`
-
-要求：
-
-- 这条 API 只负责把某块已存在盘的“内容已变”下发到 `AppKernel`
-- 不负责 sibling 查找
-- 不负责共享内存注册表
-- 目标盘如何在 `BackendRust` 内部解析到 `AppKernel` 句柄，由它自己的盘管理模型负责
-
-进一步收口：
-
-- API 的入参必须是 `BackendRust` 现有盘管理模型里天然已经存在的 per-disk 对象或等价标识
-- 不为了这条 API 反向引入新的“共享盘专用盘句柄”或 group handle
-- 如果当前实现天然更适合用 `target_id` 查盘，也只允许把它作为内部查找细节，不把“共享组定位”混进公开面
-
-成功与失败语义：
-
-- 成功：只表示当前目标盘的 `NotifyDataChanged` 已同步下发到 `AppKernel`
-- 失败：只表示这次单盘通知失败
-- 无论成功失败：
-  - 都不改当前盘 staged write 内容
-  - 都不改 sibling 关系
-  - 都不隐含任何批量策略
-
-### 6.3 BackendRust 的 `data_changed` 下行接口
-
-`BackendRust` 当前只需要补一条很窄的 per-disk 能力：
-
-- 在现有盘管理模型上，对上层暴露 `notify_data_changed(...)` 或等价接口
-
-固定边界：
-
-- `BackendRust` 不负责 `smid` 注册表
-- `BackendRust` 不负责 sibling 查找
-- `BackendRust` 不保存 `local_shared_media_id`
-- `BackendRust` 不把共享组概念写进 runtime 真状态
-- `BackendRust` 继续只按“某一块盘”的粒度管理 `AppKernel` 句柄和 staged write
-- `BackendRust` 不新增 data-changed 专用后台线程
-- `BackendRust` 不新增 data-changed 专用队列 / outbox / retry 状态机
-- `BackendRust` 不缓存“某盘已有 pending UA 未消费”这类事实
-- `BackendRust` 不把 `NotifyDataChanged` 做成事件队列回灌
-
-也就是说：
-
-- `WriteFinalCommitted(target=A)` 仍然只是当前盘事件
-- 是否需要通知其他盘，由上层宿主自己决定
-- 一旦上层决定通知目标盘 `B`，再调用 `BackendRust -> AppKernel -> KMDF -> SCSI` 这条 dedicated 下行路径
-
-Phase D 允许的唯一实现形态：
-
-1. 上层给出某块已存在盘
-2. `BackendRust` 用现有盘管理模型解析到对应 runtime / `AK_DISK*`
-3. 做单盘生命周期与句柄可用性校验
-4. 直接同步调用 `AkNotifyDiskDataChanged`
-5. 把结果返回给上层
-
-除这条同步链外，不再并行增加第二套通知推进机制
-
-### 6.4 AppKernel 公开 API
-
-当前建议补一条 dedicated API：
-
-- `AK_STATUS AkNotifyDiskDataChanged(AK_DISK* disk);`
-
-固定边界：
-
-- 不新增上行 event type
-- 不新增 generic change kind 参数
-- 一条 dedicated API 直接对应当前唯一能力
-
-### 6.5 AppKernel <-> KMDF 私有协议
-
-当前建议在 `windows/shared/yumedisk_proto.h` 中新增：
-
-- `YumeDiskCommandNotifyDataChanged`
-
-当前建议固定为：
-
-- 零 payload
-- 使用 `Header.TargetId` 指定目标盘
-
-这样做的原因：
-
-- 当前只支持 `data_changed`
-- target already exists in header
-- 不需要额外 body 和 future-proof 包袱
-
-### 6.6 KMDF 行为
-
-`YumeDiskKMDF` 对 `NotifyDataChanged` 固定行为为：
-
-- 验证 session 有效
-- 验证 `Header.TargetId`
-- 走现有同步控制代理路径下发给 miniport
-- 返回同步成功或失败
-
-明确不做：
-
-- slot runtime
-- async completion
-- 状态缓存
-- 本地 pending UA 镜像
-
-### 6.7 SCSI 内部状态
-
-当前建议给每个 `YUME_DISK` 增加：
-
-- `BOOLEAN PendingDataChangedUa;`
-
-如果实现 `StorPortSetUnitAttributes` 需要本地注册状态，也可再补：
-
-- `BOOLEAN AsyncNotificationRegistered;`
-
-但必须注意：
-
-- 设备级“是否已设置单位属性”如果能在一次性初始化点固定完成，就不要再并行缓存到多处
-
-### 6.8 SCSI 对系统命令的正式语义
-
-当前目标固定为：
-
-- `INQUIRY`
-  - 不消费 pending UA
-- `REPORT LUNS`
-  - 不消费 pending UA
-- `REQUEST SENSE`
-  - 若 target 有 pending UA，则返回 `UNIT ATTENTION / 28 00`
-  - 返回后清除 pending
-- `TEST UNIT READY`
-  - 若 target 有 pending UA，则先返回 `CHECK CONDITION + UNIT ATTENTION`
-  - 返回后清除 pending
-- `READ / WRITE / READ CAPACITY / MODE SENSE / VERIFY`
-  - 若 target 有 pending UA，则先返回 `CHECK CONDITION + UNIT ATTENTION`
-  - 返回后清除 pending
-
-当前 `ASC/ASCQ` 固定为：
-
-- `28h/00h`
-
-## 7. 结构与模块收口
-
-### 7.1 rust-cli 本地共享内存组件
-
-按开发原则第 5 点，当前不应继续平铺：
-
-- `shared_mem_xxx`
-- `memory_xxx`
-
-建议直接收为：
-
-- `windows/rust-cli/src/cli/local/memory/`
-  - `media.rs`
-  - `registry.rs`
-  - `binding.rs`
-  - `mod.rs`
+当前最小 metadata 集改为：
+
+- `disk_size_bytes`
+- `max_io_bytes`
+- `read_only`
+- `backend_id`
 
 其中：
 
-- `media.rs`
-  - 唯一正式本地内存介质实现
-- `registry.rs`
-  - `smid` 分配、查询、删除、成员关系
-- `binding.rs`
-  - `target <-> smid` 或 host-side create binding 组织
+- `disk_size_bytes / max_io_bytes / read_only` 也不再由 gateway snapshot 持有
+- `backend_id` 由 storer 在程序启动时为本地 backend 临时生成
+- 同一个本地 backend 下的 `rw` 和 `ro` 导出必须共用同一个 `backend_id`
+- `backend_id` 不要求跨重启稳定
 
-当前 `dense_mem.rs` 建议直接删除或重命名并并入该目录，不保留双轨。
+### 5.2 `data changed` 路线
 
-### 7.2 BackendRust 结构
+正式结构改为：
 
-当前如果只是补极少量代码，可先收在现有文件中：
-
-- `src/runtime.rs`
-- `src/types.rs`
-
-但如果新增“per-disk notify downward”逻辑明显扩张，则应继续按稳定前缀收目录，而不是把 `runtime.rs` 继续平铺拉长。
-
-建议候选目录：
-
-- `windows/BackendRust/src/runtime/`
-  - `context.rs`
-  - `events.rs`
-  - `data_changed.rs`
-  - `mod.rs`
-
-是否执行这一步，取决于本轮改动后 `runtime.rs` 是否已明显失控。
-
-进一步约束：
-
-- 若拆 `runtime/data_changed.rs`
-  - 只承载单盘 `NotifyDataChanged` 下行调用
-  - 不承载 `smid`、共享组、fanout
-- `events.rs`
-  - 只承载 `AkPollEvent` 消费与当前盘 committed/rejected 处理
-  - 不在这里直接写共享组策略
-
-### 7.3 AppKernel / KMDF / SCSI
-
-这三层本轮新增能力都很窄，当前建议：
-
-- 优先接入现有组件，不额外新造一层 generic `media_change service`
-- 若某层出现稳定前缀集合，再按目录原则继续拆
-
-也就是说：
-
-- `AppKernel`
-  - 直接在现有 `disk/`、`protocol/` 中补 dedicated path
-- `KMDF`
-  - 直接在 `control/ioctl.c` + proxy path 补 dedicated command
-- `SCSI`
-  - 直接在 `scsi/`、`control/`、`adapter/` 补 dedicated path
-
-## 8. 分阶段工作
-
-### 阶段 A：先重建 SCSI 的 Unit Attention 正式语义
-
-目标：
-
-- 先让最底层设备模型具备正式 `pending data_changed -> Unit Attention` 语义
-
-任务：
-
-- 将 `YumeDiskSCSI / YumeDiskKMDF / AppKernel` 共享版本口径从 `0.1.0.0` 升级到 `0.1.0.1`
-- `YUME_DISK` 增加 `PendingDataChangedUa`
-- `control/control.c` 处理 `YumeDiskCommandNotifyDataChanged`
-- target 首次从 `false -> true` 时：
-  - 置 pending
-  - best-effort 调 `StorPortAsyncNotificationDetected(...MEDIA_STATUS)`
-- 在 `scsi/scsi.c` 增加：
-  - `FillUnitAttentionSenseDataChanged`
-  - `TryConsumePendingDataChangedUa`
-  - `REQUEST SENSE` 专门处理
-  - `TEST UNIT READY` / `READ` / `WRITE` / `READ CAPACITY` / `MODE SENSE` / `VERIFY` 前置 UA
-- `adapter/adapter.c` 或合适初始化点接入 `StorPortSetUnitAttributes`
+```text
+rw client WriteAt
+  -> gateway
+  -> rw storer session
+  -> backend committed
+  -> storer 找到受影响 ro session
+  -> storer 向 gateway 逐个发送 SessionDataChangedNotice
+  -> gateway 按 session 映射转发给目标 client
+  -> client 若该 session 已挂载，则 notify_managed_disk_data_changed(...)
+```
 
 固定约束：
 
-- 同一 target 连续多次外部写入，在 pending 尚未消费时只保留一个 pending 位
-- 不把内容变化扩大成 `BusChangeDetected`
-- 不删盘
-- 不 complete pending read/write 失败
+- notice 单向发送，不等回复
+- `gateway` 不按 backend 做 fanout 决策
+- `gateway` 只做 `(route_connection_id, storer_session_id) -> gateway_session_id` 映射转发
+- `storer` 自己负责决定哪些 `ro session` 受影响
+- 当前只对 live `ro session` 发 notice
 
-### 阶段 B：重建 KMDF 的同步代理命令
+### 5.3 client 唯一性路线
+
+冲突拒绝正式收口为：
+
+- 冲突条件一：`(server_addr, remote_disk_id)` 相同
+- 冲突条件二：`(server_addr, remote_backend_id)` 相同
+
+直接结果：
+
+- 同一 client 不允许同时添加同一 backend 的 `rw` 和 `ro`
+- 同一 client 不允许同时添加同一 backend 的多个 `ro`
+- `remote_backend_id` 只在拿到 `SessionDescribe` 后才能参与判断
+
+## 6. 四阶段执行方案
+
+### 第一阶段：先同步 `docs/network`
 
 目标：
 
-- 在 miniport 语义就位后，把 host 的 `NotifyDataChanged` 正式代理到 miniport
+- 明确 `SessionDataChangedNotice`
+- 明确 metadata 真源从 gateway 摘除
+- 明确 `SessionDescribe` 增加 `backend_id`
 
-任务：
+需要修改：
 
-- `yumedisk_proto.h` 增加 `YumeDiskCommandNotifyDataChanged`
-- `control/ioctl.c` 接入 command 白名单
-- 走现有 `ControlProxyMessage` 同步代理路径
-- 在唯一入口校验：
-  - payload length must be zero
-  - `Header.TargetId` 合法
+- `docs/network/define/README.md`
+- `docs/network/define/client-gateway.md`
+- `docs/network/define/gateway-storer.md`
+- `docs/network/define/data-plane.md`
+- `docs/network/client/*.md`
+- `docs/network/server/*.md`
+
+需要收住的点：
+
+- `SessionDataChangedNotice` 是 dedicated notice，不复用 close
+- 当前方向只定义：
+  - `storer -> gateway`
+  - `gateway -> client`
+- body 当前固定为空
+- 目标 session 由 notice header `session_id` 指向
+- `SessionDescribe` metadata 真源明确为 `storer`
+- 删除所有“gateway session snapshot metadata”的正式口径
+
+验收：
+
+- `docs/network` 内不再出现 gateway metadata snapshot 正式描述
+- `data changed` 与 `SessionCloseNotice` 边界清晰分离
+
+### 第二阶段：补 server 的 `backend_id` 面
+
+目标：
+
+- `storer` 为本地 backend 临时生成 `backend_id`
+- `SessionDescribe` 改为真正由 storer 提供
+
+server 需要完成：
+
+- `role=storer`
+  - 启动时为本地 backend 生成一个临时 `backend_id`
+  - `rw` / `ro` 导出共用该 `backend_id`
+- `role=whole`
+  - 内嵌双导出同样共用一个 `backend_id`
+- gateway
+  - 删除 metadata snapshot 依赖
+  - `SessionDescribe` 改为转发式实现
 
 固定约束：
 
-- 不引入异步 slot transport
-- 不在 KMDF 镜像维护 target pending UA
-- 不新增 generic “device event” 总线
-- 继续沿用“兼容性只看版本相等”的当前正式口径；既然命令集合已变化，本轮版本必须已经提升到 `0.1.0.1`
+- `backend_id` 不进入 route registry
+- `backend_id` 不进入 auth grant
+- `backend_id` 不进入 gateway session registry
+- metadata 不在 gateway 再存一份
 
-### 阶段 C：重建 AppKernel 的 NotifyDataChanged API
+验收：
 
-目标：
+- `SessionDescribe` 返回中包含 `backend_id`
+- gateway 侧不再保存 metadata snapshot
 
-- 给 host 一个正式下行入口
-
-任务：
-
-- 在 `appkernel.h` 补 `AkNotifyDiskDataChanged`
-- 在 `src/appkernel.c` 暴露实现
-- 在 `src/disk/ak_disk.c` 为单盘做入口校验：
-  - disk handle 有效
-  - 生命周期允许
-  - target 已存在
-- 在 `src/protocol/ak_protocol.c` 新增 dedicated protocol sender
-
-固定约束：
-
-- 不新增 event queue 上行事件
-- 不新增 generic change kind
-- 不把“数据已变”伪装成 remove/recreate
-- `AK_VERSION_BE` 必须随本轮同步提升到 `0.1.0.1`
-
-### 阶段 D：重建 BackendRust 的 per-disk NotifyDataChanged 下行接口
+### 第三阶段：补网络 `data changed` 消息链
 
 目标：
 
-- 给上层宿主补一条 per-disk `NotifyDataChanged` 下行接口，同时保持 `WriteFinalCommitted` 仍是纯 per-disk 事件
+- 打通 `rw committed -> ro client notify_managed_disk_data_changed(...)`
 
-任务：
+server 需要完成：
 
-- 补 `notify_disk_data_changed(...)` 或等价 host API
-- 复用现有盘 runtime / 句柄管理路径，把单盘 `NotifyDataChanged` 下发到 `AppKernel`
-- 目标盘如何从上层入参落到 `AppKernel` 句柄，继续由 `BackendRust` 自己的盘管理模型负责
-- 入口固定校验：
-  - 目标盘 runtime 存在
-  - 目标盘未进入 removing / closed / broken 等不可用生命周期
-  - 当前 `AK_DISK*` 句柄仍有效
-- 失败时：
-  - 返回单盘失败
-  - 允许记日志
-  - 不修改当前盘 staged write
-  - 不修改任何共享组信息
-- event thread 处理 `AkEventWriteFinalCommitted` 时：
-  - 先 commit 当前盘 staged write
-  - 保持当前 per-disk committed 事件语义
-  - 不查找 sibling
-  - 不直接触发其他盘的 `NotifyDataChanged`
+- 协议与编解码新增 `SessionDataChangedNotice`
+- `storer`
+  - `rw` 会话写入真正 committed 后
+  - 找到同 backend 下所有 live `ro session`
+  - 对每个目标 `ro session` 向 gateway 发 notice
+- `gateway`
+  - 收到 `storer_session_id` notice 后
+  - 查到对应 `gateway_session_id`
+  - 若目标 client 仍在线，则转发给 client
+  - 若目标 session 已失效，则幂等忽略
 
-固定约束：
+client 需要完成：
 
-- 不引入 `smid` 注册表
-- 不把 `local_shared_media_id` 写进 `BackendRust` runtime 真状态
-- 不在 `BackendRust` 实现 sibling fanout
-- 不能回滚已 committed 的写
-- `NotifyDataChanged` 成功或失败，只对调用它的上层返回结果，不隐含额外组策略
-- 不把公开 API 反向设计成承载 `smid` 或共享组概念
-- 不为 `NotifyDataChanged` 单独引入新的 host event type
-- 不把 `WriteFinalCommitted` 改造成“顺手触发通知”的复合事件
-- 不在 `BackendRust` 维护“待通知 sibling 列表”
+- `network-core`
+  - 支持新的 notice 编解码与回调
+- `rust-cli`
+  - 收到 notice 时
+  - 若该 session 当前已挂载到本地目标盘，则调用 `notify_managed_disk_data_changed(...)`
+  - 若 session 仅打开但未挂载，当前最小闭环先忽略
 
-### 阶段 E：最后重建 rust-cli 本地共享内存命令面
+联调验证环境：
 
-目标：
+- 本机启动 server
+- `vm_win10` 跑一套 `rust-cli`
+- `vm_win11` 跑一套 `rust-cli`
 
-- 在下层链路全部稳定后，由 `rust-cli` 自己建立正式共享内存区模型、sibling fanout 策略与验收入口
+联调验收：
 
-任务：
+1. Win10 侧打开 `rw` 盘并写入
+2. Win11 侧打开同 backend 的 `ro` 盘
+3. 写入 committed 后，Win11 收到 `SessionDataChangedNotice`
+4. Win11 本地调用 `notify_managed_disk_data_changed(...)`
+5. `ro` 盘保持在线，不进入 invalid
 
-- 删除旧 `ct <disk-size-mib> ...` 解析口径
-- 删除旧 `rm all` 口径
-- 新增 `sm <size-mib>`
-- 新增 `ct size=...`
-- 新增 `ct smid=...`
-- 新增 `rm target=...`
-- 新增 `rm target=all`
-- 新增 `rm smid=...`
-- 新增 `rm smid=all`
-- 建立 `smid` 注册表
-- 建立 `smid -> bound targets` 成员关系
-- 在收到 `WriteFinalCommitted` 后：
-  - 判断源 target 是否属于某个 `smid`
-  - 找出 sibling targets
-  - 对除自己外的 sibling target 调 `BackendRust notify_data_changed(...)`
-
-边界：
-
-- `sm` 只创建共享内存区，不自动建盘
-- `ct size=...` 不进入共享注册表
-- `ct smid=...` 必须复用已存在共享内存区
-- `smid` 只属于 `rust-cli`，不下推到 `BackendRust / AppKernel / driver`
-- `rm target=all` 只做 target 批量删除，不顺手删 `smid`
-- `rm smid=all` 只做共享内存区批量删除；若仍有 bound targets，则整条拒绝
-
-### 阶段 F：重建本地最小闭环验收
+### 第四阶段：补 `remote_backend_id` 到 client 与冲突检查
 
 目标：
 
-- 用共享 `MemoryMedia` 验证整条驱动链
+- client 正式基于 `(server_addr, remote_backend_id)` 拒绝重复盘
 
-最小验收步骤固定为：
+client 需要完成：
 
-1. `sm 64`
-2. `ct smid=1 target=3 ro=false`
-3. `ct smid=1 target=4 ro=false`
-4. 通过系统对 target 3 发起真实写入
-5. 观察 target 4：
-   - 不被删除
-   - 不 invalid
-   - 下一次系统探测或读命令先收到一次 `Unit Attention`
-   - 后续正常读能读到新内容
+- `network-core`
+  - `SessionDescribeResponse / SessionMetadata` 增加 `backend_id`
+- `rust-cli`
+  - mount/open 结果保存 `remote_backend_id`
+  - 唯一性检查扩为双条件
 
-若系统黑盒路径不足以稳定判断，可补极小调试命令面，但范围必须严格收窄：
+正式冲突规则：
 
-- 只允许补帮助本轮验证的最小命令
-- 不顺手扩成完整块设备测试 shell
+- `(server_addr, remote_disk_id)` 相同拒绝
+- `(server_addr, remote_backend_id)` 相同拒绝
 
-当前已落地的最小调试命令：
+验证只做 `rust-cli`：
 
-- `dbg-read target=<id> offset=<bytes> length=<bytes>`
-- `dbg-write target=<id> offset=<bytes> hex=<...>`
+- 单机 `rw + ro` 冲突测试
+- 单机 `ro + ro` 冲突测试
+- 确认被拒绝的是“同 backend 重复盘”，不是 session 本身异常
 
-当前这层只用于本地共享 `MemoryMedia` 的验收辅助，不扩成通用块设备测试 shell。
+## 7. 当前唯一下一步
 
-### 阶段 G：网络接入准备项
-
-这一阶段不立即实施，但本轮 todo 先明确后续接法：
-
-- server `rw` 写 committed 后，对同 backend 的其他活跃 `ro session` 发 dedicated notice
-- gateway 只透传
-- client 收到后只对对应本地盘调用 `notify_disk_data_changed(...)`
-- 不 invalid
-- 不 close session
-
-当前 dedicated notice 名称与协议细节，等第一阶段稳定后再单独收文档和代码。
-
-## 9. 测试与验收
-
-### 9.1 rust-cli / host 命令面测试
-
-必须补：
-
-- `ct size=...` 与 `ct smid=...` 互斥测试
-- `rm target=...` 与 `rm smid=...` 互斥测试
-- 缺少 `size/smid` 的报错测试
-- 不存在 `smid` 的报错测试
-- `rm target=all` 删除全部 target 后，全部 `smid` 成员关系已解绑
-- `rm smid=` 在仍有 bound targets 时拒绝
-- `rm smid=all` 在任意 `smid` 仍有 bound targets 时整条拒绝
-- `rm target=all` 后再 `rm smid=all` 可清空全部共享内存区
-- target 删除后 `smid` 解绑
-
-### 9.2 BackendRust 测试
-
-必须补：
-
-- `notify_disk_data_changed(...)` 对有效盘下发成功
-- `notify_disk_data_changed(...)` 对已移除盘或无效盘返回错误
-- `notify_disk_data_changed(...)` 对 session broken / 句柄不可用场景返回错误
-- 普通独占盘的 `WriteFinalCommitted` 仍只处理当前盘 committed，不隐含 sibling 策略
-- `notify_disk_data_changed(...)` 失败不回滚已经 committed 的当前写
-- `WriteFinalCommitted` 事件线程不直接调用 sibling notify
-
-### 9.3 AppKernel / KMDF / SCSI 测试
-
-必须补：
-
-- `NotifyDataChanged` 对不存在 target 返回错误
-- target pending UA 后，`TEST UNIT READY` 首次返回 UA，第二次恢复正常
-- target pending UA 后，`REQUEST SENSE` 返回 `UNIT ATTENTION / 28 00`
-- 多次 `NotifyDataChanged` 在 pending 未消费前只保留一次
-- `INQUIRY` 不消费 pending UA
-- `REPORT LUNS` 不消费 pending UA
-- `READ CAPACITY` 可触发 pending UA
-
-### 9.4 本地共享内存闭环验收
-
-至少覆盖：
-
-- 双 target 绑定同一 `smid`
-- target A 写入，target B 收到一次 UA
-- target B 再读能看到新数据
-- target A 删除后，target B 仍继续可用
-- `rm smid=` 在 target 未删除前拒绝
-- target 全删后 `rm smid=` 成功
-- `rm target=all` 后全部 target 清空但 `smid` 仍保留
-- `rm smid=all` 在全部 target 已清空后成功
-
-### 9.5 网络接入停止线
-
-在第一阶段完成前，以下内容都不进入本轮：
-
-- 新 network notice
-- gateway/client/server 行为联调
-- tauri-client runtime data_changed 传播
-
-## 10. 完成判定
-
-满足以下条件才算 UA 第一阶段重建完成：
-
-- `YumeDiskSCSI / YumeDiskKMDF / AppKernel` 已统一升级到版本 `0.1.0.1`
-- `SCSI` 已持有 per-target `PendingDataChangedUa`
-- `SCSI` 已能对系统命令返回一次正式 `Unit Attention`
-- `StorPortAsyncNotificationDetected(...MEDIA_STATUS)` 已作为加速层接入
-- `KMDF` 已正式代理 `YumeDiskCommandNotifyDataChanged`
-- `AppKernel` 已提供 `AkNotifyDiskDataChanged`
-- `BackendRust` 已提供 per-disk `NotifyDataChanged` downward API
-- `rust-cli` 已在共享内存模型中负责 sibling 查找与 fanout
-- `rust-cli` 已按 `sm / ct(size|smid) / rm(target|smid=<id>|all)` 收成唯一正式命令面
-- 本地共享内存区已成为正式注册表模型，而不是临时对象拼接
-- 本地双 target 共享 `MemoryMedia` 已完成最小闭环验收
-- 文档与测试已同步到当前唯一正式口径
-
-## 11. 当前不应做的事
-
-- 不把 `data_changed` 和 `session close`、`connection lost` 混成一套 notice
-- 不把 `data_changed` 做成 remove/recreate target
-- 不把 `AsyncNotificationSupported` 当作唯一正式语义
-- 不提前设计 `capacity_changed`、`metadata_changed`、`flush_required` 等未来 reason
-- 不为旧 `ct` / `rm` 命令面保留兼容解析
-- 不让 `BackendRust`、`KMDF`、`SCSI` 三层并行缓存同一份 pending UA 事实
-- 不在本地共享内存阶段顺手做网络 auth/session/shared storer 语义
+先完成第一阶段：重写 `docs/network`，删除 gateway metadata snapshot 正式口径，并补 `SessionDataChangedNotice + SessionDescribe.backend_id`。
