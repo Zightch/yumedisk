@@ -89,9 +89,7 @@ DiskHandleNotifyDataChanged(
     if (DiskTryMarkPendingDataChangedUa(disk)) {
         ULONG notifyStatus;
 
-        DbgPrintEx(
-            DPFLTR_IHVDRIVER_ID,
-            DPFLTR_INFO_LEVEL,
+        DbgPrint(
             DRIVER_NAME ": ua pending marked target=%u generation=%lu source=notify_data_changed pending=true\n",
             (ULONG)targetId,
             disk->Generation);

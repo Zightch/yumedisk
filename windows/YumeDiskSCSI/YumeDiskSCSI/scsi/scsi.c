@@ -161,9 +161,7 @@ DiskTraceReturnedDataChangedUa(
     _In_ const char* Path
 )
 {
-    DbgPrintEx(
-        DPFLTR_IHVDRIVER_ID,
-        DPFLTR_INFO_LEVEL,
+    DbgPrint(
         DRIVER_NAME ": ua returned target=%u opcode=0x%02X(%s) path=%s sense_key=0x06 asc=0x28 ascq=0x00 scsi_status=0x%02X(CHECK_CONDITION)\n",
         (ULONG)TargetId,
         (ULONG)Opcode,
