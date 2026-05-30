@@ -107,9 +107,18 @@ block_range = [block_base, block_base + 32768)
 周期扫描时：
 
 1. 扫到 resident dirty block
-2. 也先写临时文件快照
-3. 再发网络写
-4. 成功后删除这份临时文件快照
+2. 若该块当前没有 active flush snapshot，且 temp slot 仍有余量，则先写临时文件快照
+3. 临时文件快照落盘成功后，只清这次快照覆盖到的脏位置
+4. 不改变该块的 resident 内容、FIFO/LRU 关系、提升/降级结果，也不因为这次扫描自动淘汰该脏块
+5. 再发网络写
+6. 成功后删除这份临时文件快照
+
+补充约束：
+
+- 同一块同一时刻只能有一个 active flush snapshot
+- 如果该块已有 active snapshot，则周期扫描只处理这份既有 snapshot 的发送或重试，不再生成第二份快照
+- 如果 temp slot 已满，导致无法继续生成新快照，则保留原脏位状态，等待后续重试
+- temp file 需要有单盘文件数量上限，防止本地占用无限增长
 
 ### 3.5 网络约束
 
@@ -172,7 +181,7 @@ block_range = [block_base, block_base + 32768)
 - `Inner`
   - 共享状态入口
 - `CacheState`
-  - 内存块表、FIFO/LRU、spill 表、flush 队列
+  - 内存块表、FIFO/LRU、spill 表、waiting/backpressure 状态
 - `FlushWorker`
   - 后台线程，负责扫描、写 temp、发网络写、删 temp
 - `BlockEntry`
@@ -197,11 +206,16 @@ block_range = [block_base, block_base + 32768)
 - `resident`
   - 块当前在内存 2Q 中
 - `dirty`
-  - 本地最新版本尚未被远端确认
+  - resident block 上尚未被 active flush snapshot 接管的脏位置
+- `active flush snapshot`
+  - 某块当前唯一正在发送或等待重试的 temp 快照
+  - 它在落盘成功后接管本次覆盖脏位的未同步责任
 - `spill`
   - 脏块已从内存淘汰，但 temp file 仍保存该块待同步数据
 - `flush snapshot`
-  - 为某个块某个版本生成的一次临时文件快照
+  - 为某个块当前一批脏位置生成的一次临时文件快照
+- `snapshot slot`
+  - 单盘可同时持有的 temp 快照文件配额单位
 
 ## 6. 核心决策
 
@@ -280,6 +294,11 @@ LRU 再命中  -> 移动到 LRU 尾部
 - 如果队头块正忙，则跳过它继续找同队列下一个可淘汰块
 - 若整条队列都不可淘汰，则容量暂时软超限，等待忙状态结束
 
+这里的 `busy flush gate` 具体包括：
+
+- 该块已有 active flush snapshot，且同时又有新的 resident dirty positions
+- 该块需要先生成 temp snapshot 才能淘汰，但当前没有空余 temp slot
+
 建议把容量定义成 `NetworkMedia` 内部常量，而不是外露配置：
 
 - `FIFO_MAX_BLOCKS`
@@ -293,6 +312,32 @@ LRU 再命中  -> 移动到 LRU 尾部
 对应约 `4 MiB + 16 MiB = 20 MiB` 的 resident 数据量。
 
 这只是实现初值，不是协议或配置承诺。
+
+## 6.7 容量与背压
+
+缓存侧需要同时受两类上限约束：
+
+- resident cache 上限
+  - 由 `FIFO_MAX_BLOCKS + LRU_MAX_BLOCKS` 控制
+- temp snapshot 上限
+  - 由单盘 `TEMP_MAX_FILES_PER_DISK` 控制
+
+请求处理规则建议如下：
+
+- `read hit`
+  - 不需要新 resident block，也不需要新 temp slot，应直接放行
+- `read miss`
+  - 若需要新 resident block，但当前拿不到可用 resident 容量，则排队等待
+- `write`
+  - 若只是 patch 已 resident block，则直接放行
+  - 若需要补块、rehydrate、dirty eviction、或生成新 temp snapshot，但当前拿不到对应资源，则排队等待
+
+唤醒时机包括：
+
+- clean block 被淘汰，resident 容量释放
+- temp snapshot 被成功删除，temp slot 释放
+- spilled dirty 被成功发送并移除
+- `Drop` 或 terminal invalidation 让等待请求统一退出
 
 ## 6.3 单块写入模型
 
@@ -412,8 +457,8 @@ select next flush target
 | `fifo` | FIFO 队列，保存 resident block 的队列顺序 |
 | `lru` | LRU 队列，保存 resident block 的队列顺序 |
 | `spilled_dirty` | 已从内存淘汰、但尚未远端确认的脏块表 |
-| `flush_queue` | 待处理 flush 任务队列 |
 | `next_temp_id` | temp file 名字或 flush ticket 递增序号 |
+| `waiting_requests` | 因 resident 或 temp 配额不足而排队的前台请求辅助状态 |
 | `worker_notified` | 减少重复唤醒的辅助标志 |
 
 ## 7.4 resident block 元数据
@@ -427,18 +472,17 @@ select next flush target
 | `data` | 该块缓冲区 |
 | `queue_kind` | 当前在 `FIFO` 还是 `LRU` |
 | `access_count` | 是否已二次命中，用于 FIFO -> LRU 提升 |
-| `dirty` | 当前是否有未同步修改 |
-| `version` | 本地当前版本号，每次 patch 后递增 |
-| `synced_version` | 已被远端确认的版本号 |
+| `dirty_ranges` | 当前尚未被 active snapshot 接管的脏位置 |
+| `active_snapshot` | 当前唯一 active flush snapshot 的路径与状态；无则为空 |
 | `load_state` | `Ready / LoadingRemote / RehydratingFromTemp` |
-| `flush_state` | `Idle / Queued / InFlight` |
 | `pending_patches` | 等待完整块到齐后应用的 patch 列表 |
 
-这里的关键不是具体字段名，而是要把三个维度分开：
+这里的关键不是具体字段名，而是要把几个维度分开：
 
 - resident/非 resident
-- 数据是否 dirty
-- 当前是否处于 loading/flush 等瞬时动作
+- 是否仍有 resident dirty positions
+- 是否已有 active snapshot 在接管未同步责任
+- 当前是否处于 loading/rehydrating 等瞬时动作
 
 ## 7.5 spilled dirty 元数据
 
@@ -451,7 +495,6 @@ select next flush target
 | `block_index` | 逻辑块编号 |
 | `valid_len` | 真实有效长度 |
 | `temp_path` | 当前 temp 文件路径 |
-| `version` | 该 temp 对应的块版本 |
 | `state` | `PendingSend / InFlight / RetryPending` |
 
 为什么要单独有 `spilled_dirty` 表：
@@ -487,13 +530,12 @@ stateDiagram-v2
 
     ResidentClean --> ResidentDirty: committed write patch
 
-    ResidentDirty --> FlushQueued: first dirty wake / periodic scan
-    FlushQueued --> FlushInFlight: temp snapshot ready
+    ResidentDirty --> ResidentSnapshotOwned: temp snapshot persisted and covered dirty bits cleared
+    ResidentSnapshotOwned --> ResidentClean: ack and no new dirty bits
+    ResidentSnapshotOwned --> ResidentDirty: write arrives or retry leaves dirty work pending
 
-    FlushInFlight --> ResidentClean: ack and version unchanged
-    FlushInFlight --> ResidentDirty: ack old version but newer write exists
-
-    ResidentDirty --> SpilledDirty: dirty eviction
+    ResidentDirty --> SpilledDirty: dirty eviction writes temp first
+    ResidentSnapshotOwned --> SpilledDirty: resident dropped and temp becomes sole authority
     SpilledDirty --> FlushInFlight: send spilled temp
     FlushInFlight --> Missing: evicted path ack ok and temp deleted
 
@@ -611,7 +653,7 @@ aligned read 的起点固定为：
 2. 若只读，直接失败
 3. 按 `32 KiB` 切分到触达块
 4. 每块独立 patch
-5. patch 后标脏并递增版本
+5. patch 后标脏位
 6. 首次 dirty 时唤醒 flush worker
 7. 定期扫描仍作为兜底
 
@@ -620,10 +662,9 @@ aligned read 的起点固定为：
 如果块已 resident 且 `Ready`：
 
 1. 直接把写入片段覆盖到块内对应位置
-2. `version += 1`
-3. `dirty = true`
-4. 若先前是 clean，则可触发一次 flush worker 唤醒
-5. 更新 2Q 顺序
+2. 对应位置进入 `dirty_ranges`
+3. 若先前是 clean，则可触发一次 flush worker 唤醒
+4. 更新 2Q 顺序
 
 ## 10.3 resident loading hit
 
@@ -637,7 +678,7 @@ aligned read 的起点固定为：
 1. 把自己的 patch 追加到 `pending_patches`
 2. 等待该块完成完整装载
 3. 由装载完成的那条路径统一应用 patch
-4. 当前写线程只需要确认自己的 patch 已进入块版本后返回
+4. 当前写线程只需要确认自己的 patch 已进入块数据与脏位后返回
 
 ## 10.4 miss 写入
 
@@ -682,31 +723,22 @@ write miss
 原因：
 
 - 会和正在发送的快照竞争同一路径
-- 会让“正在发送的版本”和“最新版本”混在一起
+- 会让“正在发送的快照”和“后续新写”混在一起
 
-## 10.6 版本规则
+## 10.6 单块单 active snapshot 规则
 
-每块维护：
+本草案固定约束：
 
-- `version`
-- `synced_version`
+- 同一块同一时刻只能有一个 active flush snapshot
+- 只有当该块当前没有 active snapshot，且 temp slot 可用时，才允许生成新 snapshot
+- snapshot 成功落盘后，由这份 temp file 接管本次覆盖脏位的未同步责任
+- resident block 之后若再被写，只能改 resident 数据并重新标脏位，不能改正在发送的 temp file
+- 若该块已有 active snapshot 且又产生新的 dirty positions，则必须等当前 snapshot 完成或进入可处理的 retry 状态后，下一轮才能为新脏位生成新 snapshot
 
-规则如下：
+在这个约束下：
 
-- 每次本地 patch 后：`version += 1`
-- flush 发送某个快照版本 `V`
-- 若发送成功：
-  - `synced_version = max(synced_version, V)`
-- 只有当 `version == V` 时，才把块转为 clean
-- 若发送时本地又被改成 `version > V`
-  - 这次发送只能确认旧版本已到远端
-  - 当前块仍保持 dirty
-  - worker 之后继续发送新版本
-
-这个版本规则能避免：
-
-- flush 中途块又被写
-- 结果旧快照 ack 把新写误判成已同步
+- 不需要为正确性维护块版本号
+- 也不需要允许同块并存多个 active snapshot
 
 ## 11. 2Q 淘汰与脏块 spill
 
@@ -721,10 +753,11 @@ clean block 淘汰最简单：
 
 dirty block 淘汰必须转成 spill：
 
-1. 生成该块当前版本的 temp snapshot
-2. 在 `spilled_dirty` 表中登记
-3. 从 resident table 删掉该块
-4. 把对应网络发送任务放进 `flush_queue`
+1. 若该块仍有未被 snapshot 接管的 dirty positions，则必须先生成 temp snapshot
+2. 若该块已有 active snapshot 且没有新的 dirty positions，则复用这份现有 temp snapshot
+3. 若该块已有 active snapshot 且又有新的 dirty positions，则当前块不可淘汰，必须等待
+4. 在 `spilled_dirty` 表中登记 temp 权威副本
+5. 从 resident table 删掉该块
 
 逻辑上变成：
 
@@ -732,7 +765,6 @@ dirty block 淘汰必须转成 spill：
 ResidentDirty
 -> write temp snapshot
 -> move to spilled_dirty
--> enqueue flush
 -> drop resident memory
 ```
 
@@ -750,8 +782,9 @@ ResidentDirty
 
 需要明确一个原则：
 
-- resident dirty block 在淘汰前，内存是权威副本
-- dirty eviction 完成后，temp file 是权威副本
+- resident dirty positions 在 snapshot 落盘前，内存是权威副本
+- resident dirty positions 在 snapshot 落盘后，temp file 接管这些位置的未同步责任
+- dirty eviction 完成后，temp file 是该块待同步内容的唯一权威副本
 
 也就是说，dirty eviction 不应留下“两份都算权威”的长期状态。
 
@@ -766,7 +799,7 @@ ResidentDirty
 
 worker 负责两类对象：
 
-- resident dirty blocks
+- resident dirty blocks / resident active snapshots
 - spilled dirty entries
 
 它不负责：
@@ -810,41 +843,57 @@ worker 负责两类对象：
 建议 worker 每轮按下面顺序处理：
 
 1. 先处理 `spilled_dirty`
-2. 再处理 resident dirty blocks
+2. 再处理 resident dirty blocks / resident active snapshots
 
 原因：
 
 - spilled dirty 已经离开内存，更脆弱
 - 先把它们送走，能尽快释放 temp file 和不确定状态
 
-resident dirty 的扫描顺序建议：
+resident scan 的顺序建议：
 
 - FIFO 从头到尾
 - LRU 从头到尾
 
 这相当于先处理更老的块。
 
-## 12.4 resident dirty flush
+## 12.4 resident block flush
 
-resident dirty block 的 flush 流程：
+resident block 的 flush 流程：
 
 ```text
-resident dirty
--> snapshot current version V
--> write temp snapshot file
--> session.write_at(block_base, bytes_of_V)
+resident block selected by scan
+-> if active snapshot state == InFlight: skip
+-> if active snapshot state == RetryPending:
+     resend existing temp file
+-> else if no dirty bits:
+     skip
+-> else if no temp slot:
+     keep dirty bits and defer
+-> else:
+     write temp snapshot file
+     success: install active snapshot and clear covered dirty bits
+     keep resident content and FIFO/LRU relation unchanged
+-> session.write_at(block_base, snapshot bytes)
 -> success:
-     if current version == V: mark clean
-     else: keep dirty
-     delete temp snapshot
+     delete temp file
+     clear active snapshot
+     if no remaining dirty bits: mark clean
+     else: keep dirty for next round
 -> failure:
-     keep dirty
-     keep temp snapshot only if needed for retry bookkeeping
+     keep active snapshot temp file for retry
+     leave newly written dirty bits untouched
 ```
 
 这里 resident block 在 flush 期间不需要离开内存。
 
 temp snapshot 只是这一次发送的载体。
+
+这里再强调一次：
+
+- 周期扫描成功落下 temp 后，允许清本次覆盖的 dirty bits
+- 但不允许因此改变 resident 内容、2Q 队列关系、命中提升/降级结果
+- 也不允许因为“已经 snapshotted”就顺手自动淘汰该块
 
 ## 12.5 spilled dirty flush
 
@@ -877,7 +926,7 @@ spilled dirty entry
 
 worker 在这种情况下应：
 
-- 停止继续消费 flush 队列
+- 停止继续处理正常 flush
 - 尽量保留尚未删除的 temp 文件直到 `Drop`
 - 后续 I/O 由上层失效路径接管
 
@@ -898,14 +947,14 @@ C:\Users\<user>\AppData\Local\Temp\
   yumedisk-network-media\
     A1b2C3d4E5f6G7h8\
       77\
-        blk-0000000000000012-v5.bin
-        blk-0000000000000099-v2.bin
+        blk-0000000000000012-t000005.bin
+        blk-0000000000000099-t000002.bin
 ```
 
 命名建议包含：
 
 - `block_index`
-- `version`
+- `temp ticket`
 
 这样调试和人工排查更直接。
 
@@ -921,11 +970,32 @@ temp file 内容不需要做复杂封装。
 
 - `block_index`
 - `valid_len`
-- `version`
+- `temp ticket`
 
 若后续确认需要脱离进程恢复，再考虑把元数据也写进文件头；本草案先不这么做。
 
-## 13.3 启动清理
+## 13.3 单盘 temp 文件上限
+
+temp file 需要有单盘数量上限，例如：
+
+- `TEMP_MAX_FILES_PER_DISK = 256`
+
+这里按“文件数 / snapshot slot”限，而不是按“总字节数”限。
+
+原因：
+
+- 逻辑块固定为 `32 KiB`
+- temp file 初版不引入复杂文件头
+- 直接限制 snapshot slot，更容易和块级 flush/排队语义对齐
+
+达到上限后的规则：
+
+- resident dirty block 的周期扫描不能再生成新 snapshot
+- dirty eviction 若还需要新 snapshot，则当前块不可淘汰
+- 对应 dirty bits 保持原样，不做清零
+- 需要新 resident 容量或新 temp slot 的后续请求进入排队
+
+## 13.4 启动清理
 
 由于本草案不做 crash recovery：
 
@@ -979,7 +1049,7 @@ temp file 内容不需要做复杂封装。
 后果三：
 
 - 跨块写入的远端到达顺序可能和本地提交顺序不完全一致
-- 初版只保证“单块内最后版本覆盖前版本”
+- 初版只保证“单块内后续 snapshot 最终会覆盖前序 snapshot”
 - 不提供全局写屏障语义
 
 ## 14.4 进程崩溃语义
@@ -1037,8 +1107,9 @@ temp file 内容不需要做复杂封装。
 
 1. 标记 `stopping = true`
 2. 唤醒 worker 并等待退出
-3. 尝试同步 flush 剩余 dirty
-4. 无论同步 flush 成败，都尽量删除可删 temp
+3. 唤醒并失败退出所有因 resident/temp 配额不足而排队的请求
+4. 尝试同步 flush 剩余 dirty
+5. 无论同步 flush 成败，都尽量删除可删 temp
 
 需要明确：
 
@@ -1076,7 +1147,9 @@ sequenceDiagram
 
     Note over NM: worker wakes immediately or by periodic scan
     NM->>TMP: write snapshot temp file
-    NM->>DS: write_at(block_base, block_valid_len)
+    TMP-->>NM: snapshot persisted
+    NM->>NM: clear covered dirty bits only
+    NM->>DS: write_at(block_base, snapshot bytes)
     DS-->>NM: ack
     NM->>TMP: delete temp file
 ```
@@ -1090,10 +1163,10 @@ sequenceDiagram
     participant DS as DiskSession
 
     NM->>NM: queue overflow chooses dirty victim
-    NM->>TMP: write temp snapshot
+    NM->>TMP: write temp snapshot if needed
     NM->>NM: move block to spilled_dirty
     NM->>NM: drop resident memory
-    NM->>DS: write_at(block_base, block_valid_len)
+    NM->>DS: write_at(block_base, snapshot bytes)
     DS-->>NM: ack
     NM->>TMP: delete temp file
     NM->>NM: remove spilled_dirty entry
@@ -1139,16 +1212,16 @@ sequenceDiagram
 1. 先把 `NetworkMedia` 改成 `Arc<Inner>` 结构
 2. 先落 resident cache + 2Q + aligned read miss
 3. 再落 write miss 的 `pending_patches`
-4. 再落 dirty tracking + 版本号
-5. 再落 temp snapshot 与 dirty eviction
-6. 再落 flush worker 与周期扫描
+4. 再落 dirty tracking + 单块单 active snapshot 约束
+5. 再落 temp snapshot、temp slot 上限与 dirty eviction
+6. 再落 flush worker、周期扫描与排队背压
 7. 最后补 `Drop`、temp cleanup、失败重试
 
 原因：
 
 - 先把命中和 miss 的块模型跑通
-- 再把回写和 temp 接进去
-- 否则一开始就同时做 2Q、temp、worker、retry，调试会很乱
+- 再把 snapshot ownership 和 backpressure 接进去
+- 否则一开始就同时做 2Q、temp、worker、排队，调试会很乱
 
 ## 19. 测试矩阵
 
@@ -1167,11 +1240,12 @@ sequenceDiagram
 - 同块并发两个写 miss 只发一次 aligned read
 - `pending_patches` 应按提交顺序生效
 
-## 19.3 dirty 与版本
+## 19.3 dirty 与 active snapshot
 
 - resident hit 写入会标脏
-- 连续两次写同块，版本递增
-- flush 旧版本 ack 不会误清掉新版本 dirty
+- snapshot 落盘成功后只清本次覆盖 dirty bits
+- 同块在任意时刻只允许一个 active snapshot
+- active snapshot 发送期间的新写会重新留下 dirty bits，不覆盖旧 temp file
 
 ## 19.4 2Q 淘汰
 
@@ -1186,21 +1260,32 @@ sequenceDiagram
 - spilled dirty flush 成功后删除 temp
 - spilled dirty flush 失败后保留 temp 并等待重试
 - spilled dirty 被再次访问时能正确 rehydrate
+- temp slot 满时，周期扫描不会错误清空 dirty bits
 
-## 19.6 周期扫描
+## 19.6 temp 上限与排队
+
+- 单盘 temp 文件数达到上限后，不再生成新 snapshot
+- resident 和 temp 资源都紧张时，需要新资源的请求会进入排队
+- `read hit` 不应因背压被错误阻塞
+- `Drop` 或 terminal invalidation 会唤醒并结束排队请求
+
+## 19.7 周期扫描
 
 - 周期扫描能找到 resident dirty block
-- resident dirty block 扫描 flush 成功后删 snapshot
+- resident active snapshot 失败后，周期扫描能继续拿同一个 temp 做 retry
+- resident dirty block 扫描后只清本次 snapshot 覆盖 dirty bits
+- 周期扫描不会改 FIFO/LRU 关系，也不会自动淘汰该脏块
 - 周期扫描能继续处理 `RetryPending`
 
-## 19.7 终态错误
+## 19.8 终态错误
 
 - `SessionUnavailable` 会触发 invalidation handler
 - `Transport(...)` 会触发 invalidation handler
 - `Protocol(...)` 会触发 invalidation handler
-- 终态错误后不再继续正常 flush 队列
+- 终态错误后不再继续正常 flush
+- 终态错误后等待中的排队请求能退出
 
-## 19.8 生命周期
+## 19.9 生命周期
 
 - `Drop` 能停掉 worker
 - `Drop` 能尽量清理 temp 目录
@@ -1218,6 +1303,9 @@ sequenceDiagram
 - 2Q 使用内存，含 FIFO 和 LRU
 - 脏块淘汰先写临时文件，再网络发送，成功后删除
 - 固定时间扫描 2Q resident dirty block，也走 temp + 网络发送
+- 周期扫描在 temp 落盘成功后只清对应脏位，不改变 2Q 关系，也不自动淘汰该脏块
+- 同一块同一时刻只允许一个 active snapshot
+- temp file 有单盘数量上限；resident/temp 都打满时，后续需要新资源的请求必须排队
 - 写 miss 先挂起，等远端读回完整 `32 KiB` 对齐块后再应用写入
 
 同时也把两件必须正视的语义变化明确写死了：
