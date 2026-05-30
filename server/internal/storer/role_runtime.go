@@ -62,6 +62,7 @@ func NewStorerRuntime(cfg config.StorerConfig, core *Core) (*StorerRuntime, erro
 			return nil, err
 		}
 		links = append(links, newStorerLinkWorker("ro", roLinkRuntime))
+		core.SetDataChangedNotifier(roLinkRuntime)
 	}
 
 	return &StorerRuntime{

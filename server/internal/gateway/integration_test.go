@@ -119,7 +119,7 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 	if describeHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("describe status: %d", describeHeader.StatusCode)
 	}
-	diskSize, maxIOBytes, readOnly, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	diskSize, maxIOBytes, readOnly, _, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
 	if err != nil {
 		t.Fatalf("parse describe response: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestGatewayAndStorerSupportsReadOnlyExportDataPlane(t *testing.T) {
 	if describeHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("ro describe status: %d", describeHeader.StatusCode)
 	}
-	diskSize, maxIOBytes, readOnly, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	diskSize, maxIOBytes, readOnly, _, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
 	if err != nil {
 		t.Fatalf("parse ro describe response: %v", err)
 	}
@@ -336,6 +336,38 @@ func TestGatewayAndStorerSupportsReadOnlyExportDataPlane(t *testing.T) {
 	}
 	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("BOOT")) {
 		t.Fatalf("unexpected ro read payload: %q", string(readResp[proto.HeaderSize:]))
+	}
+	roRequestID++
+
+	writePayload = append(proto.BuildReadWriteBody(4, 4), []byte("SYNC")...)
+	writeResp = mustGatewayRoundTrip(t, rwConn, buildGatewayRequest(proto.OpWriteAt, rwRequestID, rwSessionID, writePayload))
+	if header := mustGatewayHeader(t, writeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("second rw write status: %d", header.StatusCode)
+	}
+	rwRequestID++
+
+	dataChangedNotice := mustGatewayReadFrame(t, roConn)
+	dataChangedHeader := mustGatewayHeader(t, dataChangedNotice)
+	if dataChangedHeader.Flags != proto.FlagNotice {
+		t.Fatalf("expected data changed notice, got flags=%d", dataChangedHeader.Flags)
+	}
+	if dataChangedHeader.OpCode != proto.OpSessionDataChangedNotice {
+		t.Fatalf("unexpected notice op: %d", dataChangedHeader.OpCode)
+	}
+	if dataChangedHeader.SessionID != roSessionID {
+		t.Fatalf("unexpected notice session id: %d", dataChangedHeader.SessionID)
+	}
+	if len(dataChangedNotice) != proto.HeaderSize {
+		t.Fatalf("unexpected data changed notice body length: %d", len(dataChangedNotice)-proto.HeaderSize)
+	}
+
+	readResp = mustGatewayRoundTrip(t, roConn, buildGatewayRequest(proto.OpReadAt, roRequestID, roSessionID, proto.BuildReadBody(4, 4)))
+	readHeader = mustGatewayHeader(t, readResp)
+	if readHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("ro read after notice status: %d", readHeader.StatusCode)
+	}
+	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("SYNC")) {
+		t.Fatalf("unexpected ro read-after-notice payload: %q", string(readResp[proto.HeaderSize:]))
 	}
 	roRequestID++
 
@@ -431,6 +463,12 @@ func mustGatewayRoundTrip(t *testing.T, conn net.Conn, payload []byte) []byte {
 	if err := transport.WriteFrame(conn, payload); err != nil {
 		t.Fatalf("write frame: %v", err)
 	}
+	return mustGatewayReadFrame(t, conn)
+}
+
+func mustGatewayReadFrame(t *testing.T, conn net.Conn) []byte {
+	t.Helper()
+
 	buffer := make([]byte, transport.MaxPayloadSize)
 	resp, err := transport.ReadFrameInto(conn, buffer)
 	if err != nil {

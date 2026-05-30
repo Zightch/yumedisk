@@ -18,6 +18,7 @@ use network_core::client::DiskSession;
 use network_core::client::GatewayConnection;
 use network_core::client::NetworkClientError;
 use network_core::client::SessionCloseNotice;
+use network_core::client::SessionDataChangedNotice;
 use network_core::client::SessionDescriber;
 use network_core::client::SessionOpener;
 use network_core::transport::TransportEndpoint;
@@ -75,6 +76,7 @@ pub struct NetworkMountResult {
 struct MountedNetworkDisk {
     addr: String,
     disk_id: String,
+    remote_backend_id: [u8; 16],
     session: DiskSession,
     disk_size_bytes: u64,
     read_only: bool,
@@ -91,6 +93,7 @@ struct NetworkMountState {
     connections: BTreeMap<String, Arc<GatewayConnection>>,
     mounted: BTreeMap<u32, MountedNetworkDisk>,
     pending_cleanup_targets: BTreeSet<u32>,
+    pending_data_changed_targets: BTreeSet<u32>,
 }
 
 pub struct CliHost {
@@ -254,6 +257,15 @@ impl CliHost {
             }
             error.to_string()
         })?;
+        self.network_mounts
+            .ensure_unique_mount(addr, auth.disk_id(), metadata.backend_id)
+            .map_err(|error| {
+                if close_session_for_cleanup(&session) {
+                    self.network_mounts
+                        .release_connection_after_session_close(&connection);
+                }
+                error
+            })?;
 
         let media = NetworkMedia::bind(auth.disk_id().to_string(), session.clone(), metadata)
             .map_err(|error| {
@@ -268,6 +280,7 @@ impl CliHost {
         let mounted = MountedNetworkDisk::new(
             addr.to_string(),
             auth.disk_id().to_string(),
+            metadata.backend_id,
             session.clone(),
             metadata.disk_size_bytes,
             metadata.read_only,
@@ -401,6 +414,28 @@ impl CliHost {
         self.network_mounts.network_mounts()
     }
 
+    pub fn apply_network_data_changed(&mut self) -> AppResult<Vec<u32>> {
+        let target_ids = self.network_mounts.take_data_changed_target_ids();
+        let mut changed = Vec::new();
+        for target_id in target_ids {
+            let mut error_text = String::new();
+            if !self
+                .context
+                .notify_managed_disk_data_changed(target_id, Some(&mut error_text))
+            {
+                if error_text.is_empty() {
+                    error_text = "notify-data-changed-failed".to_string();
+                }
+                return Err(format!(
+                    "notify managed disk data changed target={} failed: {}",
+                    target_id, error_text
+                ));
+            }
+            changed.push(target_id);
+        }
+        Ok(changed)
+    }
+
     pub fn poll_managed_disk_event(&mut self) -> AppResult<Option<ManagedDiskEvent>> {
         let event = self.context.poll_managed_disk_event();
         if let Some(event) = event {
@@ -484,6 +519,7 @@ impl MountedNetworkDisk {
     fn new(
         addr: String,
         disk_id: String,
+        remote_backend_id: [u8; 16],
         session: DiskSession,
         disk_size_bytes: u64,
         read_only: bool,
@@ -492,6 +528,7 @@ impl MountedNetworkDisk {
         Self {
             addr,
             disk_id,
+            remote_backend_id,
             session,
             disk_size_bytes,
             read_only,
@@ -539,11 +576,9 @@ impl NetworkMountRegistry {
     }
 
     fn take(&self, target_id: u32) -> Option<MountedNetworkDisk> {
-        self.state
-            .lock()
-            .expect("network_mount_state poisoned")
-            .mounted
-            .remove(&target_id)
+        let mut state = self.state.lock().expect("network_mount_state poisoned");
+        state.pending_data_changed_targets.remove(&target_id);
+        state.mounted.remove(&target_id)
     }
 
     fn mark_for_cleanup(&self, target_id: u32) {
@@ -598,6 +633,28 @@ impl NetworkMountRegistry {
         }
     }
 
+    fn mark_session_data_changed(&self, addr: &str, session_id: u64) {
+        let target_ids = {
+            let state = self.state.lock().expect("network_mount_state poisoned");
+            state
+                .mounted
+                .iter()
+                .filter_map(|(target_id, mounted)| {
+                    if mounted.addr == addr && mounted.session.session_id() == session_id {
+                        Some(*target_id)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut state = self.state.lock().expect("network_mount_state poisoned");
+        for target_id in target_ids {
+            state.pending_data_changed_targets.insert(target_id);
+        }
+    }
+
     fn acquire_connection(&self, addr: &str) -> Result<Arc<GatewayConnection>, NetworkClientError> {
         if let Some(connection) = self.connection(addr) {
             return Ok(connection);
@@ -609,6 +666,14 @@ impl NetworkMountRegistry {
         connection.set_session_notice_handler(Some(Arc::new(move |notice: SessionCloseNotice| {
             notice_registry.mark_session_for_cleanup(&notice_addr, notice.session_id);
         })));
+        let data_changed_registry = self.clone();
+        let data_changed_addr = addr.to_string();
+        connection.set_session_data_changed_handler(Some(Arc::new(
+            move |notice: SessionDataChangedNotice| {
+                data_changed_registry
+                    .mark_session_data_changed(&data_changed_addr, notice.session_id);
+            },
+        )));
         let disconnect_registry = self.clone();
         let disconnect_addr = addr.to_string();
         connection.set_disconnect_handler(Some(Arc::new(move || {
@@ -671,6 +736,41 @@ impl NetworkMountRegistry {
             .remove(&target_id);
     }
 
+    fn take_data_changed_target_ids(&self) -> Vec<u32> {
+        let mut state = self.state.lock().expect("network_mount_state poisoned");
+        let target_ids = state
+            .pending_data_changed_targets
+            .iter()
+            .copied()
+            .filter(|target_id| state.mounted.contains_key(target_id))
+            .collect::<Vec<_>>();
+        for target_id in &target_ids {
+            state.pending_data_changed_targets.remove(target_id);
+        }
+        target_ids
+    }
+
+    fn ensure_unique_mount(
+        &self,
+        addr: &str,
+        disk_id: &str,
+        remote_backend_id: [u8; 16],
+    ) -> AppResult<()> {
+        let state = self.state.lock().expect("network_mount_state poisoned");
+        for mounted in state.mounted.values() {
+            if mounted.addr != addr {
+                continue;
+            }
+            if mounted.disk_id == disk_id {
+                return Err("duplicate remote disk".to_string());
+            }
+            if mounted.remote_backend_id == remote_backend_id {
+                return Err("duplicate remote backend".to_string());
+            }
+        }
+        Ok(())
+    }
+
     fn cleanup_marker(&self, target_id: u32) -> Arc<dyn Fn() + Send + Sync> {
         let registry = self.clone();
         Arc::new(move || {
@@ -698,6 +798,7 @@ impl NetworkMountRegistry {
         state.connections.clear();
         state.mounted.clear();
         state.pending_cleanup_targets.clear();
+        state.pending_data_changed_targets.clear();
     }
 }
 
@@ -778,6 +879,7 @@ mod tests {
             mounted: MountedNetworkDisk {
                 addr: address.to_string(),
                 disk_id: disk_id.to_string(),
+                remote_backend_id: [0u8; 16],
                 session,
                 disk_size_bytes: 4096,
                 read_only: false,
@@ -811,6 +913,7 @@ mod tests {
             MountedNetworkDisk {
                 addr: "127.0.0.1:1".to_string(),
                 disk_id: "A1b2C3d4E5f6G7h8".to_string(),
+                remote_backend_id: [0u8; 16],
                 session,
                 disk_size_bytes: 4096,
                 read_only: false,
@@ -869,6 +972,42 @@ mod tests {
         assert_eq!(taken.session.session_id(), 99);
         registry.clear_cleanup_mark(6);
         assert!(registry.network_mounts().is_empty());
+
+        mount.shutdown();
+    }
+
+    #[test]
+    fn network_mount_registry_rejects_duplicate_remote_disk_and_backend() {
+        let mount = connected_mount(7, "A1b2C3d4E5f6G7h8", 100);
+        let registry = NetworkMountRegistry::default();
+        registry.insert(7, mount.mounted.clone());
+
+        let duplicate_disk = registry
+            .ensure_unique_mount(&mount.mounted.addr, &mount.mounted.disk_id, [1u8; 16])
+            .expect_err("duplicate disk should fail");
+        assert_eq!(duplicate_disk, "duplicate remote disk");
+
+        let duplicate_backend = registry
+            .ensure_unique_mount(&mount.mounted.addr, "B1b2C3d4E5f6G7h8", [0u8; 16])
+            .expect_err("duplicate backend should fail");
+        assert_eq!(duplicate_backend, "duplicate remote backend");
+
+        let other_addr =
+            registry.ensure_unique_mount("127.0.0.1:2", &mount.mounted.disk_id, [0u8; 16]);
+        assert!(other_addr.is_ok());
+
+        mount.shutdown();
+    }
+
+    #[test]
+    fn network_mount_registry_tracks_pending_data_changed_targets() {
+        let mount = connected_mount(8, "A1b2C3d4E5f6G7h8", 101);
+        let registry = NetworkMountRegistry::default();
+        registry.insert(8, mount.mounted.clone());
+
+        registry.mark_session_data_changed(&mount.mounted.addr, 101);
+        assert_eq!(registry.take_data_changed_target_ids(), vec![8]);
+        assert!(registry.take_data_changed_target_ids().is_empty());
 
         mount.shutdown();
     }

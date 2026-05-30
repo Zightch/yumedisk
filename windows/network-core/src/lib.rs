@@ -15,6 +15,7 @@ pub mod client {
     pub use crate::error::NetworkClientError;
     pub use crate::gateway_connection::GatewayConnection;
     pub use crate::protocol_client::SessionCloseNotice;
+    pub use crate::protocol_client::SessionDataChangedNotice;
     pub use crate::session_describer::{SessionDescriber, SessionMetadata};
     pub use crate::session_opener::SessionOpener;
 }
@@ -28,8 +29,9 @@ pub mod protocol {
         SESSION_CLOSE_REASON_CLIENT_CONNECTION_REPLACED, SESSION_CLOSE_REASON_GATEWAY_SHUTDOWN,
         SESSION_CLOSE_REASON_NORMAL_CLOSE, SESSION_CLOSE_REASON_PROTOCOL_ERROR,
         SESSION_CLOSE_REASON_ROUTE_LOST, SESSION_CLOSE_REASON_UPSTREAM_SESSION_CLOSED,
-        SessionCloseNotice, SessionDescribeRequest, SessionDescribeResponse, SessionOpenRequest,
-        SessionOpenResponse, WriteAtRequest, decode_gateway_status, parse_header, parse_request_header,
+        SessionCloseNotice, SessionDataChangedNotice, SessionDescribeRequest,
+        SessionDescribeResponse, SessionOpenRequest, SessionOpenResponse, WriteAtRequest,
+        decode_gateway_status, parse_header, parse_request_header,
     };
 }
 
@@ -78,7 +80,8 @@ pub mod test_support {
 mod network {
     pub use crate::client::{
         AuthGrant, ConnectionAuthenticator, DiskSession, GatewayConnection, NetworkClientError,
-        SessionCloseNotice, SessionDescriber, SessionMetadata, SessionOpener,
+        SessionCloseNotice, SessionDataChangedNotice, SessionDescriber, SessionMetadata,
+        SessionOpener,
     };
     pub(crate) use crate::hello_client::expect_client_hello;
     pub use crate::protocol::{

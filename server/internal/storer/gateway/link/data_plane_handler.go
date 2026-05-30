@@ -48,6 +48,8 @@ func (h *dataPlaneHandler) HandlePayload(payload []byte) ([]byte, error) {
 	switch header.OpCode {
 	case proto.OpSessionOpen:
 		return h.handleSessionOpen(header, body)
+	case proto.OpSessionDescribe:
+		return h.handleSessionDescribe(header, body)
 	case proto.OpLinkHeartbeat:
 		return h.handleLinkHeartbeat(header, body)
 	case proto.OpReadAt:
@@ -72,6 +74,29 @@ func (h *dataPlaneHandler) handleSessionOpen(header proto.Header, body []byte) (
 		return h.mapSessionError(header, err), nil
 	}
 	return proto.BuildResponseWithSessionID(header, proto.StatusOK, desc.ID, nil), nil
+}
+
+func (h *dataPlaneHandler) handleSessionDescribe(header proto.Header, body []byte) ([]byte, error) {
+	if header.SessionID == 0 {
+		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
+	}
+	if len(body) != 0 {
+		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
+	}
+
+	metadata, err := h.sessions.Describe(header.SessionID)
+	if err != nil {
+		return h.mapSessionError(header, err), nil
+	}
+	return proto.BuildSuccessResponse(
+		header,
+		proto.BuildSessionDescribeResponseBody(
+			metadata.DiskSizeBytes,
+			metadata.MaxIOBytes,
+			metadata.ReadOnly,
+			metadata.BackendID,
+		),
+	), nil
 }
 
 func (h *dataPlaneHandler) handleLinkHeartbeat(header proto.Header, body []byte) ([]byte, error) {

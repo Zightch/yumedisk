@@ -9,13 +9,20 @@ import (
 
 type LocalExport interface {
 	DiskID() string
+	ReadOnly() bool
 	SessionService() *session.Service
 	RouteEntry(routeTarget string, connectionID uint64) route.Entry
 }
 
+type RouteSessionDataChangedHandler interface {
+	NotifyRouteSessionDataChanged(routeConnectionID uint64, upstreamSessionID uint64)
+}
+
 type LocalAdapter struct {
-	exportsByRoute map[uint64]LocalExport
-	routes         *route.Registry
+	exportsByRoute      map[uint64]LocalExport
+	routes              *route.Registry
+	roRouteConnectionID uint64
+	dataChangedHandler  RouteSessionDataChangedHandler
 }
 
 func NewLocalAdapter(exports []LocalExport) (*LocalAdapter, error) {
@@ -25,6 +32,7 @@ func NewLocalAdapter(exports []LocalExport) (*LocalAdapter, error) {
 
 	routes := route.NewRegistry()
 	exportsByRoute := make(map[uint64]LocalExport, len(exports))
+	var roRouteConnectionID uint64
 	for index, export := range exports {
 		if export == nil {
 			return nil, fmt.Errorf("local adapter export %d must not be nil", index)
@@ -35,16 +43,31 @@ func NewLocalAdapter(exports []LocalExport) (*LocalAdapter, error) {
 			return nil, err
 		}
 		exportsByRoute[routeConnectionID] = export
+		if export.ReadOnly() {
+			roRouteConnectionID = routeConnectionID
+		}
 	}
 
 	return &LocalAdapter{
-		exportsByRoute: exportsByRoute,
-		routes:         routes,
+		exportsByRoute:      exportsByRoute,
+		routes:              routes,
+		roRouteConnectionID: roRouteConnectionID,
 	}, nil
 }
 
 func (b *LocalAdapter) LookupRoute(diskID string) (route.Entry, bool) {
 	return b.routes.LookupRoute(diskID)
+}
+
+func (b *LocalAdapter) SetDataChangedHandler(handler RouteSessionDataChangedHandler) {
+	b.dataChangedHandler = handler
+}
+
+func (b *LocalAdapter) NotifySessionDataChanged(sessionID uint64) {
+	if b == nil || b.roRouteConnectionID == 0 || b.dataChangedHandler == nil {
+		return
+	}
+	b.dataChangedHandler.NotifyRouteSessionDataChanged(b.roRouteConnectionID, sessionID)
 }
 
 func (b *LocalAdapter) Open(connectionID uint64, entry route.Entry) (uint64, error) {
@@ -57,6 +80,14 @@ func (b *LocalAdapter) Open(connectionID uint64, entry route.Entry) (uint64, err
 		return 0, err
 	}
 	return desc.ID, nil
+}
+
+func (b *LocalAdapter) Describe(routeConnectionID uint64, sessionID uint64) (session.Metadata, error) {
+	export, ok := b.exportsByRoute[routeConnectionID]
+	if !ok {
+		return session.Metadata{}, session.ErrSessionUnavailable
+	}
+	return export.SessionService().Describe(sessionID)
 }
 
 func (b *LocalAdapter) Close(routeConnectionID uint64, sessionID uint64) {

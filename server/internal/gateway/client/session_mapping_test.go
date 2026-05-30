@@ -7,26 +7,28 @@ import (
 
 	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/route"
+	"yumedisk/server/internal/session"
 )
 
-func TestGatewaySessionMappingHidesUpstreamSessionIDAndUsesSnapshot(t *testing.T) {
+func TestGatewaySessionMappingHidesUpstreamSessionIDAndForwardsDescribe(t *testing.T) {
 	t.Parallel()
 
 	const diskID = "DISK000000000001"
 	routes := &mappingRouteSource{
 		entry: route.Entry{
-			DiskID:        diskID,
-			RouteTarget:   "storer://conn-9",
-			ConnectionID:  9,
-			Connected:     true,
-			DiskSizeBytes: 4096,
-			ReadOnly:      false,
-			MaxIOBytes:    1024,
+			DiskID:       diskID,
+			RouteTarget:  "storer://conn-9",
+			ConnectionID: 9,
+			Connected:    true,
 		},
 	}
 	dataPlane := &mappingDataPlane{
 		openSessionID: 77,
 		readOut:       []byte("OK"),
+		describeOut: session.Metadata{
+			DiskSizeBytes: 4096,
+			MaxIOBytes:    1024,
+		},
 	}
 
 	handler, err := NewHandler(routes, dataPlane)
@@ -56,12 +58,18 @@ func TestGatewaySessionMappingHidesUpstreamSessionIDAndUsesSnapshot(t *testing.T
 	if describeHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected describe status: %d", describeHeader.StatusCode)
 	}
-	diskSize, maxIOBytes, readOnly, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	diskSize, maxIOBytes, readOnly, backendID, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
 	if err != nil {
 		t.Fatalf("parse describe body: %v", err)
 	}
-	if diskSize != routes.entry.DiskSizeBytes || maxIOBytes != routes.entry.MaxIOBytes || readOnly != routes.entry.ReadOnly {
-		t.Fatalf("unexpected describe snapshot: size=%d maxIO=%d readOnly=%v", diskSize, maxIOBytes, readOnly)
+	if diskSize != dataPlane.describeOut.DiskSizeBytes || maxIOBytes != dataPlane.describeOut.MaxIOBytes || readOnly != dataPlane.describeOut.ReadOnly {
+		t.Fatalf("unexpected describe body: size=%d maxIO=%d readOnly=%v", diskSize, maxIOBytes, readOnly)
+	}
+	if backendID != dataPlane.describeOut.BackendID {
+		t.Fatal("unexpected backend id")
+	}
+	if dataPlane.lastDescribeSessionID != dataPlane.openSessionID {
+		t.Fatalf("describe used wrong upstream session id: %d", dataPlane.lastDescribeSessionID)
 	}
 
 	readResp, err := handler.HandlePayload(state, buildRequest(proto.OpReadAt, 3, openHeader.SessionID, proto.BuildReadBody(0, 2)))
@@ -109,15 +117,19 @@ func TestGatewaySessionMappingIsReleasedOnConnectionClose(t *testing.T) {
 	const diskID = "DISK000000000001"
 	routes := &mappingRouteSource{
 		entry: route.Entry{
-			DiskID:        diskID,
-			RouteTarget:   "storer://conn-11",
-			ConnectionID:  11,
-			Connected:     true,
+			DiskID:       diskID,
+			RouteTarget:  "storer://conn-11",
+			ConnectionID: 11,
+			Connected:    true,
+		},
+	}
+	dataPlane := &mappingDataPlane{
+		openSessionID: 88,
+		describeOut: session.Metadata{
 			DiskSizeBytes: 4096,
 			MaxIOBytes:    1024,
 		},
 	}
-	dataPlane := &mappingDataPlane{openSessionID: 88}
 
 	handler, err := NewHandler(routes, dataPlane)
 	if err != nil {
@@ -239,9 +251,12 @@ func (s *mappingRouteSource) LookupRoute(diskID string) (route.Entry, bool) {
 type mappingDataPlane struct {
 	openSessionID         uint64
 	openErr               error
+	describeOut           session.Metadata
+	describeErr           error
 	readOut               []byte
 	readErr               error
 	writeErr              error
+	lastDescribeSessionID uint64
 	lastReadSessionID     uint64
 	lastWriteSessionID    uint64
 	lastCloseSessionID    uint64
@@ -250,6 +265,11 @@ type mappingDataPlane struct {
 
 func (p *mappingDataPlane) Open(uint64, route.Entry) (uint64, error) {
 	return p.openSessionID, p.openErr
+}
+
+func (p *mappingDataPlane) Describe(routeConnectionID uint64, sessionID uint64) (session.Metadata, error) {
+	p.lastDescribeSessionID = sessionID
+	return p.describeOut, p.describeErr
 }
 
 func (p *mappingDataPlane) Close(routeConnectionID uint64, sessionID uint64) {

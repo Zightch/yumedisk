@@ -221,6 +221,7 @@ mod tests {
                 disk_size_bytes: 2048,
                 read_only: false,
                 max_io_bytes: 1024,
+                backend_id: [0u8; 16],
             },
         )
         .expect_err("bind should fail");
@@ -294,6 +295,7 @@ mod tests {
                 disk_size_bytes: 4096,
                 read_only: false,
                 max_io_bytes: 4,
+                backend_id: [0u8; 16],
             },
         )
         .expect("bind should succeed");
@@ -378,6 +380,7 @@ mod tests {
                 disk_size_bytes: 4096,
                 read_only: false,
                 max_io_bytes: 4,
+                backend_id: [0u8; 16],
             },
         )
         .expect("bind should succeed");
@@ -452,6 +455,7 @@ mod tests {
                 disk_size_bytes: 4096,
                 read_only: false,
                 max_io_bytes: 4,
+                backend_id: [0u8; 16],
             },
         )
         .expect("bind should succeed")

@@ -48,7 +48,9 @@ func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
 		clientConns:   make(map[uint64]*clientConnection),
 	}
 	clientHandler.SetSessionCloseNotifier(runtime)
+	clientHandler.SetSessionDataChangedNotifier(runtime)
 	storerRoutes.SetDisconnectHandler(clientHandler)
+	storerRoutes.SetDataChangedHandler(clientHandler)
 	return runtime, nil
 }
 
@@ -154,5 +156,23 @@ func (r *Runtime) NotifySessionClosed(sessionID uint64, clientConnectionID uint6
 	if err != nil {
 		_ = client.conn.Close()
 		return
+	}
+}
+
+func (r *Runtime) NotifySessionDataChanged(sessionID uint64, clientConnectionID uint64) {
+	r.clientConnMu.RLock()
+	client := r.clientConns[clientConnectionID]
+	r.clientConnMu.RUnlock()
+	if client == nil {
+		return
+	}
+
+	payload := proto.BuildNotice(proto.OpSessionDataChangedNotice, sessionID, nil)
+
+	client.write.Lock()
+	err := transport.WriteFrame(client.conn, payload)
+	client.write.Unlock()
+	if err != nil {
+		_ = client.conn.Close()
 	}
 }

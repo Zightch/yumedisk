@@ -8,14 +8,11 @@ import (
 var ErrDiskAlreadyRegistered = errors.New("disk id already registered on another connection")
 
 type Entry struct {
-	DiskID        string
-	AuthVerifier  [64]byte
-	RouteTarget   string
-	ConnectionID  uint64
-	Connected     bool
-	DiskSizeBytes uint64
-	ReadOnly      bool
-	MaxIOBytes    uint32
+	DiskID       string
+	AuthVerifier [64]byte
+	RouteTarget  string
+	ConnectionID uint64
+	Connected    bool
 }
 
 type Registry struct {

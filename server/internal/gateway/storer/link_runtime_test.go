@@ -113,11 +113,9 @@ func registerAndExpectStatus(t *testing.T, conn net.Conn, gatewayToken string, d
 	t.Helper()
 
 	reqBody := proto.BuildStorerRegisterRequestBody(proto.StorerRegisterRequest{
-		GatewayToken:  gatewayToken,
-		DiskID:        diskID,
-		AuthVerifier:  [64]byte{1},
-		DiskSizeBytes: 4096,
-		MaxIOBytes:    1024,
+		GatewayToken: gatewayToken,
+		DiskID:       diskID,
+		AuthVerifier: [64]byte{1},
 	})
 	req := make([]byte, proto.HeaderSize+len(reqBody))
 	proto.EncodeHeader(proto.Header{

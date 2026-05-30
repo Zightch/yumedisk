@@ -13,16 +13,17 @@ const (
 )
 
 const (
-	OpAuthStart          = 0x01
-	OpAuthFinish         = 0x02
-	OpSessionOpen        = 0x03
-	OpSessionDescribe    = 0x04
-	OpSessionCloseNotice = 0x05
-	OpReadAt             = 0x10
-	OpWriteAt            = 0x11
-	OpConnHeartbeat      = 0x12
-	OpStorerRegister     = 0x20
-	OpLinkHeartbeat      = 0x21
+	OpAuthStart                = 0x01
+	OpAuthFinish               = 0x02
+	OpSessionOpen              = 0x03
+	OpSessionDescribe          = 0x04
+	OpSessionCloseNotice       = 0x05
+	OpSessionDataChangedNotice = 0x06
+	OpReadAt                   = 0x10
+	OpWriteAt                  = 0x11
+	OpConnHeartbeat            = 0x12
+	OpStorerRegister           = 0x20
+	OpLinkHeartbeat            = 0x21
 )
 
 const (

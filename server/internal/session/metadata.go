@@ -5,6 +5,7 @@ type Metadata struct {
 	DiskSizeBytes uint64
 	ReadOnly      bool
 	MaxIOBytes    uint32
+	BackendID     [16]byte
 }
 
 type Record struct {

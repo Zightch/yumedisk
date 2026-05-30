@@ -12,6 +12,7 @@ pub struct SessionMetadata {
     pub disk_size_bytes: u64,
     pub max_io_bytes: u32,
     pub read_only: bool,
+    pub backend_id: [u8; 16],
 }
 
 impl SessionMetadata {
@@ -19,6 +20,7 @@ impl SessionMetadata {
         disk_size_bytes: u64,
         max_io_bytes: u32,
         read_only: bool,
+        backend_id: [u8; 16],
     ) -> Result<Self, NetworkClientError> {
         if disk_size_bytes == 0 {
             return Err(NetworkClientError::InvalidArgument("disk_size_bytes"));
@@ -31,6 +33,7 @@ impl SessionMetadata {
             disk_size_bytes,
             max_io_bytes,
             read_only,
+            backend_id,
         })
     }
 }
@@ -63,6 +66,7 @@ impl SessionDescriber {
             response.disk_size_bytes,
             response.max_io_bytes,
             response.read_only,
+            response.backend_id,
         )
     }
 }
@@ -122,6 +126,7 @@ mod tests {
             body.extend_from_slice(&60_000u32.to_be_bytes());
             body.extend_from_slice(&1u16.to_be_bytes());
             body.extend_from_slice(&0u16.to_be_bytes());
+            body.extend_from_slice(&[9u8; 16]);
             let response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
                 header_len: HEADER_SIZE as u8,
@@ -153,6 +158,7 @@ mod tests {
                 disk_size_bytes: 4096,
                 max_io_bytes: 60_000,
                 read_only: true,
+                backend_id: [9u8; 16],
             }
         );
 

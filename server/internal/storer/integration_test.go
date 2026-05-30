@@ -70,7 +70,7 @@ func TestWholeRuntimeMinimalClosure(t *testing.T) {
 	if describeHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("describe status: %d", describeHeader.StatusCode)
 	}
-	diskSize, maxIOBytes, readOnly, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	diskSize, maxIOBytes, readOnly, _, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
 	if err != nil {
 		t.Fatalf("parse describe response: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestWholeRuntimeSupportsRWAndROSessionsTogether(t *testing.T) {
 	if rwDescribeHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("rw describe status: %d", rwDescribeHeader.StatusCode)
 	}
-	_, _, rwReadOnly, err := proto.ParseSessionDescribeResponseBody(rwDescribeResp[proto.HeaderSize:])
+	_, _, rwReadOnly, rwBackendID, err := proto.ParseSessionDescribeResponseBody(rwDescribeResp[proto.HeaderSize:])
 	if err != nil {
 		t.Fatalf("parse rw describe response: %v", err)
 	}
@@ -330,12 +330,15 @@ func TestWholeRuntimeSupportsRWAndROSessionsTogether(t *testing.T) {
 	if roDescribeHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("ro describe status: %d", roDescribeHeader.StatusCode)
 	}
-	_, _, roReadOnly, err := proto.ParseSessionDescribeResponseBody(roDescribeResp[proto.HeaderSize:])
+	_, _, roReadOnly, roBackendID, err := proto.ParseSessionDescribeResponseBody(roDescribeResp[proto.HeaderSize:])
 	if err != nil {
 		t.Fatalf("parse ro describe response: %v", err)
 	}
 	if !roReadOnly {
 		t.Fatal("ro session should be read only")
+	}
+	if rwBackendID != roBackendID {
+		t.Fatal("rw and ro exports should share one backend id")
 	}
 	roRequestIDOne++
 
@@ -345,6 +348,21 @@ func TestWholeRuntimeSupportsRWAndROSessionsTogether(t *testing.T) {
 		t.Fatalf("rw write status: %d", header.StatusCode)
 	}
 	rwRequestID++
+
+	dataChangedNotice := mustReadFrame(t, roConnOne)
+	dataChangedHeader := mustParseHeader(t, dataChangedNotice)
+	if dataChangedHeader.Flags != proto.FlagNotice {
+		t.Fatalf("expected data changed notice, got flags=%d", dataChangedHeader.Flags)
+	}
+	if dataChangedHeader.OpCode != proto.OpSessionDataChangedNotice {
+		t.Fatalf("unexpected notice op: %d", dataChangedHeader.OpCode)
+	}
+	if dataChangedHeader.SessionID != roSessionIDOne {
+		t.Fatalf("unexpected notice session id: %d", dataChangedHeader.SessionID)
+	}
+	if len(dataChangedNotice) != proto.HeaderSize {
+		t.Fatalf("unexpected data changed notice body length: %d", len(dataChangedNotice)-proto.HeaderSize)
+	}
 
 	roReadResp := mustRoundTrip(t, roConnOne, buildRequest(proto.OpReadAt, roRequestIDOne, roSessionIDOne, proto.BuildReadBody(32, 4)))
 	roReadHeader := mustParseHeader(t, roReadResp)
@@ -431,11 +449,9 @@ func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
 	defer conn.Close()
 
 	registerReq := proto.BuildStorerRegisterRequestBody(proto.StorerRegisterRequest{
-		GatewayToken:  "gateway-token",
-		DiskID:        material.DiskID,
-		AuthVerifier:  material.AuthVerifier,
-		DiskSizeBytes: 4096,
-		MaxIOBytes:    60 * 1024,
+		GatewayToken: "gateway-token",
+		DiskID:       material.DiskID,
+		AuthVerifier: material.AuthVerifier,
 	})
 	registerPayload := make([]byte, proto.HeaderSize+len(registerReq))
 	proto.EncodeHeader(proto.Header{
@@ -578,6 +594,12 @@ func mustRoundTrip(t *testing.T, conn net.Conn, payload []byte) []byte {
 	if err := transport.WriteFrame(conn, payload); err != nil {
 		t.Fatalf("write frame: %v", err)
 	}
+	return mustReadFrame(t, conn)
+}
+
+func mustReadFrame(t *testing.T, conn net.Conn) []byte {
+	t.Helper()
+
 	buffer := make([]byte, transport.MaxPayloadSize)
 	resp, err := transport.ReadFrameInto(conn, buffer)
 	if err != nil {

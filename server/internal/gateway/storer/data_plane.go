@@ -46,6 +46,35 @@ func (p *dataPlane) Open(_ uint64, entry route.Entry) (uint64, error) {
 	return header.SessionID, nil
 }
 
+func (p *dataPlane) Describe(routeConnectionID uint64, sessionID uint64) (session.Metadata, error) {
+	conn, ok := p.links.Lookup(routeConnectionID)
+	if !ok {
+		return session.Metadata{}, session.ErrSessionUnavailable
+	}
+
+	resp, err := p.roundTripData(conn, proto.OpSessionDescribe, sessionID, nil)
+	if err != nil {
+		return session.Metadata{}, session.ErrSessionUnavailable
+	}
+	header, err := proto.ParseHeader(resp)
+	if err != nil {
+		return session.Metadata{}, session.ErrSessionUnavailable
+	}
+	if header.StatusCode != proto.StatusOK {
+		return session.Metadata{}, mapResponseStatus(header.StatusCode)
+	}
+	diskSize, maxIOBytes, readOnly, backendID, err := proto.ParseSessionDescribeResponseBody(resp[proto.HeaderSize:])
+	if err != nil {
+		return session.Metadata{}, session.ErrSessionUnavailable
+	}
+	return session.Metadata{
+		DiskSizeBytes: diskSize,
+		ReadOnly:      readOnly,
+		MaxIOBytes:    maxIOBytes,
+		BackendID:     backendID,
+	}, nil
+}
+
 func (p *dataPlane) Close(routeConnectionID uint64, sessionID uint64) {
 	conn, ok := p.links.Lookup(routeConnectionID)
 	if !ok {

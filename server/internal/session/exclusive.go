@@ -23,6 +23,10 @@ func (m *exclusiveManager) Get(id uint64) (Record, bool) {
 	return m.state.Get(id)
 }
 
+func (m *exclusiveManager) List() []Record {
+	return m.state.List()
+}
+
 func (m *exclusiveManager) Close(id uint64) {
 	m.state.Close(id)
 }

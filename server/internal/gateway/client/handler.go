@@ -15,8 +15,9 @@ type Handler struct {
 	sessionOpener *clientsession.Opener
 	grants        *clientauth.Registry
 
-	noticeMu             sync.RWMutex
-	sessionCloseNotifier clientsession.CloseNotifier
+	noticeMu                   sync.RWMutex
+	sessionCloseNotifier       clientsession.CloseNotifier
+	sessionDataChangedNotifier clientsession.DataChangedNotifier
 }
 
 func NewHandler(routes RouteSource, sessions SessionDataPlane) (*Handler, error) {
@@ -112,6 +113,20 @@ func (h *Handler) SetSessionCloseNotifier(notifier clientsession.CloseNotifier) 
 	h.noticeMu.Unlock()
 }
 
+func (h *Handler) SetSessionDataChangedNotifier(notifier clientsession.DataChangedNotifier) {
+	h.noticeMu.Lock()
+	h.sessionDataChangedNotifier = notifier
+	h.noticeMu.Unlock()
+}
+
+func (h *Handler) NotifyRouteSessionDataChanged(routeConnectionID uint64, upstreamSessionID uint64) {
+	record, ok := h.sessionOpener.LookupRouteSession(routeConnectionID, upstreamSessionID)
+	if !ok {
+		return
+	}
+	h.emitSessionDataChanged(record)
+}
+
 func (h *Handler) closeRouteConnectionSessions(routeConnectionID uint64, diskIDs []string) []clientsession.Record {
 	for _, diskID := range diskIDs {
 		h.grants.CloseDisk(diskID)
@@ -133,4 +148,14 @@ func (h *Handler) emitSessionClosed(records []clientsession.Record, reason uint1
 	for _, record := range records {
 		notifier.NotifySessionClosed(record.ID, record.ClientConnectionID, reason)
 	}
+}
+
+func (h *Handler) emitSessionDataChanged(record clientsession.Record) {
+	h.noticeMu.RLock()
+	notifier := h.sessionDataChangedNotifier
+	h.noticeMu.RUnlock()
+	if notifier == nil {
+		return
+	}
+	notifier.NotifySessionDataChanged(record.ID, record.ClientConnectionID)
 }

@@ -20,6 +20,8 @@ type Service struct {
 	manager  Manager
 	storage  *filestorage.Backend
 	metadata Metadata
+
+	writeCommittedHook func(Record)
 }
 
 func NewService(manager Manager, storage *filestorage.Backend, metadata Metadata) *Service {
@@ -53,8 +55,32 @@ func (s *Service) MaxIOBytes() uint32 {
 	return s.metadata.MaxIOBytes
 }
 
+func (s *Service) Describe(sessionID uint64) (Metadata, error) {
+	record, ok := s.manager.Get(sessionID)
+	if !ok || record.Closing {
+		return Metadata{}, ErrSessionUnavailable
+	}
+	return record.Metadata, nil
+}
+
 func (s *Service) Metadata() Metadata {
 	return s.metadata
+}
+
+func (s *Service) LiveSessionIDs() []uint64 {
+	records := s.manager.List()
+	sessionIDs := make([]uint64, 0, len(records))
+	for _, record := range records {
+		if record.Closing {
+			continue
+		}
+		sessionIDs = append(sessionIDs, record.ID)
+	}
+	return sessionIDs
+}
+
+func (s *Service) SetWriteCommittedHook(hook func(Record)) {
+	s.writeCommittedHook = hook
 }
 
 func (s *Service) Manager() Manager {
@@ -99,6 +125,9 @@ func (s *Service) Write(sessionID uint64, offset uint64, data []byte) error {
 
 	if err := s.storage.WriteAt(offset, data); err != nil {
 		return mapStorageError(err)
+	}
+	if s.writeCommittedHook != nil {
+		s.writeCommittedHook(record)
 	}
 	return nil
 }

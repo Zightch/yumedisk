@@ -10,10 +10,11 @@ pub const FLAG_NOTICE: u8 = 1 << 1;
 pub const DISK_ID_BYTES: usize = 16;
 pub const AUTH_SALT_BYTES: usize = 16;
 pub const AUTH_PROOF_BYTES: usize = 64;
+pub const BACKEND_ID_BYTES: usize = 16;
 pub const AUTH_CHALLENGE_TOKEN_MIN_BYTES: usize = 1;
 pub const AUTH_ALGO_VERSION_V1: u8 = 1;
 pub const AUTH_FINISH_RESPONSE_BYTES: usize = 8;
-pub const SESSION_DESCRIBE_RESPONSE_BYTES: usize = 16;
+pub const SESSION_DESCRIBE_RESPONSE_BYTES: usize = 32;
 pub const SESSION_CLOSE_NOTICE_BYTES: usize = 2;
 pub const READ_WRITE_FIXED_BODY_BYTES: usize = 12;
 pub const SESSION_FLAG_READ_ONLY: u16 = 1 << 0;
@@ -33,6 +34,7 @@ pub enum ClientOperationCode {
     SessionOpen = 0x03,
     SessionDescribe = 0x04,
     SessionCloseNotice = 0x05,
+    SessionDataChangedNotice = 0x06,
     ReadAt = 0x10,
     WriteAt = 0x11,
     ConnHeartbeat = 0x12,
@@ -46,6 +48,7 @@ impl ClientOperationCode {
             0x03 => Ok(Self::SessionOpen),
             0x04 => Ok(Self::SessionDescribe),
             0x05 => Ok(Self::SessionCloseNotice),
+            0x06 => Ok(Self::SessionDataChangedNotice),
             0x10 => Ok(Self::ReadAt),
             0x11 => Ok(Self::WriteAt),
             0x12 => Ok(Self::ConnHeartbeat),
@@ -229,6 +232,7 @@ pub struct SessionDescribeResponse {
     pub disk_size_bytes: u64,
     pub max_io_bytes: u32,
     pub read_only: bool,
+    pub backend_id: [u8; BACKEND_ID_BYTES],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -260,6 +264,11 @@ pub struct ConnHeartbeatResponse;
 pub struct SessionCloseNotice {
     pub session_id: u64,
     pub reason_code: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionDataChangedNotice {
+    pub session_id: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -502,12 +511,15 @@ impl SessionDescribeResponse {
         if max_io_bytes == 0 || max_io_bytes > ABSOLUTE_MAX_IO_BYTES {
             return Err(ProtocolClientError::InvalidBody("max_io_bytes"));
         }
+        let mut backend_id = [0u8; BACKEND_ID_BYTES];
+        backend_id.copy_from_slice(&body[16..32]);
 
         Ok(Self {
             session_id: expected_session_id,
             disk_size_bytes,
             max_io_bytes,
             read_only: session_flags & SESSION_FLAG_READ_ONLY != 0,
+            backend_id,
         })
     }
 }
@@ -619,7 +631,9 @@ impl SessionCloseNotice {
     pub fn encode_notice(&self) -> Result<Vec<u8>, ProtocolClientError> {
         validate_non_zero_session_id(self.session_id)?;
         if self.reason_code == 0 {
-            return Err(ProtocolClientError::InvalidBody("session_close_reason_code"));
+            return Err(ProtocolClientError::InvalidBody(
+                "session_close_reason_code",
+            ));
         }
 
         Ok(ProtocolHeader {
@@ -668,6 +682,44 @@ impl SessionCloseNotice {
         Ok(Self {
             session_id: header.session_id,
             reason_code,
+        })
+    }
+}
+
+impl SessionDataChangedNotice {
+    pub fn decode_notice(payload: &[u8]) -> Result<Self, ProtocolClientError> {
+        let header = parse_header(payload)?;
+        if header.flags != FLAG_NOTICE {
+            return Err(ProtocolClientError::UnexpectedFlags {
+                expected: FLAG_NOTICE,
+                actual: header.flags,
+            });
+        }
+        if header.reserved != 0 {
+            return Err(ProtocolClientError::ReservedNonZero(header.reserved));
+        }
+        if header.op_code != ClientOperationCode::SessionDataChangedNotice {
+            return Err(ProtocolClientError::UnexpectedOpCode {
+                expected: Some(ClientOperationCode::SessionDataChangedNotice),
+                actual: header.op_code as u8,
+            });
+        }
+        if header.status_code != ProtocolStatusCode::Ok {
+            return Err(ProtocolClientError::InvalidBody("notice_status_code"));
+        }
+        if header.request_id != 0 || header.session_id == 0 {
+            return Err(ProtocolClientError::InvalidBody(
+                "session_data_changed_notice_header",
+            ));
+        }
+        let body = &payload[HEADER_SIZE..];
+        if !body.is_empty() {
+            return Err(ProtocolClientError::InvalidBody(
+                "session_data_changed_notice_len",
+            ));
+        }
+        Ok(Self {
+            session_id: header.session_id,
         })
     }
 }
@@ -870,6 +922,7 @@ mod tests {
     use super::AuthFinishRequest;
     use super::AuthStartRequest;
     use super::AuthStartResponse;
+    use super::BACKEND_ID_BYTES;
     use super::ClientOperationCode;
     use super::ConnHeartbeatRequest;
     use super::ConnHeartbeatResponse;
@@ -1007,6 +1060,7 @@ mod tests {
         body.extend_from_slice(&60_000u32.to_be_bytes());
         body.extend_from_slice(&1u16.to_be_bytes());
         body.extend_from_slice(&0u16.to_be_bytes());
+        body.extend_from_slice(&[7u8; BACKEND_ID_BYTES]);
         let response_payload = ProtocolHeader {
             protocol_version: PROTOCOL_VERSION,
             header_len: HEADER_LEN,
@@ -1024,6 +1078,7 @@ mod tests {
         assert_eq!(response.disk_size_bytes, 4096);
         assert_eq!(response.max_io_bytes, 60_000);
         assert!(response.read_only);
+        assert_eq!(response.backend_id, [7u8; BACKEND_ID_BYTES]);
     }
 
     #[test]
@@ -1089,7 +1144,10 @@ mod tests {
         .encode_notice()
         .expect("notice encode should succeed");
         assert_eq!(close_notice.len(), HEADER_SIZE + SESSION_CLOSE_NOTICE_BYTES);
-        assert_eq!(close_notice[2], ClientOperationCode::SessionCloseNotice as u8);
+        assert_eq!(
+            close_notice[2],
+            ClientOperationCode::SessionCloseNotice as u8
+        );
         assert_eq!(close_notice[3], FLAG_NOTICE);
         assert_eq!(&close_notice[8..16], &0u64.to_be_bytes());
         assert_eq!(&close_notice[16..24], &7u64.to_be_bytes());

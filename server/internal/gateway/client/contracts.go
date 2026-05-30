@@ -1,6 +1,9 @@
 package client
 
-import "yumedisk/server/internal/route"
+import (
+	"yumedisk/server/internal/route"
+	"yumedisk/server/internal/session"
+)
 
 type RouteSource interface {
 	LookupRoute(diskID string) (route.Entry, bool)
@@ -8,6 +11,7 @@ type RouteSource interface {
 
 type SessionDataPlane interface {
 	Open(connectionID uint64, entry route.Entry) (uint64, error)
+	Describe(routeConnectionID uint64, sessionID uint64) (session.Metadata, error)
 	Close(routeConnectionID uint64, sessionID uint64)
 	CloseConnection(connectionID uint64)
 	Read(routeConnectionID uint64, sessionID uint64, offset uint64, length uint32) ([]byte, error)

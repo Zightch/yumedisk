@@ -128,18 +128,19 @@ func (c *gatewayTestExport) DiskID() string {
 	return c.metadata.DiskID
 }
 
+func (c *gatewayTestExport) ReadOnly() bool {
+	return c.metadata.ReadOnly
+}
+
 func (c *gatewayTestExport) SessionService() *session.Service {
 	return c.sessions
 }
 
 func (c *gatewayTestExport) RouteEntry(routeTarget string, connectionID uint64) route.Entry {
 	return route.Entry{
-		DiskID:        c.metadata.DiskID,
-		RouteTarget:   routeTarget,
-		ConnectionID:  connectionID,
-		Connected:     true,
-		DiskSizeBytes: c.metadata.DiskSizeBytes,
-		ReadOnly:      c.metadata.ReadOnly,
-		MaxIOBytes:    c.metadata.MaxIOBytes,
+		DiskID:       c.metadata.DiskID,
+		RouteTarget:  routeTarget,
+		ConnectionID: connectionID,
+		Connected:    true,
 	}
 }

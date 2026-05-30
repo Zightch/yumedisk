@@ -14,14 +14,11 @@ type testGatewayBackend struct {
 func newTestGatewayBackend(material auth.Material, sessions *session.Service, diskSize uint64, readOnly bool) *testGatewayBackend {
 	routes := route.NewRegistry()
 	_ = routes.Register(route.Entry{
-		DiskID:        material.DiskID,
-		AuthVerifier:  material.AuthVerifier,
-		RouteTarget:   "test://local",
-		ConnectionID:  0,
-		Connected:     true,
-		DiskSizeBytes: diskSize,
-		ReadOnly:      readOnly,
-		MaxIOBytes:    sessions.MaxIOBytes(),
+		DiskID:       material.DiskID,
+		AuthVerifier: material.AuthVerifier,
+		RouteTarget:  "test://local",
+		ConnectionID: 0,
+		Connected:    true,
 	})
 	return &testGatewayBackend{
 		sessions: sessions,
@@ -47,6 +44,10 @@ func (b *testGatewayBackend) Open(connectionID uint64, entry route.Entry) (uint6
 
 func (b *testGatewayBackend) Close(routeConnectionID uint64, sessionID uint64) {
 	b.sessions.Close(sessionID)
+}
+
+func (b *testGatewayBackend) Describe(routeConnectionID uint64, sessionID uint64) (session.Metadata, error) {
+	return b.sessions.Describe(sessionID)
 }
 
 func (b *testGatewayBackend) CloseConnection(connectionID uint64) {

@@ -391,22 +391,16 @@ func newScopeTestBackend(t *testing.T) *scopeTestBackend {
 
 	routes := route.NewRegistry()
 	rwEntry := route.Entry{
-		DiskID:        scopeTestRWDiskID,
-		RouteTarget:   "storer://scope-rw",
-		ConnectionID:  scopeTestRWRouteConnID,
-		Connected:     true,
-		DiskSizeBytes: scopeTestDiskSizeBytes,
-		ReadOnly:      false,
-		MaxIOBytes:    scopeTestMaxIOBytes,
+		DiskID:       scopeTestRWDiskID,
+		RouteTarget:  "storer://scope-rw",
+		ConnectionID: scopeTestRWRouteConnID,
+		Connected:    true,
 	}
 	roEntry := route.Entry{
-		DiskID:        scopeTestRODiskID,
-		RouteTarget:   "storer://scope-ro",
-		ConnectionID:  scopeTestRORouteConnID,
-		Connected:     true,
-		DiskSizeBytes: scopeTestDiskSizeBytes,
-		ReadOnly:      true,
-		MaxIOBytes:    scopeTestMaxIOBytes,
+		DiskID:       scopeTestRODiskID,
+		RouteTarget:  "storer://scope-ro",
+		ConnectionID: scopeTestRORouteConnID,
+		Connected:    true,
 	}
 	if err := routes.Register(rwEntry); err != nil {
 		t.Fatalf("register rw route: %v", err)
@@ -465,6 +459,10 @@ func (b *scopeTestBackend) Close(routeConnectionID uint64, sessionID uint64) {
 	})
 	b.mu.Unlock()
 	service.Close(sessionID)
+}
+
+func (b *scopeTestBackend) Describe(routeConnectionID uint64, sessionID uint64) (session.Metadata, error) {
+	return b.services[routeConnectionID].Describe(sessionID)
 }
 
 func (b *scopeTestBackend) CloseConnection(uint64) {}

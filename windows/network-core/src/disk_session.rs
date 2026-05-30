@@ -114,10 +114,12 @@ impl DiskSession {
         };
 
         if should_send_notice {
-            let _ = self.connection.send_session_close_notice(SessionCloseNotice {
-                session_id: self.session_id,
-                reason_code: SESSION_CLOSE_REASON_NORMAL_CLOSE,
-            });
+            let _ = self
+                .connection
+                .send_session_close_notice(SessionCloseNotice {
+                    session_id: self.session_id,
+                    reason_code: SESSION_CLOSE_REASON_NORMAL_CLOSE,
+                });
         }
 
         self.mark_closed();

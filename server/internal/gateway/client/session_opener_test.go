@@ -28,7 +28,7 @@ func TestSessionOpenDescribeReadWriteAndClose(t *testing.T) {
 	if describeHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected describe status: %d", describeHeader.StatusCode)
 	}
-	diskSize, maxIOBytes, readOnly, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	diskSize, maxIOBytes, readOnly, _, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
 	if err != nil {
 		t.Fatalf("parse describe body: %v", err)
 	}

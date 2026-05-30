@@ -18,6 +18,7 @@ use super::protocol_client::ConnHeartbeatRequest;
 use super::protocol_client::ConnHeartbeatResponse;
 use super::protocol_client::ProtocolClientError;
 use super::protocol_client::SessionCloseNotice;
+use super::protocol_client::SessionDataChangedNotice;
 use super::protocol_client::parse_header;
 use super::protocol_client::parse_request_header;
 use super::transport_client::TransportClient;
@@ -41,6 +42,8 @@ pub struct GatewayConnection {
     pending_requests: Mutex<HashMap<u64, PendingRequest>>,
     disconnect_handler: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     session_notice_handler: Mutex<Option<Arc<dyn Fn(SessionCloseNotice) + Send + Sync>>>,
+    session_data_changed_handler:
+        Mutex<Option<Arc<dyn Fn(SessionDataChangedNotice) + Send + Sync>>>,
     lifecycle: Mutex<ConnectionLifecycle>,
     receive_loop_started: AtomicBool,
     heartbeat_loop_started: AtomicBool,
@@ -104,6 +107,7 @@ impl GatewayConnection {
             pending_requests: Mutex::new(HashMap::new()),
             disconnect_handler: Mutex::new(None),
             session_notice_handler: Mutex::new(None),
+            session_data_changed_handler: Mutex::new(None),
             lifecycle: Mutex::new(ConnectionLifecycle::default()),
             receive_loop_started: AtomicBool::new(false),
             heartbeat_loop_started: AtomicBool::new(false),
@@ -145,6 +149,16 @@ impl GatewayConnection {
             .session_notice_handler
             .lock()
             .expect("session_notice_handler poisoned") = handler;
+    }
+
+    pub fn set_session_data_changed_handler(
+        &self,
+        handler: Option<Arc<dyn Fn(SessionDataChangedNotice) + Send + Sync>>,
+    ) {
+        *self
+            .session_data_changed_handler
+            .lock()
+            .expect("session_data_changed_handler poisoned") = handler;
     }
 
     pub fn set_disconnect_handler(&self, handler: Option<Arc<dyn Fn() + Send + Sync>>) {
@@ -209,7 +223,9 @@ impl GatewayConnection {
         &self,
         notice: SessionCloseNotice,
     ) -> Result<(), NetworkClientError> {
-        let payload = notice.encode_notice().map_err(NetworkClientError::Protocol)?;
+        let payload = notice
+            .encode_notice()
+            .map_err(NetworkClientError::Protocol)?;
         let header = parse_header(&payload).map_err(NetworkClientError::Protocol)?;
         if !header.is_notice() {
             return Err(NetworkClientError::Protocol(
@@ -219,7 +235,9 @@ impl GatewayConnection {
                 },
             ));
         }
-        self.transport.send_payload(payload).map_err(map_transport_error)
+        self.transport
+            .send_payload(payload)
+            .map_err(map_transport_error)
     }
 
     pub(crate) fn pending_request_count(&self) -> usize {
@@ -482,6 +500,19 @@ impl GatewayConnection {
                 .session_notice_handler
                 .lock()
                 .expect("session_notice_handler poisoned")
+                .as_ref()
+            {
+                handler(notice);
+            }
+            return Ok(());
+        }
+        if header.op_code == ClientOperationCode::SessionDataChangedNotice {
+            let notice = SessionDataChangedNotice::decode_notice(&payload)
+                .map_err(NetworkClientError::Protocol)?;
+            if let Some(handler) = self
+                .session_data_changed_handler
+                .lock()
+                .expect("session_data_changed_handler poisoned")
                 .as_ref()
             {
                 handler(notice);
@@ -925,6 +956,44 @@ mod tests {
     }
 
     #[test]
+    fn gateway_connection_emits_session_data_changed_notice_without_clearing_session() {
+        let connection = GatewayConnection::new(TransportEndpoint::new("127.0.0.1:1"));
+        connection
+            .begin_session_open()
+            .expect("begin session open should succeed");
+        connection
+            .finish_session_open(77)
+            .expect("finish session open should succeed");
+        let (notice_tx, notice_rx) = mpsc::channel();
+        connection.set_session_data_changed_handler(Some(Arc::new(move |notice| {
+            let _ = notice_tx.send(notice.session_id);
+        })));
+
+        let payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: crate::network::HEADER_SIZE as u8,
+            op_code: ClientOperationCode::SessionDataChangedNotice,
+            flags: FLAG_NOTICE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 0,
+            session_id: 77,
+        }
+        .encode(&[]);
+        connection
+            .dispatch_response(payload)
+            .expect("notice dispatch should succeed");
+
+        assert_eq!(
+            notice_rx
+                .recv_timeout(Duration::from_millis(50))
+                .expect("data changed handler should fire"),
+            77
+        );
+        assert!(connection.is_session_active(77));
+    }
+
+    #[test]
     fn gateway_connection_sends_session_close_notice_without_pending_request() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
         let address = listener.local_addr().expect("local_addr should succeed");
@@ -959,10 +1028,7 @@ mod tests {
                         assert_eq!(header.flags, FLAG_NOTICE);
                         assert_eq!(header.request_id, 0);
                         assert_eq!(header.session_id, 41);
-                        assert_eq!(
-                            &payload[crate::network::HEADER_SIZE..],
-                            &5u16.to_be_bytes()
-                        );
+                        assert_eq!(&payload[crate::network::HEADER_SIZE..], &5u16.to_be_bytes());
                         return;
                     }
                     other => panic!("unexpected op code: {other:?}"),

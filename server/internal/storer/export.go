@@ -24,12 +24,13 @@ type Export struct {
 	sessions *session.Service
 }
 
-func newRWExport(material auth.Material, storage *sharedStorage) *Export {
+func newRWExport(material auth.Material, storage *sharedStorage, backendID [16]byte) *Export {
 	metadata := session.Metadata{
 		DiskID:        material.DiskID,
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      false,
 		MaxIOBytes:    defaultSessionMaxIO,
+		BackendID:     backendID,
 	}
 	return &Export{
 		id:       ExportIDRW,
@@ -40,12 +41,13 @@ func newRWExport(material auth.Material, storage *sharedStorage) *Export {
 	}
 }
 
-func newROExport(material auth.Material, storage *sharedStorage) *Export {
+func newROExport(material auth.Material, storage *sharedStorage, backendID [16]byte) *Export {
 	metadata := session.Metadata{
 		DiskID:        material.DiskID,
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      true,
 		MaxIOBytes:    defaultSessionMaxIO,
+		BackendID:     backendID,
 	}
 	return &Export{
 		id:       ExportIDRO,
@@ -78,24 +80,18 @@ func (e *Export) SessionService() *session.Service {
 
 func (e *Export) RouteEntry(routeTarget string, connectionID uint64) route.Entry {
 	return route.Entry{
-		DiskID:        e.metadata.DiskID,
-		AuthVerifier:  e.material.AuthVerifier,
-		RouteTarget:   routeTarget,
-		ConnectionID:  connectionID,
-		Connected:     true,
-		DiskSizeBytes: e.metadata.DiskSizeBytes,
-		ReadOnly:      e.metadata.ReadOnly,
-		MaxIOBytes:    e.metadata.MaxIOBytes,
+		DiskID:       e.metadata.DiskID,
+		AuthVerifier: e.material.AuthVerifier,
+		RouteTarget:  routeTarget,
+		ConnectionID: connectionID,
+		Connected:    true,
 	}
 }
 
 func (e *Export) GatewayRegisterInfo(gatewayToken string) gatewaylink.RegisterInfo {
 	return gatewaylink.RegisterInfo{
-		GatewayToken:  gatewayToken,
-		DiskID:        e.metadata.DiskID,
-		AuthVerifier:  e.material.AuthVerifier,
-		DiskSizeBytes: e.metadata.DiskSizeBytes,
-		ReadOnly:      e.metadata.ReadOnly,
-		MaxIOBytes:    e.metadata.MaxIOBytes,
+		GatewayToken: gatewayToken,
+		DiskID:       e.metadata.DiskID,
+		AuthVerifier: e.material.AuthVerifier,
 	}
 }

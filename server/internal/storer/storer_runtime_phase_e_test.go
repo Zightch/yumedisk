@@ -175,10 +175,13 @@ func TestStorerRuntimeReconnectsOnlyDroppedLinkAndKeepsPeerAlive(t *testing.T) {
 	var rwEvent registerEvent
 	var roEvent registerEvent
 	for _, event := range events {
-		if event.request.ReadOnly {
-			roEvent = event
-		} else {
+		switch event.request.DiskID {
+		case rwMaterial.DiskID:
 			rwEvent = event
+		case roMaterial.DiskID:
+			roEvent = event
+		default:
+			t.Fatalf("unexpected disk id: %q", event.request.DiskID)
 		}
 	}
 	defer roEvent.conn.Close()
@@ -379,15 +382,6 @@ func assertRegisterRequestMatches(t *testing.T, request proto.StorerRegisterRequ
 	}
 	if request.AuthVerifier != material.AuthVerifier {
 		t.Fatal("unexpected auth verifier")
-	}
-	if request.ReadOnly != readOnly {
-		t.Fatalf("unexpected read_only: got=%v want=%v", request.ReadOnly, readOnly)
-	}
-	if request.DiskSizeBytes != 4096 {
-		t.Fatalf("unexpected disk size: %d", request.DiskSizeBytes)
-	}
-	if request.MaxIOBytes != 60*1024 {
-		t.Fatalf("unexpected max io bytes: %d", request.MaxIOBytes)
 	}
 }
 

@@ -7,14 +7,11 @@ func TestRegistryRegisterAndLookupRoute(t *testing.T) {
 
 	registry := NewRegistry()
 	entry := Entry{
-		DiskID:        "DISK000000000001",
-		AuthVerifier:  [64]byte{1, 2, 3},
-		RouteTarget:   "embedded://whole",
-		ConnectionID:  7,
-		Connected:     true,
-		DiskSizeBytes: 4096,
-		ReadOnly:      false,
-		MaxIOBytes:    8192,
+		DiskID:       "DISK000000000001",
+		AuthVerifier: [64]byte{1, 2, 3},
+		RouteTarget:  "embedded://whole",
+		ConnectionID: 7,
+		Connected:    true,
 	}
 	if err := registry.Register(entry); err != nil {
 		t.Fatalf("register route: %v", err)
@@ -35,12 +32,6 @@ func TestRegistryRegisterAndLookupRoute(t *testing.T) {
 	}
 	if got.ConnectionID != entry.ConnectionID {
 		t.Fatalf("unexpected connection id: %d", got.ConnectionID)
-	}
-	if got.DiskSizeBytes != entry.DiskSizeBytes {
-		t.Fatalf("unexpected disk size: %d", got.DiskSizeBytes)
-	}
-	if got.MaxIOBytes != entry.MaxIOBytes {
-		t.Fatalf("unexpected max io bytes: %d", got.MaxIOBytes)
 	}
 }
 

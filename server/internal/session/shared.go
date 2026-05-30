@@ -20,6 +20,10 @@ func (m *sharedManager) Get(id uint64) (Record, bool) {
 	return m.state.Get(id)
 }
 
+func (m *sharedManager) List() []Record {
+	return m.state.List()
+}
+
 func (m *sharedManager) Close(id uint64) {
 	m.state.Close(id)
 }

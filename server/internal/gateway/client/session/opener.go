@@ -62,10 +62,6 @@ func (o *Opener) HandleSessionOpen(state ConnectionState, header proto.Header, b
 		ClientConnectionID: state.ConnectionID(),
 		RouteConnectionID:  routeEntry.ConnectionID,
 		UpstreamSessionID:  upstreamSessionID,
-		DiskID:             routeEntry.DiskID,
-		DiskSizeBytes:      routeEntry.DiskSizeBytes,
-		ReadOnly:           routeEntry.ReadOnly,
-		MaxIOBytes:         routeEntry.MaxIOBytes,
 	})
 	if consumedDiskID, ok := o.grants.ConsumeDisk(authID); !ok || consumedDiskID != routeEntry.DiskID {
 		o.registry.Close(gatewaySessionID)
@@ -95,7 +91,19 @@ func (o *Opener) HandleDescribe(state ConnectionState, header proto.Header, body
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
 
-	bodyOut := proto.BuildSessionDescribeResponseBody(record.DiskSizeBytes, record.MaxIOBytes, record.ReadOnly)
+	metadata, err := o.sessions.Describe(record.RouteConnectionID, record.UpstreamSessionID)
+	if err != nil {
+		if err == serversession.ErrSessionUnavailable {
+			o.registry.Close(header.SessionID)
+		}
+		return o.mapSessionError(header, err), nil
+	}
+	bodyOut := proto.BuildSessionDescribeResponseBody(
+		metadata.DiskSizeBytes,
+		metadata.MaxIOBytes,
+		metadata.ReadOnly,
+		metadata.BackendID,
+	)
 	return proto.BuildSuccessResponse(header, bodyOut), nil
 }
 
@@ -186,6 +194,10 @@ func (o *Opener) CloseConnection(connectionID uint64) {
 
 func (o *Opener) CloseRouteConnection(routeConnectionID uint64) []Record {
 	return o.registry.CloseRouteConnection(routeConnectionID)
+}
+
+func (o *Opener) LookupRouteSession(routeConnectionID uint64, upstreamSessionID uint64) (Record, bool) {
+	return o.registry.LookupRouteSession(routeConnectionID, upstreamSessionID)
 }
 
 func (o *Opener) mapSessionError(header proto.Header, err error) []byte {

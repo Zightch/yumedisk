@@ -17,5 +17,10 @@ fn main() {
         ])
         .compile("appkernel");
 
+    println!(
+        "cargo:rustc-link-search=native={}",
+        std::env::var("OUT_DIR").expect("OUT_DIR should exist")
+    );
+    println!("cargo:rustc-link-lib=static=appkernel");
     println!("cargo:rustc-link-lib=setupapi");
 }

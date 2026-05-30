@@ -9,12 +9,9 @@ import (
 )
 
 type RegisterInfo struct {
-	GatewayToken  string
-	DiskID        string
-	AuthVerifier  [64]byte
-	DiskSizeBytes uint64
-	ReadOnly      bool
-	MaxIOBytes    uint32
+	GatewayToken string
+	DiskID       string
+	AuthVerifier [64]byte
 }
 
 type RegisterClient struct {
@@ -24,12 +21,9 @@ type RegisterClient struct {
 func NewRegisterClient(info RegisterInfo) *RegisterClient {
 	return &RegisterClient{
 		request: proto.StorerRegisterRequest{
-			GatewayToken:  info.GatewayToken,
-			DiskID:        info.DiskID,
-			AuthVerifier:  info.AuthVerifier,
-			DiskSizeBytes: info.DiskSizeBytes,
-			ReadOnly:      info.ReadOnly,
-			MaxIOBytes:    info.MaxIOBytes,
+			GatewayToken: info.GatewayToken,
+			DiskID:       info.DiskID,
+			AuthVerifier: info.AuthVerifier,
 		},
 	}
 }

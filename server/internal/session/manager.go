@@ -8,6 +8,7 @@ import (
 type Manager interface {
 	Open(record Record) (Record, error)
 	Get(id uint64) (Record, bool)
+	List() []Record
 	Close(id uint64)
 	CloseConnection(connectionID uint64)
 	beginIO(sessionID uint64) (Record, *ioLease, error)
@@ -55,6 +56,16 @@ func (s *managerState) Get(id uint64) (Record, bool) {
 	defer s.mu.RUnlock()
 	entry, ok := s.items[id]
 	return entry.record, ok
+}
+
+func (s *managerState) List() []Record {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	records := make([]Record, 0, len(s.items))
+	for _, entry := range s.items {
+		records = append(records, entry.record)
+	}
+	return records
 }
 
 func (s *managerState) Close(id uint64) {

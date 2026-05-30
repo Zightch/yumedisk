@@ -30,14 +30,11 @@ func (g *registerGate) Handle(connectionID uint64, remoteAddr string, header pro
 		return proto.BuildErrorResponse(header, proto.StatusAuthFailed), false
 	}
 	if err := g.routes.Register(route.Entry{
-		DiskID:        req.DiskID,
-		AuthVerifier:  req.AuthVerifier,
-		RouteTarget:   remoteAddr,
-		ConnectionID:  connectionID,
-		Connected:     true,
-		DiskSizeBytes: req.DiskSizeBytes,
-		ReadOnly:      req.ReadOnly,
-		MaxIOBytes:    req.MaxIOBytes,
+		DiskID:       req.DiskID,
+		AuthVerifier: req.AuthVerifier,
+		RouteTarget:  remoteAddr,
+		ConnectionID: connectionID,
+		Connected:    true,
 	}); err != nil {
 		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), false
 	}

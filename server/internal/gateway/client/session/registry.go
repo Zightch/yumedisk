@@ -12,26 +12,24 @@ type Record struct {
 	ClientConnectionID uint64
 	RouteConnectionID  uint64
 	UpstreamSessionID  uint64
-	DiskID             string
-	DiskSizeBytes      uint64
-	ReadOnly           bool
-	MaxIOBytes         uint32
 }
 
 type registry struct {
 	nextID atomic.Uint64
 
-	mu      sync.RWMutex
-	items   map[uint64]Record
-	byConn  map[uint64]map[uint64]struct{}
-	byRoute map[uint64]map[uint64]struct{}
+	mu         sync.RWMutex
+	items      map[uint64]Record
+	byConn     map[uint64]map[uint64]struct{}
+	byRoute    map[uint64]map[uint64]struct{}
+	byUpstream map[uint64]map[uint64]uint64
 }
 
 func newRegistry() *registry {
 	return &registry{
-		items:   make(map[uint64]Record),
-		byConn:  make(map[uint64]map[uint64]struct{}),
-		byRoute: make(map[uint64]map[uint64]struct{}),
+		items:      make(map[uint64]Record),
+		byConn:     make(map[uint64]map[uint64]struct{}),
+		byRoute:    make(map[uint64]map[uint64]struct{}),
+		byUpstream: make(map[uint64]map[uint64]uint64),
 	}
 }
 
@@ -52,6 +50,10 @@ func (r *registry) Open(record Record) uint64 {
 		r.byRoute[record.RouteConnectionID] = make(map[uint64]struct{})
 	}
 	r.byRoute[record.RouteConnectionID][id] = struct{}{}
+	if _, ok := r.byUpstream[record.RouteConnectionID]; !ok {
+		r.byUpstream[record.RouteConnectionID] = make(map[uint64]uint64)
+	}
+	r.byUpstream[record.RouteConnectionID][record.UpstreamSessionID] = id
 	r.mu.Unlock()
 	return id
 }
@@ -71,6 +73,22 @@ func (r *registry) LookupOwned(id uint64, clientConnectionID uint64) (Record, bo
 	return record, true
 }
 
+func (r *registry) LookupRouteSession(routeConnectionID uint64, upstreamSessionID uint64) (Record, bool) {
+	r.mu.RLock()
+	owned := r.byUpstream[routeConnectionID]
+	id, ok := owned[upstreamSessionID]
+	if !ok {
+		r.mu.RUnlock()
+		return Record{}, false
+	}
+	record, ok := r.items[id]
+	r.mu.RUnlock()
+	if !ok {
+		return Record{}, false
+	}
+	return record, true
+}
+
 func (r *registry) Close(id uint64) (Record, bool) {
 	r.mu.Lock()
 	record, ok := r.items[id]
@@ -78,6 +96,7 @@ func (r *registry) Close(id uint64) (Record, bool) {
 		delete(r.items, id)
 		r.removeClientIndex(record.ClientConnectionID, id)
 		r.removeRouteIndex(record.RouteConnectionID, id)
+		r.removeUpstreamIndex(record.RouteConnectionID, record.UpstreamSessionID)
 	}
 	r.mu.Unlock()
 	return record, ok
@@ -95,6 +114,7 @@ func (r *registry) CloseConnection(connectionID uint64) []Record {
 		records = append(records, record)
 		delete(r.items, id)
 		r.removeRouteIndex(record.RouteConnectionID, id)
+		r.removeUpstreamIndex(record.RouteConnectionID, record.UpstreamSessionID)
 	}
 	delete(r.byConn, connectionID)
 	r.mu.Unlock()
@@ -113,6 +133,7 @@ func (r *registry) CloseRouteConnection(routeConnectionID uint64) []Record {
 		records = append(records, record)
 		delete(r.items, id)
 		r.removeClientIndex(record.ClientConnectionID, id)
+		r.removeUpstreamIndex(record.RouteConnectionID, record.UpstreamSessionID)
 	}
 	delete(r.byRoute, routeConnectionID)
 	r.mu.Unlock()
@@ -164,5 +185,16 @@ func (r *registry) removeRouteIndex(routeConnectionID uint64, sessionID uint64) 
 	delete(owned, sessionID)
 	if len(owned) == 0 {
 		delete(r.byRoute, routeConnectionID)
+	}
+}
+
+func (r *registry) removeUpstreamIndex(routeConnectionID uint64, upstreamSessionID uint64) {
+	owned, ok := r.byUpstream[routeConnectionID]
+	if !ok {
+		return
+	}
+	delete(owned, upstreamSessionID)
+	if len(owned) == 0 {
+		delete(r.byUpstream, routeConnectionID)
 	}
 }

@@ -83,6 +83,7 @@ fn run_command_loop(host: &Arc<Mutex<CliHost>>) -> AppResult<()> {
 
     loop {
         reap_host_events(host);
+        reap_network_data_changed(host);
         reap_dead_network_disks(host);
         print!("> ");
         io::stdout()
@@ -108,6 +109,7 @@ fn run_command_loop(host: &Arc<Mutex<CliHost>>) -> AppResult<()> {
             Ok(LoopControl::Continue) => {
                 drop(host_guard);
                 reap_host_events(host);
+                reap_network_data_changed(host);
                 reap_dead_network_disks(host);
             }
             Ok(LoopControl::Exit) => {
@@ -622,6 +624,16 @@ fn reap_dead_network_disks(host: &Arc<Mutex<CliHost>>) {
     }
 }
 
+fn reap_network_data_changed(host: &Arc<Mutex<CliHost>>) {
+    if let Err(error) = host
+        .lock()
+        .expect("host poisoned")
+        .apply_network_data_changed()
+    {
+        eprintln!("error: apply-network-data-changed: {}", error);
+    }
+}
+
 struct DeadNetworkReaper {
     stop: Arc<AtomicBool>,
     thread: thread::JoinHandle<()>,
@@ -633,6 +645,7 @@ fn start_dead_network_reaper(host: Arc<Mutex<CliHost>>) -> DeadNetworkReaper {
     let thread = thread::spawn(move || {
         while !stop_flag.load(Ordering::Acquire) {
             reap_host_events(&host);
+            reap_network_data_changed(&host);
             reap_dead_network_disks(&host);
             thread::sleep(Duration::from_millis(200));
         }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
+	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/session"
 	"yumedisk/server/internal/transport"
 )
@@ -15,6 +17,9 @@ type LinkRuntime struct {
 	registerClient   *RegisterClient
 	sessions         *session.Service
 	heartbeatTimeout time.Duration
+
+	activeRuntimeMu sync.RWMutex
+	activeRuntime   *transport.Runtime
 }
 
 func NewLinkRuntime(
@@ -64,6 +69,8 @@ func (r *LinkRuntime) Run(ctx context.Context, connectionID uint64, onReady func
 	defer watchdog.Stop()
 
 	runtime := transport.NewRuntime(conn, handler)
+	r.setActiveRuntime(runtime)
+	defer r.setActiveRuntime(nil)
 	done := make(chan error, 1)
 	go func() {
 		done <- runtime.Run()
@@ -81,4 +88,22 @@ func (r *LinkRuntime) Run(ctx context.Context, connectionID uint64, onReady func
 	case err := <-done:
 		return err
 	}
+}
+
+func (r *LinkRuntime) NotifySessionDataChanged(sessionID uint64) {
+	r.activeRuntimeMu.RLock()
+	runtime := r.activeRuntime
+	r.activeRuntimeMu.RUnlock()
+	if runtime == nil {
+		return
+	}
+	if err := runtime.WritePayload(proto.BuildNotice(proto.OpSessionDataChangedNotice, sessionID, nil)); err != nil {
+		_ = runtime.Close()
+	}
+}
+
+func (r *LinkRuntime) setActiveRuntime(runtime *transport.Runtime) {
+	r.activeRuntimeMu.Lock()
+	r.activeRuntime = runtime
+	r.activeRuntimeMu.Unlock()
 }

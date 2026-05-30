@@ -7,7 +7,7 @@ import (
 
 const (
 	SessionOpenRequestSize      = 8
-	SessionDescribeResponseSize = 16
+	SessionDescribeResponseSize = 32
 	SessionFlagReadOnly         = 1 << 0
 	LinkHeartbeatBodySize       = 8
 	SessionCloseNoticeSize      = 2
@@ -42,7 +42,7 @@ func BuildSessionOpenRequestBody(authID uint64) []byte {
 	return body
 }
 
-func BuildSessionDescribeResponseBody(diskSize uint64, maxIOBytes uint32, readOnly bool) []byte {
+func BuildSessionDescribeResponseBody(diskSize uint64, maxIOBytes uint32, readOnly bool, backendID [16]byte) []byte {
 	body := make([]byte, SessionDescribeResponseSize)
 	binary.BigEndian.PutUint64(body[0:8], diskSize)
 	binary.BigEndian.PutUint32(body[8:12], maxIOBytes)
@@ -50,22 +50,24 @@ func BuildSessionDescribeResponseBody(diskSize uint64, maxIOBytes uint32, readOn
 		binary.BigEndian.PutUint16(body[12:14], SessionFlagReadOnly)
 	}
 	binary.BigEndian.PutUint16(body[14:16], 0)
+	copy(body[16:32], backendID[:])
 	return body
 }
 
-func ParseSessionDescribeResponseBody(body []byte) (diskSize uint64, maxIOBytes uint32, readOnly bool, err error) {
+func ParseSessionDescribeResponseBody(body []byte) (diskSize uint64, maxIOBytes uint32, readOnly bool, backendID [16]byte, err error) {
 	if len(body) != SessionDescribeResponseSize {
-		return 0, 0, false, ErrSessionBody
+		return 0, 0, false, [16]byte{}, ErrSessionBody
 	}
 	diskSize = binary.BigEndian.Uint64(body[0:8])
 	maxIOBytes = binary.BigEndian.Uint32(body[8:12])
 	flags := binary.BigEndian.Uint16(body[12:14])
 	reserved := binary.BigEndian.Uint16(body[14:16])
 	if reserved != 0 {
-		return 0, 0, false, ErrSessionBody
+		return 0, 0, false, [16]byte{}, ErrSessionBody
 	}
 	readOnly = flags&SessionFlagReadOnly != 0
-	return diskSize, maxIOBytes, readOnly, nil
+	copy(backendID[:], body[16:32])
+	return diskSize, maxIOBytes, readOnly, backendID, nil
 }
 
 func ParseLinkHeartbeatBody(body []byte) (uint64, error) {

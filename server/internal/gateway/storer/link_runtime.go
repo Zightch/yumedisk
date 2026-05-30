@@ -124,6 +124,24 @@ func (r *linkRuntime) serveFrames() error {
 		}
 
 		if header.Flags&proto.FlagResponse == 0 {
+			if header.Flags == proto.FlagNotice {
+				if !registered {
+					return fmt.Errorf("unexpected storer notice before register")
+				}
+				if err := proto.ValidateNoticeHeader(header); err != nil {
+					return err
+				}
+				switch header.OpCode {
+				case proto.OpSessionDataChangedNotice:
+					if len(payload[proto.HeaderSize:]) != 0 {
+						return fmt.Errorf("session data changed notice body must be empty")
+					}
+					r.registry.NotifyRouteSessionDataChanged(r.connection.id, header.SessionID)
+					continue
+				default:
+					return fmt.Errorf("unsupported storer notice op: %d", header.OpCode)
+				}
+			}
 			if registered {
 				if err := transport.WriteFrame(r.connection.conn, proto.BuildErrorResponse(header, proto.StatusInvalidRequest)); err != nil {
 					return err

@@ -5,17 +5,28 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 
 	"yumedisk/server/internal/config"
 	gatewayclient "yumedisk/server/internal/gateway/client"
+	"yumedisk/server/internal/proto"
 	storegateway "yumedisk/server/internal/storer/gateway"
+	"yumedisk/server/internal/transport"
 )
 
 type WholeRuntime struct {
 	cfg      config.StorerConfig
 	gateway  *gatewayclient.Handler
 	nextConn atomic.Uint64
+
+	clientConnMu sync.RWMutex
+	clientConns  map[uint64]*wholeClientConnection
+}
+
+type wholeClientConnection struct {
+	conn  net.Conn
+	write sync.Mutex
 }
 
 func NewWholeRuntime(cfg config.StorerConfig, core *Core) (*WholeRuntime, error) {
@@ -43,11 +54,16 @@ func NewWholeRuntime(cfg config.StorerConfig, core *Core) (*WholeRuntime, error)
 	if err != nil {
 		return nil, err
 	}
+	backend.SetDataChangedHandler(gatewayHandler)
+	core.SetDataChangedNotifier(backend)
 
-	return &WholeRuntime{
-		cfg:     cfg,
-		gateway: gatewayHandler,
-	}, nil
+	runtime := &WholeRuntime{
+		cfg:         cfg,
+		gateway:     gatewayHandler,
+		clientConns: make(map[uint64]*wholeClientConnection),
+	}
+	gatewayHandler.SetSessionDataChangedNotifier(runtime)
+	return runtime, nil
 }
 
 func (r *WholeRuntime) ListenAddr() string {
@@ -73,5 +89,33 @@ func (r *WholeRuntime) Run(ctx context.Context) error {
 func (r *WholeRuntime) serveAcceptedConnection(ctx context.Context, connectionID uint64, conn net.Conn) {
 	gatewayclient.ServeAcceptedClientConnection(ctx, conn, r.gateway, connectionID, gatewayclient.ClientConnectionHooks{
 		LogPrefix: "whole client",
+		OnConnected: func(conn net.Conn, state *gatewayclient.ConnectionState) {
+			r.clientConnMu.Lock()
+			r.clientConns[state.ID] = &wholeClientConnection{conn: conn}
+			r.clientConnMu.Unlock()
+		},
+		OnClosed: func(state *gatewayclient.ConnectionState) {
+			r.clientConnMu.Lock()
+			delete(r.clientConns, state.ID)
+			r.clientConnMu.Unlock()
+		},
 	})
+}
+
+func (r *WholeRuntime) NotifySessionDataChanged(sessionID uint64, clientConnectionID uint64) {
+	r.clientConnMu.RLock()
+	client := r.clientConns[clientConnectionID]
+	r.clientConnMu.RUnlock()
+	if client == nil {
+		return
+	}
+
+	payload := proto.BuildNotice(proto.OpSessionDataChangedNotice, sessionID, nil)
+
+	client.write.Lock()
+	err := transport.WriteFrame(client.conn, payload)
+	client.write.Unlock()
+	if err != nil {
+		_ = client.conn.Close()
+	}
 }
