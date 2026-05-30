@@ -17,6 +17,7 @@ pub(crate) const NETWORK_AUTH_FAILED_REASON: &str = "网络盘认证失败";
 pub(crate) const NETWORK_OPEN_FAILED_REASON: &str = "网络盘会话打开失败";
 pub(crate) const NETWORK_METADATA_FAILED_REASON: &str = "网络盘元数据获取失败";
 pub(crate) const NETWORK_AUTH_MISMATCH_REASON: &str = "认证材料与网络盘不匹配";
+pub(crate) const NETWORK_BACKEND_CONFLICT_REASON: &str = "网络盘后端冲突";
 
 pub(crate) fn lock_network_client(
     network_client_mutex: &Mutex<NetworkClientState>,

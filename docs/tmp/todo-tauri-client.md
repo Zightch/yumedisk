@@ -65,7 +65,7 @@
   - 网络盘 live session 真状态只由 `NetworkClientState` 持有。
 - 边界闸口原则
   - draft 判重收在 `network/uniqueness.rs`。
-  - 重扫冲突裁决收在 `network/runtime_flow.rs`。
+- 重扫冲突裁决收在 `network/runtime_flow/`。
   - 文件盘路径判重收在 `backend/disk_service.rs` 的文件盘入口。
 - 结构重构与层次依赖原则
   - `data changed` 只允许走 `state/network_client -> network/event_reconciler -> BackendRust` 这条层次。
@@ -358,7 +358,7 @@ auth
 
 需要修改：
 
-- `windows/tauri-client/src-tauri/src/network/runtime_flow.rs`
+- `windows/tauri-client/src-tauri/src/network/runtime_flow/`
 - `windows/tauri-client/src-tauri/src/network/cleanup.rs`
 - `windows/tauri-client/src-tauri/src/state/network_client/opened_sessions.rs`
 
@@ -440,7 +440,7 @@ auth
 - 已挂载网络盘收到 `data changed` 后，本地下沉 `notify_managed_disk_data_changed(...)`
 - `remote_backend_id` 没有进入通用持久化层
 - draft 添加阶段已能拒绝当前已知 backend 冲突
-- 网络重扫已改成两阶段模型
+- 网络重扫已改成四段执行流水
 - 同 `(server_addr, remote_backend_id)` 冲突时只保留一个 `ro`
 - 文件盘已按完整路径判重
 - 正式文档已同步说明当前实现边界
@@ -451,7 +451,7 @@ auth
 
 1. 先接 `data changed` 事件链
 2. 再补 draft 阶段 `backend_id` 判重
-3. 再重建网络重扫两阶段裁决
+3. 再重建网络重扫四段执行流水与统一裁决
 4. 再补文件盘路径判重
 5. 最后同步正式文档与测试归档
 
