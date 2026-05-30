@@ -87,22 +87,7 @@ DiskHandleNotifyDataChanged(
 
     disk = &Extension->Disk[targetId];
     if (DiskTryMarkPendingDataChangedUa(disk)) {
-        ULONG notifyStatus;
-
-        DbgPrint(
-            DRIVER_NAME ": ua pending marked target=%u generation=%lu source=notify_data_changed pending=true\n",
-            (ULONG)targetId,
-            disk->Generation);
-
-        notifyStatus = DiskNotifyTargetMediaStatus(DeviceExtension, targetId);
-        if (notifyStatus != STOR_STATUS_SUCCESS) {
-            DbgPrintEx(
-                DPFLTR_IHVDRIVER_ID,
-                DPFLTR_ERROR_LEVEL,
-                DRIVER_NAME ": async media status notify failed target=%u stor_status=0x%08lX\n",
-                (ULONG)targetId,
-                notifyStatus);
-        }
+        (VOID)DiskNotifyTargetMediaStatus(DeviceExtension, targetId);
     }
 
     DiskInitMessageStatus(Message, YumeDiskCommandNotifyDataChanged, STATUS_SUCCESS, 0);

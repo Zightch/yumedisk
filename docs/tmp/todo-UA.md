@@ -22,6 +22,7 @@
 - 当前验证状态：
   - `windows/BackendRust` 的 `cargo test` 已通过（12 tests）
   - `windows/rust-cli` 的 `cargo test` 已通过（24 tests）
+  - `2026-05-30` 已通过临时 `DbgPrint` + `R6` 重跑补齐 runtime `28/00` 证据：`YumeDiskSCSI` 已打印 `ua pending marked ...` 与 `ua returned ... sense_key=0x06 asc=0x28 ascq=0x00 ...`
 - 下一步：
   - 进入阶段 G，收敛网络侧 `rw -> ro` 的 dedicated notice 与 client 落盘 `data_changed` 接法
 

@@ -1,6 +1,17 @@
-# Unit Attention 28/00 验证补齐方案评估（DbgPrint 版）
+# Unit Attention 28/00 验证补齐方案评估与结果（DbgPrint 版）
 
 日期：`2026-05-30`
+
+## 0. 实际结果
+
+- 本文第 `1-9` 节保留的是验证前评估。
+- 同日已按本文方案完成一次可归档 runtime 验收：
+  - 用户态 `scsi_ua_probe` 观察到 `TEST UNIT READY: CHECK CONDITION -> GOOD`
+  - 内核态 `YumeDiskSCSI` 抓到：
+    - `ua pending marked target=4 generation=1 source=notify_data_changed pending=true`
+    - `ua returned target=4 opcode=0x00(TEST_UNIT_READY) path=pre-check sense_key=0x06 asc=0x28 ascq=0x00 scsi_status=0x02(CHECK_CONDITION)`
+- 这说明本轮缺口已经补齐：runtime 中已经拿到明确的 `UNIT ATTENTION / 06 28 00` 证据。
+- 验证结束后，这批临时 `DbgPrint` 已从驱动源码移除。
 
 ## 1. 目标
 
