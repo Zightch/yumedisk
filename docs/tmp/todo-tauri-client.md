@@ -19,7 +19,7 @@
 1. `SessionDataChangedNotice` 只在 `tauri-client` 的 `network/` 路径中接收、暂存、收束和下沉。
 2. `remote_backend_id` 不进入通用 `DiskRuntime` 持久化模型，不进入文件盘和内存盘范围。
 3. 网络盘 draft 添加阶段补一次 `remote_backend_id` 判重。
-4. 网络盘重扫改为“先汇总、后裁决、再提交”的两阶段模型，消除顺序相关行为。
+4. 网络盘重扫改为“四段执行流水”，消除顺序相关行为。
 5. 同一 `(server_addr, remote_backend_id)` 冲突时，只保留一个 `ro`，其他 `rw/ro` 一律置为 `invalid`。
 6. 文件盘补完整文件路径判重，但这条规则只属于本地文件盘，不混入 `network/` 逻辑。
 
@@ -115,16 +115,21 @@
 - 提交前防御性再次判重
 - 重扫阶段按 `(server_addr, remote_backend_id)` 做 authoritative 裁决
 
-### 4.4 当前重扫是单阶段即时提交，行为顺序相关
+### 4.4 当前重扫只有前半段收集与分组，后半段仍是即时提交，行为顺序相关
 
 当前 `runtime_flow::rescan_network_runtimes(...)` 的结构是：
 
-- 逐盘拿 live session 或新建 session
+- 先收集全部网络盘重扫任务
+- 再按 `server_addr` 做一层分组
+- 之后逐盘拿 live session 或新建 session
 - 一拿到结果就立即落 `runtime_store`
 - 一盘失败就立即写 `invalid`
 
 这条路径的问题：
 
+- 当前只有“收集任务”和“按 connection 分组”这两个前置动作
+- 缺少独立的 fresh candidate 阶段
+- 缺少独立的统一裁决与统一提交阶段
 - 无法对同一 `server_addr` 的全量网络盘做统一 backend 冲突裁决
 - `backend_id` 冲突结果依赖遍历顺序
 - 无法先完整观察“本轮 fresh describe”再统一决策
@@ -204,20 +209,32 @@ auth
 - `remote_backend_id` 非持久化
 - authoritative backend 冲突判定应统一交给后续重扫裁决
 
-### 5.4 重扫改为两阶段
+### 5.4 重扫改为四段执行流水
 
 同一 `server_addr` 下的网络盘重扫固定改为：
 
-第一阶段：采集
+第一段：收集全部网络盘任务
+
+- 遍历当前全部 runtime
+- 只收集网络盘任务
+- 此段不做任何连接、认证、会话和状态修改
+
+第二段：按 `connection/server_addr` 汇总分组
+
+- 将第一段收集到的任务按 `server_addr` 聚合
+- 每组共享同一条 connection 复用策略
+- 此段仍不修改 `runtime_store` 和 `opened_sessions`
+
+第三段：获取 fresh candidate
 
 - 遍历该 `server_addr` 下全部网络盘任务
 - 优先复用可用 live session
 - 没有 live session 时做 `connect -> auth -> open -> describe`
 - 把每个盘的 fresh result 暂存为 staged candidate
-- 此阶段不立即修改 `runtime_store`
-- 此阶段不立即修改 `opened_sessions` 最终真状态
+- 此段不立即修改 `runtime_store`
+- 此段不立即修改 `opened_sessions` 最终真状态
 
-第二阶段：裁决与提交
+第四段：统一裁决与统一提交
 
 - 基于这一轮全部 staged candidate 统一做 backend 冲突分组
 - 统一决定每个盘最终是 `unmounted`、`refresh metadata` 还是 `invalid`
@@ -332,7 +349,7 @@ auth
 - 同 `(server_addr, known remote_backend_id)` 的 draft 添加被拒绝
 - 拒绝后 draft 不写入，临时 session 被关闭
 
-### 第三阶段：重建网络重扫为两阶段裁决模型
+### 第三阶段：重建网络重扫为四段执行流水
 
 目标：
 
@@ -356,11 +373,15 @@ auth
 
 固定要求：
 
-- 按 `server_addr` 先采集再裁决
+- 先收集全部网络盘任务
+- 再按 `server_addr` 汇总分组
+- 再对每组逐盘获取 fresh candidate
+- 最后统一裁决并统一提交
 - fresh `describe` 是唯一 backend 真源
 - `(server_addr, remote_backend_id)` 冲突时只保留一个 `ro`
 - 冲突失败盘如果当前已挂载，先 eject 再 `invalid`
 - 冲突失败盘如果本轮新开了 session，必须 close + cleanup
+- 不允许“某盘刚拿到 describe 就立即落最终状态”
 
 测试：
 

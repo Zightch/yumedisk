@@ -34,6 +34,9 @@ impl ConnectionPool {
 
         let connection = GatewayConnection::new(TransportEndpoint::new(server_addr.to_string()));
         connection.set_session_notice_handler(Some(signals.session_notice_handler(server_addr)));
+        connection.set_session_data_changed_handler(Some(
+            signals.session_data_changed_handler(server_addr),
+        ));
         connection.set_disconnect_handler(Some(signals.disconnect_handler(server_addr)));
         connection.connect()?;
         self.entries

@@ -131,6 +131,19 @@ pub fn add_network_draft_item(
                 return Err(map_metadata_error(error));
             }
         };
+    {
+        let network_client = lock_network_client(network_client_mutex);
+        if let Err(error) = uniqueness::ensure_unique_network_backend(
+            &network_client,
+            &server_addr,
+            &metadata.backend_id,
+            None,
+        ) {
+            drop(network_client);
+            let _ = cleanup::close_session_for_cleanup(&session);
+            return Err(error);
+        }
+    }
 
     let snapshot = {
         let mut network_client = lock_network_client(network_client_mutex);
@@ -195,6 +208,12 @@ pub fn submit_network_draft(
                 runtime_store,
                 &network_client,
                 &item.key,
+                Some(request.draft_id.as_str()),
+            )?;
+            uniqueness::ensure_unique_network_backend(
+                &network_client,
+                &draft.server_addr,
+                &item.metadata.backend_id,
                 Some(request.draft_id.as_str()),
             )?;
         }
@@ -331,11 +350,29 @@ mod tests {
     use network_core::client::DiskSession;
     use network_core::client::GatewayConnection;
     use network_core::client::SessionMetadata;
+    use network_core::protocol::parse_header;
+    use network_core::protocol::parse_request_header;
+    use network_core::protocol::ClientOperationCode;
+    use network_core::protocol::ProtocolHeader;
+    use network_core::protocol::ProtocolStatusCode;
+    use network_core::protocol::SessionCloseNotice;
+    use network_core::protocol::FLAG_NOTICE;
+    use network_core::protocol::FLAG_RESPONSE;
+    use network_core::protocol::HEADER_SIZE;
+    use network_core::protocol::PROTOCOL_VERSION;
+    use network_core::protocol::SESSION_CLOSE_REASON_NORMAL_CLOSE;
     use network_core::test_support::expect_client_hello;
     use network_core::test_support::stage_connection;
+    use network_core::transport::read_frame_into;
+    use network_core::transport::write_frame;
     use network_core::transport::TransportEndpoint;
+    use network_core::transport::MAX_FRAME_PAYLOAD_BYTES;
 
+    use super::add_network_draft_item;
+    use super::create_network_draft;
     use super::dispose_network_draft;
+    use super::AddNetworkDraftItemRequest;
+    use super::CreateNetworkDraftRequest;
     use super::DisposeNetworkDraftRequest;
     use super::SubmitNetworkDraftRequest;
     use crate::state::client_config;
@@ -455,6 +492,14 @@ mod tests {
             disk_size_bytes: 4096,
             max_io_bytes: 4096,
             read_only: false,
+            backend_id: [0; 16],
+        }
+    }
+
+    fn sample_metadata_with_backend(backend_id: [u8; 16]) -> SessionMetadata {
+        SessionMetadata {
+            backend_id,
+            ..sample_metadata()
         }
     }
 
@@ -661,6 +706,242 @@ mod tests {
         assert!(network_client
             .opened_session(&NetworkDiskKey::new("127.0.0.1:9011", "Z9y8X7w6V5u4T3s2"))
             .is_none());
+    }
+
+    #[test]
+    fn add_network_draft_item_rejects_known_backend_conflict_and_closes_session() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener should bind");
+        let server_addr = listener
+            .local_addr()
+            .expect("server addr should exist")
+            .to_string();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept should succeed");
+            expect_client_hello(&mut stream);
+            let mut buffer = vec![0u8; MAX_FRAME_PAYLOAD_BYTES];
+
+            let auth_start = read_frame_into(&mut stream, &mut buffer)
+                .expect("auth start should be readable")
+                .to_vec();
+            let auth_start_header =
+                parse_request_header(&auth_start).expect("auth start header should parse");
+            assert_eq!(auth_start_header.op_code, ClientOperationCode::AuthStart);
+
+            let mut auth_start_body = Vec::new();
+            auth_start_body.push(1);
+            auth_start_body.extend_from_slice(&30u16.to_be_bytes());
+            auth_start_body.extend_from_slice(&[5u8; 16]);
+            auth_start_body.extend_from_slice(&3u16.to_be_bytes());
+            auth_start_body.extend_from_slice(b"tok");
+            let auth_start_response = ProtocolHeader {
+                protocol_version: PROTOCOL_VERSION,
+                header_len: HEADER_SIZE as u8,
+                op_code: ClientOperationCode::AuthStart,
+                flags: FLAG_RESPONSE,
+                status_code: ProtocolStatusCode::Ok,
+                reserved: 0,
+                request_id: auth_start_header.request_id,
+                session_id: 0,
+            }
+            .encode(&auth_start_body);
+            write_frame(&mut stream, &auth_start_response)
+                .expect("auth start response should be writable");
+
+            let auth_finish = read_frame_into(&mut stream, &mut buffer)
+                .expect("auth finish should be readable")
+                .to_vec();
+            let auth_finish_header =
+                parse_request_header(&auth_finish).expect("auth finish header should parse");
+            assert_eq!(auth_finish_header.op_code, ClientOperationCode::AuthFinish);
+
+            let auth_finish_response = ProtocolHeader {
+                protocol_version: PROTOCOL_VERSION,
+                header_len: HEADER_SIZE as u8,
+                op_code: ClientOperationCode::AuthFinish,
+                flags: FLAG_RESPONSE,
+                status_code: ProtocolStatusCode::Ok,
+                reserved: 0,
+                request_id: auth_finish_header.request_id,
+                session_id: 0,
+            }
+            .encode(&88u64.to_be_bytes());
+            write_frame(&mut stream, &auth_finish_response)
+                .expect("auth finish response should be writable");
+
+            let session_open = read_frame_into(&mut stream, &mut buffer)
+                .expect("session open should be readable")
+                .to_vec();
+            let session_open_header =
+                parse_request_header(&session_open).expect("session open header should parse");
+            assert_eq!(
+                session_open_header.op_code,
+                ClientOperationCode::SessionOpen
+            );
+
+            let session_open_response = ProtocolHeader {
+                protocol_version: PROTOCOL_VERSION,
+                header_len: HEADER_SIZE as u8,
+                op_code: ClientOperationCode::SessionOpen,
+                flags: FLAG_RESPONSE,
+                status_code: ProtocolStatusCode::Ok,
+                reserved: 0,
+                request_id: session_open_header.request_id,
+                session_id: 77,
+            }
+            .encode(&[]);
+            write_frame(&mut stream, &session_open_response)
+                .expect("session open response should be writable");
+
+            let session_describe = read_frame_into(&mut stream, &mut buffer)
+                .expect("session describe should be readable")
+                .to_vec();
+            let session_describe_header =
+                parse_request_header(&session_describe).expect("describe header should parse");
+            assert_eq!(
+                session_describe_header.op_code,
+                ClientOperationCode::SessionDescribe
+            );
+            assert_eq!(session_describe_header.session_id, 77);
+
+            let mut describe_body = Vec::new();
+            describe_body.extend_from_slice(&4096u64.to_be_bytes());
+            describe_body.extend_from_slice(&4096u32.to_be_bytes());
+            describe_body.extend_from_slice(&0u16.to_be_bytes());
+            describe_body.extend_from_slice(&0u16.to_be_bytes());
+            describe_body.extend_from_slice(&[9u8; 16]);
+            let session_describe_response = ProtocolHeader {
+                protocol_version: PROTOCOL_VERSION,
+                header_len: HEADER_SIZE as u8,
+                op_code: ClientOperationCode::SessionDescribe,
+                flags: FLAG_RESPONSE,
+                status_code: ProtocolStatusCode::Ok,
+                reserved: 0,
+                request_id: session_describe_header.request_id,
+                session_id: 77,
+            }
+            .encode(&describe_body);
+            write_frame(&mut stream, &session_describe_response)
+                .expect("describe response should be writable");
+
+            let session_close = read_frame_into(&mut stream, &mut buffer)
+                .expect("session close notice should be readable")
+                .to_vec();
+            let session_close_header =
+                parse_header(&session_close).expect("session close header should parse");
+            assert_eq!(session_close_header.flags, FLAG_NOTICE);
+            assert_eq!(
+                session_close_header.op_code,
+                ClientOperationCode::SessionCloseNotice
+            );
+            let close_notice =
+                SessionCloseNotice::decode_notice(&session_close).expect("close notice decode");
+            assert_eq!(close_notice.session_id, 77);
+            assert_eq!(close_notice.reason_code, SESSION_CLOSE_REASON_NORMAL_CLOSE);
+        });
+
+        let mut runtime_store = DiskRuntimeStore::default();
+        let mut network_client = NetworkClientState::default();
+        let existing_connection = stage_connection(TransportEndpoint::new(&server_addr), 13);
+        let existing_session =
+            DiskSession::new(existing_connection, 13).expect("existing session should build");
+        network_client.insert_opened_session(
+            crate::state::network_client::OpenedNetworkDiskSession {
+                key: NetworkDiskKey::new(&server_addr, "existing-ro"),
+                session: existing_session,
+                metadata: sample_metadata_with_backend([9; 16]),
+            },
+        );
+        let network_client_mutex = Mutex::new(network_client);
+
+        let draft = create_network_draft(
+            &network_client_mutex,
+            CreateNetworkDraftRequest {
+                server_addr: server_addr.clone(),
+            },
+        )
+        .expect("draft creation should succeed");
+        let error = add_network_draft_item(
+            &runtime_store,
+            &network_client_mutex,
+            AddNetworkDraftItemRequest {
+                draft_id: draft.draft_id.clone(),
+                disk_name: "network-disk".to_string(),
+                claim_code: "A1b2C3d4E5f6G7h8abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab".to_string(),
+            },
+        )
+        .expect_err("backend conflict should reject add");
+
+        assert_eq!(error.code, "network-backend-conflict");
+        let network_client = network_client_mutex
+            .lock()
+            .expect("network client mutex should not be poisoned");
+        let draft = network_client
+            .draft(&draft.draft_id)
+            .expect("draft should remain after rejection");
+        assert!(draft.items.is_empty());
+        assert!(draft.connection.is_connected());
+        assert!(network_client
+            .opened_session(&NetworkDiskKey::new(&server_addr, "existing-ro"))
+            .is_some());
+
+        server.join().expect("server should join");
+    }
+
+    #[test]
+    fn submit_network_draft_rejects_backend_conflict_and_keeps_draft() {
+        let backend = BackendContext::default();
+        let mut runtime_store = DiskRuntimeStore::default();
+        let harness = ConnectedSessionHarness::new(61);
+        let live_connection = stage_connection(TransportEndpoint::new(&harness.server_addr), 62);
+        let live_session =
+            DiskSession::new(live_connection, 62).expect("live session should build");
+
+        let mut draft = NetworkCreateDraft::new(
+            "draft-1".to_string(),
+            harness.server_addr.clone(),
+            Arc::clone(&harness.connection),
+        );
+        draft.insert_item(NetworkDraftItem {
+            key: NetworkDiskKey::new(&harness.server_addr, "draft-ro"),
+            disk_name: "draft-disk".to_string(),
+            auth_material: "claim-draft".to_string(),
+            session: harness.session(61),
+            metadata: sample_metadata_with_backend([4; 16]),
+        });
+
+        let mut network_client = NetworkClientState::default();
+        network_client.insert_opened_session(
+            crate::state::network_client::OpenedNetworkDiskSession {
+                key: NetworkDiskKey::new(&harness.server_addr, "live-ro"),
+                session: live_session,
+                metadata: sample_metadata_with_backend([4; 16]),
+            },
+        );
+        network_client.insert_draft(draft);
+        let network_client_mutex = Mutex::new(network_client);
+
+        let error = network_draft_workflow::submit_network_draft(
+            &backend,
+            &mut runtime_store,
+            &network_client_mutex,
+            SubmitNetworkDraftRequest {
+                draft_id: "draft-1".to_string(),
+            },
+        )
+        .expect_err("backend conflict should reject submit");
+
+        assert_eq!(error.code, "network-backend-conflict");
+        assert!(runtime_store.snapshots().is_empty());
+
+        let network_client = network_client_mutex
+            .lock()
+            .expect("network client mutex should not be poisoned");
+        assert!(network_client.draft("draft-1").is_some());
+        assert!(network_client
+            .opened_session(&NetworkDiskKey::new(&harness.server_addr, "live-ro"))
+            .is_some());
+
+        harness.shutdown();
     }
 
     #[test]

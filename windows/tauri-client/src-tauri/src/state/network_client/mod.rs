@@ -38,6 +38,10 @@ pub enum NetworkClientEvent {
         server_addr: String,
         session_id: u64,
     },
+    SessionDataChanged {
+        server_addr: String,
+        session_id: u64,
+    },
     ConnectionLost {
         server_addr: String,
     },

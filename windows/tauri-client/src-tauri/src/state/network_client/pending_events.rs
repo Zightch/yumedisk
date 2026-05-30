@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use network_core::client::SessionCloseNotice;
+use network_core::client::SessionDataChangedNotice;
 
 use super::NetworkClientEvent;
 
@@ -35,6 +36,22 @@ impl PendingNetworkSignals {
             if let Ok(mut events) = pending_events.lock() {
                 events.push(NetworkClientEvent::ConnectionLost {
                     server_addr: disconnect_server_addr.clone(),
+                });
+            }
+        })
+    }
+
+    pub fn session_data_changed_handler(
+        &self,
+        server_addr: &str,
+    ) -> Arc<dyn Fn(SessionDataChangedNotice) + Send + Sync> {
+        let pending_events = Arc::clone(&self.pending_events);
+        let notice_server_addr = server_addr.to_string();
+        Arc::new(move |notice| {
+            if let Ok(mut events) = pending_events.lock() {
+                events.push(NetworkClientEvent::SessionDataChanged {
+                    server_addr: notice_server_addr.clone(),
+                    session_id: notice.session_id,
                 });
             }
         })

@@ -11,6 +11,8 @@ export function mapNetworkDraftError(error: unknown, fallback: string): string {
       return "元数据获取失败";
     case "network-disk-duplicate":
       return "网络盘已存在";
+    case "network-backend-conflict":
+      return "网络盘后端冲突";
     case "network-draft-empty":
       return "当前没有可提交的网络盘";
     case "network-draft-not-found":

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::sync::Mutex;
 
 use backend_rust::BackendContext;
@@ -16,6 +17,20 @@ pub fn sync_pending_events(
     runtime_store: &mut DiskRuntimeStore,
     network_client_mutex: &Mutex<NetworkClientState>,
 ) -> bool {
+    sync_pending_events_with_notify(backend, runtime_store, network_client_mutex, |target_id| {
+        let _ = backend.notify_managed_disk_data_changed(target_id, None);
+    })
+}
+
+fn sync_pending_events_with_notify<NotifyFn>(
+    backend: &BackendContext,
+    runtime_store: &mut DiskRuntimeStore,
+    network_client_mutex: &Mutex<NetworkClientState>,
+    mut notify_data_changed: NotifyFn,
+) -> bool
+where
+    NotifyFn: FnMut(u32),
+{
     let events = {
         let network_client = lock_network_client(network_client_mutex);
         network_client.drain_events()
@@ -26,6 +41,7 @@ pub fn sync_pending_events(
     };
 
     let mut changed = false;
+    let mut data_changed_keys = BTreeSet::<(String, String)>::new();
     for event in events {
         changed |= match event {
             NetworkClientEvent::SessionClosed {
@@ -62,6 +78,19 @@ pub fn sync_pending_events(
                     network_client.release_connection_after_session_close(&server_addr);
                 }
                 true
+            }
+            NetworkClientEvent::SessionDataChanged {
+                server_addr,
+                session_id,
+            } => {
+                let opened_session_key = {
+                    let network_client = lock_network_client(network_client_mutex);
+                    network_client.find_opened_session_by_session_id(&server_addr, session_id)
+                };
+                if let Some(key) = opened_session_key {
+                    data_changed_keys.insert((key.server_addr, key.remote_disk_id));
+                }
+                false
             }
             NetworkClientEvent::ConnectionLost { server_addr } => {
                 let opened_session_keys = {
@@ -105,7 +134,31 @@ pub fn sync_pending_events(
         );
     }
 
+    for (server_addr, remote_disk_id) in data_changed_keys {
+        if let Some(target_id) =
+            find_mounted_network_target_id(runtime_store, &server_addr, &remote_disk_id)
+        {
+            notify_data_changed(target_id);
+        }
+    }
+
     changed
+}
+
+fn find_mounted_network_target_id(
+    runtime_store: &DiskRuntimeStore,
+    server_addr: &str,
+    remote_disk_id: &str,
+) -> Option<u32> {
+    runtime_store.runtimes().find_map(|runtime| {
+        let Some((runtime_server_addr, runtime_remote_disk_id)) = runtime.network_key() else {
+            return None;
+        };
+        if runtime_server_addr == server_addr && runtime_remote_disk_id == remote_disk_id {
+            return runtime.mounted_target_id();
+        }
+        None
+    })
 }
 
 #[cfg(test)]
@@ -120,6 +173,7 @@ mod tests {
     use network_core::transport::TransportEndpoint;
 
     use super::sync_pending_events;
+    use super::sync_pending_events_with_notify;
     use crate::network::NETWORK_SESSION_MISSING_REASON;
     use crate::state::disk_runtime::DiskRuntime;
     use crate::state::disk_runtime::DiskRuntimeStatus;
@@ -190,6 +244,7 @@ mod tests {
                 disk_size_bytes: 4096,
                 max_io_bytes: 4096,
                 read_only: false,
+                backend_id: [0; 16],
             },
         });
         network_client.insert_draft(draft);
@@ -228,6 +283,7 @@ mod tests {
                 disk_size_bytes: 4096,
                 max_io_bytes: 4096,
                 read_only: false,
+                backend_id: [0; 16],
             },
         });
         network_client.push_test_event(NetworkClientEvent::SessionClosed {
@@ -284,6 +340,7 @@ mod tests {
                 disk_size_bytes: 4096,
                 max_io_bytes: 4096,
                 read_only: false,
+                backend_id: [0; 16],
             },
         });
         network_client.push_test_event(NetworkClientEvent::ConnectionLost {
@@ -341,6 +398,7 @@ mod tests {
                 disk_size_bytes: 4096,
                 max_io_bytes: 4096,
                 read_only: false,
+                backend_id: [0; 16],
             },
         });
         network_client.insert_draft(draft);
@@ -361,5 +419,125 @@ mod tests {
             .draft("draft-1")
             .expect("draft should still exist");
         assert!(draft.items.is_empty());
+    }
+
+    #[test]
+    fn data_changed_event_notifies_mounted_runtime_once_per_round() {
+        let backend = BackendContext::default();
+        let mut network_client = NetworkClientState::default();
+        let connection = stage_connection(TransportEndpoint::new("127.0.0.1:9008"), 29);
+        let session = DiskSession::new(Arc::clone(&connection), 29).expect("session should build");
+        let key = NetworkDiskKey::new("127.0.0.1:9008", "D1a2T3a4C5h6G7e8");
+
+        network_client.insert_opened_session(OpenedNetworkDiskSession {
+            key: key.clone(),
+            session,
+            metadata: SessionMetadata {
+                disk_size_bytes: 4096,
+                max_io_bytes: 4096,
+                read_only: false,
+                backend_id: [0; 16],
+            },
+        });
+        network_client.push_test_event(NetworkClientEvent::SessionDataChanged {
+            server_addr: "127.0.0.1:9008".to_string(),
+            session_id: 29,
+        });
+        network_client.push_test_event(NetworkClientEvent::SessionDataChanged {
+            server_addr: "127.0.0.1:9008".to_string(),
+            session_id: 29,
+        });
+
+        let network_client_mutex = Mutex::new(network_client);
+        let mut runtime_store = DiskRuntimeStore::default();
+        let mut runtime = DiskRuntime::new_network(
+            "disk-1".to_string(),
+            "network-disk".to_string(),
+            false,
+            "127.0.0.1:9008".to_string(),
+            "D1a2T3a4C5h6G7e8".to_string(),
+            "claim-5".to_string(),
+            4096,
+            false,
+            false,
+        );
+        runtime.set_mounted(7);
+        runtime_store.insert_runtime(runtime);
+
+        let mut notified_targets = Vec::new();
+        let changed = sync_pending_events_with_notify(
+            &backend,
+            &mut runtime_store,
+            &network_client_mutex,
+            |target_id| notified_targets.push(target_id),
+        );
+        assert!(!changed);
+        assert_eq!(notified_targets, vec![7]);
+
+        let runtime = runtime_store
+            .find_runtime("disk-1")
+            .expect("runtime should exist");
+        assert_eq!(
+            runtime.status(),
+            &DiskRuntimeStatus::Mounted { target_id: 7 }
+        );
+        let network_client = network_client_mutex
+            .lock()
+            .expect("network client mutex should not be poisoned");
+        assert!(network_client.opened_session(&key).is_some());
+    }
+
+    #[test]
+    fn data_changed_event_ignores_unmounted_runtime() {
+        let backend = BackendContext::default();
+        let mut network_client = NetworkClientState::default();
+        let connection = stage_connection(TransportEndpoint::new("127.0.0.1:9009"), 31);
+        let session = DiskSession::new(Arc::clone(&connection), 31).expect("session should build");
+
+        network_client.insert_opened_session(OpenedNetworkDiskSession {
+            key: NetworkDiskKey::new("127.0.0.1:9009", "U1n2M3o4U5n6T7d8"),
+            session,
+            metadata: SessionMetadata {
+                disk_size_bytes: 4096,
+                max_io_bytes: 4096,
+                read_only: false,
+                backend_id: [0; 16],
+            },
+        });
+        network_client.push_test_event(NetworkClientEvent::SessionDataChanged {
+            server_addr: "127.0.0.1:9009".to_string(),
+            session_id: 31,
+        });
+
+        let network_client_mutex = Mutex::new(network_client);
+        let mut runtime_store = DiskRuntimeStore::default();
+        let mut runtime = DiskRuntime::new_network(
+            "disk-1".to_string(),
+            "network-disk".to_string(),
+            false,
+            "127.0.0.1:9009".to_string(),
+            "U1n2M3o4U5n6T7d8".to_string(),
+            "claim-6".to_string(),
+            4096,
+            false,
+            false,
+        );
+        runtime.set_network_unmounted(4096, false);
+        runtime_store.insert_runtime(runtime);
+
+        let mut notified_targets = Vec::new();
+        let changed = sync_pending_events_with_notify(
+            &backend,
+            &mut runtime_store,
+            &network_client_mutex,
+            |target_id| notified_targets.push(target_id),
+        );
+        assert!(!changed);
+        assert!(notified_targets.is_empty());
+
+        let runtime = runtime_store
+            .find_runtime("disk-1")
+            .expect("runtime should exist");
+        assert_eq!(runtime.status(), &DiskRuntimeStatus::Unmounted);
     }
 }

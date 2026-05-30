@@ -397,6 +397,7 @@ mod tests {
             disk_size_bytes: 4096,
             max_io_bytes: 4096,
             read_only: false,
+            backend_id: [0; 16],
         }
     }
 

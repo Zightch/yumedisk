@@ -197,6 +197,7 @@ mod tests {
                 disk_size_bytes: 4096,
                 read_only: false,
                 max_io_bytes: 4096,
+                backend_id: [0; 16],
             },
             false,
         )
@@ -228,6 +229,7 @@ mod tests {
                 disk_size_bytes: 4096,
                 read_only: false,
                 max_io_bytes: 4096,
+                backend_id: [0; 16],
             },
             true,
         )
