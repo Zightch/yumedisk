@@ -110,6 +110,69 @@ DiskMapQueueFailureToSrbStatus(
 }
 
 static
+const char*
+DiskGetOpcodeName(
+    _In_ UCHAR Opcode
+)
+{
+    switch (Opcode) {
+    case SCSIOP_TEST_UNIT_READY:
+        return "TEST_UNIT_READY";
+    case SCSIOP_REQUEST_SENSE:
+        return "REQUEST_SENSE";
+    case SCSIOP_READ_CAPACITY:
+        return "READ_CAPACITY10";
+    case SCSIOP_READ_CAPACITY16:
+        return "READ_CAPACITY16";
+    case SCSIOP_MODE_SENSE:
+        return "MODE_SENSE6";
+    case SCSIOP_MODE_SENSE10:
+        return "MODE_SENSE10";
+    case SCSIOP_VERIFY:
+        return "VERIFY10";
+    case SCSIOP_VERIFY16:
+        return "VERIFY16";
+    case SCSIOP_READ6:
+        return "READ6";
+    case SCSIOP_READ:
+        return "READ10";
+    case SCSIOP_READ12:
+        return "READ12";
+    case SCSIOP_READ16:
+        return "READ16";
+    case SCSIOP_WRITE6:
+        return "WRITE6";
+    case SCSIOP_WRITE:
+        return "WRITE10";
+    case SCSIOP_WRITE12:
+        return "WRITE12";
+    case SCSIOP_WRITE16:
+        return "WRITE16";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+static
+VOID
+DiskTraceReturnedDataChangedUa(
+    _In_ UCHAR TargetId,
+    _In_ UCHAR Opcode,
+    _In_ const char* Path
+)
+{
+    DbgPrintEx(
+        DPFLTR_IHVDRIVER_ID,
+        DPFLTR_INFO_LEVEL,
+        DRIVER_NAME ": ua returned target=%u opcode=0x%02X(%s) path=%s sense_key=0x06 asc=0x28 ascq=0x00 scsi_status=0x%02X(CHECK_CONDITION)\n",
+        (ULONG)TargetId,
+        (ULONG)Opcode,
+        DiskGetOpcodeName(Opcode),
+        Path,
+        (ULONG)SCSISTAT_CHECK_CONDITION);
+}
+
+static
 VOID
 DiskFillWriteProtectedSense(
     _Inout_updates_bytes_opt_(*SenseInfoBufferLength) PUCHAR SenseInfoBuffer,
@@ -177,6 +240,9 @@ static
 BOOLEAN
 DiskTryReturnPendingDataChangedUa(
     _Inout_ PYUME_DISK Disk,
+    _In_ UCHAR TargetId,
+    _In_ UCHAR Opcode,
+    _In_ const char* Path,
     _Inout_ UCHAR* SrbStatus,
     _Inout_ UCHAR* ScsiStatus,
     _Inout_ ULONG* DataTransferLength,
@@ -192,6 +258,7 @@ DiskTryReturnPendingDataChangedUa(
     *ScsiStatus = SCSISTAT_CHECK_CONDITION;
     *DataTransferLength = 0;
     DiskFillUnitAttentionSenseDataChanged(SenseInfoBuffer, SenseInfoBufferLength);
+    DiskTraceReturnedDataChangedUa(TargetId, Opcode, Path);
     return TRUE;
 }
 
@@ -351,6 +418,7 @@ static
 VOID
 DiskHandleRequestSense(
     _Inout_ PYUME_DISK Disk,
+    _In_ UCHAR TargetId,
     _Inout_updates_bytes_(TransferLength) PUCHAR DataBuffer,
     _In_ ULONG TransferLength,
     _Out_ ULONG* DataTransferLength
@@ -367,6 +435,7 @@ DiskHandleRequestSense(
             fixedSenseLength = (UCHAR)senseLength;
             DiskFillUnitAttentionSenseDataChanged(DataBuffer, &fixedSenseLength);
             senseLength = fixedSenseLength;
+            DiskTraceReturnedDataChangedUa(TargetId, SCSIOP_REQUEST_SENSE, "request_sense");
         } else {
             DataBuffer[0] = 0x70;
             if (senseLength > 7) {
@@ -455,6 +524,9 @@ DiskHandleScsiCdb(
     case SCSIOP_READ_CAPACITY:
         if (DiskTryReturnPendingDataChangedUa(
             disk,
+            TargetId,
+            Cdb->CDB6GENERIC.OperationCode,
+            "pre-check",
             SrbStatus,
             ScsiStatus,
             DataTransferLength,
@@ -467,6 +539,9 @@ DiskHandleScsiCdb(
     case SCSIOP_READ_CAPACITY16:
         if (DiskTryReturnPendingDataChangedUa(
             disk,
+            TargetId,
+            Cdb->CDB6GENERIC.OperationCode,
+            "pre-check",
             SrbStatus,
             ScsiStatus,
             DataTransferLength,
@@ -479,6 +554,9 @@ DiskHandleScsiCdb(
     case SCSIOP_TEST_UNIT_READY:
         DiskTryReturnPendingDataChangedUa(
             disk,
+            TargetId,
+            Cdb->CDB6GENERIC.OperationCode,
+            "pre-check",
             SrbStatus,
             ScsiStatus,
             DataTransferLength,
@@ -486,11 +564,14 @@ DiskHandleScsiCdb(
             SenseInfoBufferLength);
         break;
     case SCSIOP_REQUEST_SENSE:
-        DiskHandleRequestSense(disk, DataBuffer, transferLength, DataTransferLength);
+        DiskHandleRequestSense(disk, TargetId, DataBuffer, transferLength, DataTransferLength);
         break;
     case SCSIOP_MODE_SENSE:
         if (DiskTryReturnPendingDataChangedUa(
             disk,
+            TargetId,
+            Cdb->CDB6GENERIC.OperationCode,
+            "pre-check",
             SrbStatus,
             ScsiStatus,
             DataTransferLength,
@@ -512,6 +593,9 @@ DiskHandleScsiCdb(
     case SCSIOP_MODE_SENSE10:
         if (DiskTryReturnPendingDataChangedUa(
             disk,
+            TargetId,
+            Cdb->CDB6GENERIC.OperationCode,
+            "pre-check",
             SrbStatus,
             ScsiStatus,
             DataTransferLength,
@@ -538,6 +622,9 @@ DiskHandleScsiCdb(
     case SCSIOP_VERIFY16:
         DiskTryReturnPendingDataChangedUa(
             disk,
+            TargetId,
+            Cdb->CDB6GENERIC.OperationCode,
+            "pre-check",
             SrbStatus,
             ScsiStatus,
             DataTransferLength,
@@ -550,6 +637,9 @@ DiskHandleScsiCdb(
     case SCSIOP_READ16:
         if (DiskTryReturnPendingDataChangedUa(
             disk,
+            TargetId,
+            Cdb->CDB6GENERIC.OperationCode,
+            "pre-check",
             SrbStatus,
             ScsiStatus,
             DataTransferLength,
@@ -585,6 +675,9 @@ DiskHandleScsiCdb(
     case SCSIOP_WRITE16:
         if (DiskTryReturnPendingDataChangedUa(
             disk,
+            TargetId,
+            Cdb->CDB6GENERIC.OperationCode,
+            "pre-check",
             SrbStatus,
             ScsiStatus,
             DataTransferLength,
