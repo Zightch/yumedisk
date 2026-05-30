@@ -24,8 +24,8 @@
 ClientState
   -> NetworkClientState
     -> connection_pool[server_addr]
-    -> opened_disk_sessions[*]
-    -> network_create_drafts[draft_id]
+    -> opened_sessions[(server_addr, remote_disk_id)]
+    -> drafts[draft_id]
   -> DiskCatalog
     -> DiskRuntime[*]
   -> BackendRust
@@ -81,6 +81,23 @@ DiskRuntime
 - 检查范围至少覆盖正式 `DiskRuntime` 和当前 draft 项
 - `remote_backend_id` 只在完成 `SessionDescribe` 后才能参与判断
 
+### `remote_backend_id` 的当前真状态边界
+
+`remote_backend_id` 当前明确不属于 `DiskRuntime` 持久化模型。
+
+它只存在于三处：
+
+- draft 项的 `SessionMetadata`
+- `opened_session` 的 `SessionMetadata`
+- 网络重扫四段流水中的 staged candidate
+
+当前固定不做：
+
+- 写入 `DiskRuntime`
+- 写入 `client_config`
+- 回传前端展示
+- 脱离 `SessionDescribe` 单独维护一份 backend 快照
+
 ## `NetworkClientState`
 
 `NetworkClientState` 是 `tauri-client` 唯一网络真状态持有者，负责：
@@ -130,8 +147,11 @@ DiskRuntime
     - drain 事件并把 `NetworkClientState`、`DiskRuntimeStore`、`BackendRust` 收束一致
   - `draft_flow.rs`
     - draft 真状态写入、提交接管、dispose cleanup
-  - `runtime_flow.rs`
-    - network runtime 的挂载、拔出、删除、重扫最小编排
+  - `runtime_flow/`
+    - `mod.rs`
+      - network runtime 的挂载、拔出、删除最小编排
+    - `rescan.rs`
+      - 网络盘重扫四段执行流水与统一裁决
 - `src-tauri/src/workflow/`
   - `network_runtime.rs`
     - network event 收束唯一闸口
@@ -155,17 +175,18 @@ DiskRuntime
 - `disk_name`
 - `server_addr`
 - `remote_disk_id`
-- `remote_backend_id`
 - `auth_material`
 - `capacity_bytes`
-- `read_only`
 - `auto_mount`
+- `configured_read_only`
+- `source_read_only`
 
 `DiskRuntime` 不负责：
 
 - 持有 live `disksession`
 - 持有 live connection
 - 持有长期常驻 `NetworkMedia`
+- 持有 `remote_backend_id`
 
 `NetworkMedia` 只表示挂到 `BackendRust::Media` 的网络盘介质视图，固定显式持有：
 
@@ -264,9 +285,16 @@ draft 产生的 connection cleanup 统一延后到对话框消失时处理。
 固定流程：
 
 1. 把保留的 draft 项写成正式 `DiskRuntime`
-2. 默认状态写为 `invalid`
-3. 不自动创建 `NetworkMedia`
-4. 自动触发一次网络盘重扫任务
+2. 先持久化 `DiskRuntime`
+3. 再把 draft 持有的 live `disksession` 接管进 `opened_sessions`
+4. 不自动创建 `NetworkMedia`
+5. 最后立即执行一次网络盘重扫
+
+当前实现结果是：
+
+- 提交成功后，网络盘会在同一条工作流里被重扫收束
+- 若接管过来的 live `disksession` 可复用，则对应 `DiskRuntime` 会转成 `unmounted`
+- 若后续重扫失败，则对应 `DiskRuntime` 仍会落回 `invalid`
 
 提交前要再次执行防御性重复检查，不能只依赖“添加时检查一次”。
 
@@ -292,15 +320,39 @@ draft 产生的 connection cleanup 统一延后到对话框消失时处理。
 
 ### 重扫
 
-网络盘重扫固定为“先汇总，再分发”：
+网络盘重扫当前已经收成四段执行流水：
 
-1. 遍历全部 `DiskRuntime`
-2. 网络盘先汇总成 `network_rescan_task`
-3. 按 `server_addr` 去重并建连
-4. 先查 `opened_disk_sessions`
-5. 没有 live `disksession` 时再做 `auth -> open -> describe`
-6. 成功标为 `unmounted`
-7. 失败标为 `invalid`
+1. 收集全部网络盘任务
+2. 按 `server_addr` 汇总分组
+3. 为每个盘获取 fresh candidate
+4. 统一裁决并统一提交
+
+第三段固定流程是：
+
+- 优先复用当前 live `opened_session`
+- live `opened_session` 不可用时，再做 `connect -> auth -> open -> describe`
+- 当前轮次只暂存 candidate，不立即写回 `runtime_store`
+
+第四段固定流程是：
+
+- 以本轮 fresh `SessionDescribe.metadata.backend_id` 为唯一 backend 真源
+- 按 `(server_addr, remote_backend_id)` 做 authoritative 冲突裁决
+- 统一清理 stale session / loser session
+- 最后一次性更新 `DiskRuntime`、`opened_sessions` 和 connection cleanup
+
+当前冲突矩阵固定为：
+
+- 同 `(server_addr, remote_backend_id)` 若只有一个 candidate，则直接保留
+- 若有多个 candidate 且存在一个或多个 `ro`，只保留一个 `ro`
+- 保留者固定为 `local_disk_id` 数值最小的那个 `ro`
+- 其余 `rw/ro` 一律置为 `invalid(网络盘后端冲突)`
+- 若该组没有任何 `ro`，则整组全部 `invalid(网络盘后端冲突)`
+
+mounted runtime 在重扫中的当前实现还有一条额外约束：
+
+- 只有复用原 live `opened_session` 时，才允许保持 mounted
+- 只要本轮拿到的是 fresh reopened session，即使原来是 mounted，也必须回到 `unmounted`
+- 这样可以避免挂载侧 `NetworkMedia` 继续绑定旧 session
 
 ### 挂载
 
@@ -349,10 +401,37 @@ find DiskRuntime by local_disk_id
 
 - `server_addr`
 - `remote_disk_id`
-- `remote_backend_id`
 - `auth_material`
 
 如果要改变这些字段，固定走“删除旧盘，再重新添加新盘”。
+
+`remote_backend_id` 不在这里的原因是：
+
+- 它当前不是可编辑字段
+- 它不是持久化配置字段
+- 它只属于当前 live/staged `SessionDescribe` 真状态
+
+## 文件盘路径判重边界
+
+文件盘完整路径判重当前已经正式落地，但它只属于本地文件盘。
+
+固定规则：
+
+- 判重键为完整文件路径
+- 归一化口径为：
+  - 转绝对路径
+  - 折叠 `.` / `..`
+  - Windows 下按大小写不敏感比较
+- `create_file_disk(...)` 按完整路径拒绝重复
+- `create_new_file_disk(...)` 按完整路径拒绝重复
+- 配置恢复遇到重复路径时，保留第一条，其余标为 `invalid(文件路径重复)`
+- 本地文件盘重扫不会把这些重复项重新洗回可用状态
+
+这条规则当前明确不进入：
+
+- `network/`
+- `remote_backend_id`
+- 网络盘重扫裁决
 
 ## 故障与 cleanup
 
@@ -372,6 +451,7 @@ find DiskRuntime by local_disk_id
 - 收到 `SessionDataChangedNotice` 时：
   - 若目标 session 当前已挂载，则调用本地 data-changed 通知入口
   - 若目标 session 仅处于已打开未挂载状态，则当前最小闭环直接忽略
+  - 同一轮重复 notice 会先去重，再下沉一次本地通知
 - 已挂载或未挂载网络盘收到 `SessionCloseNotice` 或 connection 死亡后，直接转为 `invalid`
 - `NetworkMedia` 读写遇到终态错误时，只上报失效事件，再由后台收束器统一转为 `invalid`
 - 若当前已挂载，则先 eject
@@ -401,9 +481,13 @@ find DiskRuntime by local_disk_id
 - 一个 `NetworkClientState` 管多个 `server_addr` connection
 - 一个 connection 可以并存多个已打开 `disksession`
 - 已打开 `disksession` 可以被重扫复用
+- `remote_backend_id` 只属于当前 live/staged `SessionDescribe` 真状态，不持久化
 - 挂载时才创建 `NetworkMedia`
+- 网络重扫已经固定为四段执行流水
+- 同 `(server_addr, remote_backend_id)` 冲突时只保留一个 `ro`
 - 拔出后保留 live `disksession`
 - 删除后关闭 live `disksession`
 - `SessionDataChangedNotice` 只驱动本地 data-changed 通知，不驱动 invalidation
+- 文件盘完整路径判重是独立本地规则，不混入网络盘逻辑
 - 故障后盘直接转 `invalid`
 - 恢复入口统一回到 rescan
