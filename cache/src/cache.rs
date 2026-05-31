@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -13,7 +13,7 @@ enum ReadBlockAction {
     Copied,
     LoadRemote { block_index: u64, block_base: u64 },
     Rehydrate { block_index: u64 },
-    Wait,
+    Wait(WaitReason),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,7 +21,13 @@ enum WriteBlockAction {
     Patched,
     LoadRemote { block_index: u64, block_base: u64 },
     Rehydrate { block_index: u64 },
-    Wait,
+    Wait(WaitReason),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WaitReason {
+    Generic,
+    DirtyEvictionTempSlot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +38,7 @@ struct SpilledDirty {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PrepareInsertResult {
     Reserved,
-    Wait,
+    Wait(WaitReason),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +52,7 @@ struct CacheState {
     resident: TwoQueueResident,
     spilled_dirty: HashMap<u64, SpilledDirty>,
     active_temp_blocks: HashSet<u64>,
+    foreground_dirty_eviction_waiters: usize,
     stop_requested: bool,
 }
 
@@ -83,6 +90,7 @@ impl<R: AtIo + 'static> Cache<R> {
             )?,
             spilled_dirty: HashMap::new(),
             active_temp_blocks: HashSet::new(),
+            foreground_dirty_eviction_waiters: 0,
             stop_requested: false,
         }));
         let state_changed = Arc::new(Condvar::new());
@@ -148,17 +156,34 @@ impl<R: AtIo + 'static> Cache<R> {
         buffer: &mut [u8],
         valid_len: usize,
     ) -> Result<(), CacheError> {
+        let mut waiting_for_temp_slot = false;
         loop {
             let mut state = self.state.lock().unwrap();
-            match self.plan_read_touched_block(&mut state, touched, buffer, valid_len)? {
-                ReadBlockAction::Copied => return Ok(()),
-                ReadBlockAction::Wait => {
-                    drop(self.state_changed.wait(state).unwrap());
+            if state.stop_requested {
+                Self::release_foreground_dirty_waiter(&mut state, &mut waiting_for_temp_slot)?;
+                return Err(CacheError::Stopped);
+            }
+            let action = match self.plan_read_touched_block(&mut state, touched, buffer, valid_len) {
+                Ok(action) => action,
+                Err(error) => {
+                    Self::release_foreground_dirty_waiter(&mut state, &mut waiting_for_temp_slot)?;
+                    return Err(error);
+                }
+            };
+
+            match action {
+                ReadBlockAction::Copied => {
+                    Self::release_foreground_dirty_waiter(&mut state, &mut waiting_for_temp_slot)?;
+                    return Ok(());
+                }
+                ReadBlockAction::Wait(reason) => {
+                    self.wait_for_state_change(state, &mut waiting_for_temp_slot, reason)?;
                 }
                 ReadBlockAction::LoadRemote {
                     block_index,
                     block_base,
                 } => {
+                    Self::release_foreground_dirty_waiter(&mut state, &mut waiting_for_temp_slot)?;
                     drop(state);
                     let mut loaded_block = vec![0u8; valid_len];
                     let read_result = self.read_right_block(block_base, &mut loaded_block);
@@ -189,6 +214,7 @@ impl<R: AtIo + 'static> Cache<R> {
                     }
                 }
                 ReadBlockAction::Rehydrate { block_index } => {
+                    Self::release_foreground_dirty_waiter(&mut state, &mut waiting_for_temp_slot)?;
                     drop(state);
                     let mut loaded_block = vec![0u8; valid_len];
                     let read_result = self.read_temp_block(block_index, &mut loaded_block);
@@ -228,17 +254,34 @@ impl<R: AtIo + 'static> Cache<R> {
         data: &[u8],
         valid_len: usize,
     ) -> Result<(), CacheError> {
+        let mut waiting_for_temp_slot = false;
         loop {
             let mut state = self.state.lock().unwrap();
-            match self.plan_write_touched_block(&mut state, touched, data, valid_len)? {
-                WriteBlockAction::Patched => return Ok(()),
-                WriteBlockAction::Wait => {
-                    drop(self.state_changed.wait(state).unwrap());
+            if state.stop_requested {
+                Self::release_foreground_dirty_waiter(&mut state, &mut waiting_for_temp_slot)?;
+                return Err(CacheError::Stopped);
+            }
+            let action = match self.plan_write_touched_block(&mut state, touched, data, valid_len) {
+                Ok(action) => action,
+                Err(error) => {
+                    Self::release_foreground_dirty_waiter(&mut state, &mut waiting_for_temp_slot)?;
+                    return Err(error);
+                }
+            };
+
+            match action {
+                WriteBlockAction::Patched => {
+                    Self::release_foreground_dirty_waiter(&mut state, &mut waiting_for_temp_slot)?;
+                    return Ok(());
+                }
+                WriteBlockAction::Wait(reason) => {
+                    self.wait_for_state_change(state, &mut waiting_for_temp_slot, reason)?;
                 }
                 WriteBlockAction::LoadRemote {
                     block_index,
                     block_base,
                 } => {
+                    Self::release_foreground_dirty_waiter(&mut state, &mut waiting_for_temp_slot)?;
                     drop(state);
                     let mut loaded_block = vec![0u8; valid_len];
                     let read_result = self.read_right_block(block_base, &mut loaded_block);
@@ -268,6 +311,7 @@ impl<R: AtIo + 'static> Cache<R> {
                     }
                 }
                 WriteBlockAction::Rehydrate { block_index } => {
+                    Self::release_foreground_dirty_waiter(&mut state, &mut waiting_for_temp_slot)?;
                     drop(state);
                     let mut loaded_block = vec![0u8; valid_len];
                     let read_result = self.read_temp_block(block_index, &mut loaded_block);
@@ -300,6 +344,51 @@ impl<R: AtIo + 'static> Cache<R> {
         }
     }
 
+    fn wait_for_state_change(
+        &self,
+        mut state: MutexGuard<'_, CacheState>,
+        waiting_for_temp_slot: &mut bool,
+        reason: WaitReason,
+    ) -> Result<(), CacheError> {
+        match reason {
+            WaitReason::Generic => {
+                Self::release_foreground_dirty_waiter(&mut state, waiting_for_temp_slot)?;
+            }
+            WaitReason::DirtyEvictionTempSlot => {
+                if !*waiting_for_temp_slot {
+                    state.foreground_dirty_eviction_waiters += 1;
+                    *waiting_for_temp_slot = true;
+                }
+            }
+        }
+
+        state = self.state_changed.wait(state).unwrap();
+        if state.stop_requested {
+            Self::release_foreground_dirty_waiter(&mut state, waiting_for_temp_slot)?;
+            return Err(CacheError::Stopped);
+        }
+
+        Ok(())
+    }
+
+    fn release_foreground_dirty_waiter(
+        state: &mut CacheState,
+        waiting_for_temp_slot: &mut bool,
+    ) -> Result<(), CacheError> {
+        if !*waiting_for_temp_slot {
+            return Ok(());
+        }
+        if state.foreground_dirty_eviction_waiters == 0 {
+            return Err(CacheError::InvariantViolation(
+                "foreground dirty eviction waiter count underflow",
+            ));
+        }
+
+        state.foreground_dirty_eviction_waiters -= 1;
+        *waiting_for_temp_slot = false;
+        Ok(())
+    }
+
     fn plan_read_touched_block(
         &self,
         state: &mut CacheState,
@@ -317,7 +406,9 @@ impl<R: AtIo + 'static> Cache<R> {
                 let _ = state.resident.record_hit(touched.block_index)?;
                 Ok(ReadBlockAction::Copied)
             }
-            Some(LoadState::LoadingRemote | LoadState::Rehydrating) => Ok(ReadBlockAction::Wait),
+            Some(LoadState::LoadingRemote | LoadState::Rehydrating) => {
+                Ok(ReadBlockAction::Wait(WaitReason::Generic))
+            }
             None => {
                 self.prepare_read_miss(state, touched.block_index, touched.block_base, valid_len)
             }
@@ -346,7 +437,9 @@ impl<R: AtIo + 'static> Cache<R> {
                 let _ = state.resident.record_hit(touched.block_index)?;
                 Ok(WriteBlockAction::Patched)
             }
-            Some(LoadState::LoadingRemote | LoadState::Rehydrating) => Ok(WriteBlockAction::Wait),
+            Some(LoadState::LoadingRemote | LoadState::Rehydrating) => {
+                Ok(WriteBlockAction::Wait(WaitReason::Generic))
+            }
             None => self.prepare_write_miss(
                 state,
                 touched.block_index,
@@ -367,7 +460,7 @@ impl<R: AtIo + 'static> Cache<R> {
     ) -> Result<ReadBlockAction, CacheError> {
         if let Some(spilled) = state.spilled_dirty.get(&block_index).copied() {
             if state.active_temp_blocks.contains(&block_index) {
-                return Ok(ReadBlockAction::Wait);
+                return Ok(ReadBlockAction::Wait(WaitReason::Generic));
             }
             match self.prepare_resident_slot_for_insert(state)? {
                 PrepareInsertResult::Reserved => {
@@ -381,7 +474,7 @@ impl<R: AtIo + 'static> Cache<R> {
                     )?;
                     Ok(ReadBlockAction::Rehydrate { block_index })
                 }
-                PrepareInsertResult::Wait => Ok(ReadBlockAction::Wait),
+                PrepareInsertResult::Wait(reason) => Ok(ReadBlockAction::Wait(reason)),
             }
         } else {
             match self.prepare_resident_slot_for_insert(state)? {
@@ -397,7 +490,7 @@ impl<R: AtIo + 'static> Cache<R> {
                         block_base,
                     })
                 }
-                PrepareInsertResult::Wait => Ok(ReadBlockAction::Wait),
+                PrepareInsertResult::Wait(reason) => Ok(ReadBlockAction::Wait(reason)),
             }
         }
     }
@@ -413,7 +506,7 @@ impl<R: AtIo + 'static> Cache<R> {
     ) -> Result<WriteBlockAction, CacheError> {
         if let Some(spilled) = state.spilled_dirty.get(&block_index).copied() {
             if state.active_temp_blocks.contains(&block_index) {
-                return Ok(WriteBlockAction::Wait);
+                return Ok(WriteBlockAction::Wait(WaitReason::Generic));
             }
             match self.prepare_resident_slot_for_insert(state)? {
                 PrepareInsertResult::Reserved => {
@@ -430,7 +523,7 @@ impl<R: AtIo + 'static> Cache<R> {
                         .enqueue_pending_patch(block_index, patch_range, patch_slice)?;
                     Ok(WriteBlockAction::Rehydrate { block_index })
                 }
-                PrepareInsertResult::Wait => Ok(WriteBlockAction::Wait),
+                PrepareInsertResult::Wait(reason) => Ok(WriteBlockAction::Wait(reason)),
             }
         } else {
             match self.prepare_resident_slot_for_insert(state)? {
@@ -449,7 +542,7 @@ impl<R: AtIo + 'static> Cache<R> {
                         block_base,
                     })
                 }
-                PrepareInsertResult::Wait => Ok(WriteBlockAction::Wait),
+                PrepareInsertResult::Wait(reason) => Ok(WriteBlockAction::Wait(reason)),
             }
         }
     }
@@ -463,7 +556,7 @@ impl<R: AtIo + 'static> Cache<R> {
             None => return Ok(PrepareInsertResult::Reserved),
         };
         if state.active_temp_blocks.contains(&victim_block_index) {
-            return Ok(PrepareInsertResult::Wait);
+            return Ok(PrepareInsertResult::Wait(WaitReason::Generic));
         }
         let (load_state, has_dirty_ranges, has_active_snapshot, has_pending_patches) =
             {
@@ -481,7 +574,7 @@ impl<R: AtIo + 'static> Cache<R> {
             };
 
         if load_state != LoadState::Ready || has_pending_patches {
-            return Ok(PrepareInsertResult::Wait);
+            return Ok(PrepareInsertResult::Wait(WaitReason::Generic));
         }
 
         if !has_dirty_ranges && !has_active_snapshot {
@@ -494,9 +587,7 @@ impl<R: AtIo + 'static> Cache<R> {
         }
 
         if !has_active_snapshot && state.temp_file_count() >= self.config.temp_max_files {
-            return Err(CacheError::TempFilesExhausted {
-                max_files: self.config.temp_max_files,
-            });
+            return Ok(PrepareInsertResult::Wait(WaitReason::DirtyEvictionTempSlot));
         }
 
         if has_dirty_ranges {
@@ -693,6 +784,9 @@ impl<R: AtIo + 'static> Cache<R> {
         state: &mut CacheState,
         temp: &TempStore,
     ) -> Result<bool, CacheError> {
+        if state.foreground_dirty_eviction_waiters > 0 {
+            return Ok(false);
+        }
         if state.temp_file_count() >= config.temp_max_files {
             return Ok(false);
         }
@@ -919,21 +1013,16 @@ mod tests {
             Self::new(test_bytes(length), read_delay, Duration::ZERO, 0)
         }
 
-        fn with_write_failures(length: usize, write_failures: usize) -> Self {
-            Self::new(
-                test_bytes(length),
-                Duration::ZERO,
-                Duration::ZERO,
-                write_failures,
-            )
-        }
-
         fn with_write_delay(length: usize, write_delay: Duration) -> Self {
             Self::new(test_bytes(length), Duration::ZERO, write_delay, 0)
         }
 
         fn take_calls(&self) -> Vec<IoCall> {
             self.inner.calls.lock().unwrap().drain(..).collect()
+        }
+
+        fn calls_snapshot(&self) -> Vec<IoCall> {
+            self.inner.calls.lock().unwrap().clone()
         }
 
         fn storage_slice(&self, offset: usize, length: usize) -> Vec<u8> {
@@ -1476,6 +1565,252 @@ mod tests {
     }
 
     #[test]
+    fn clean_victim_miss_bypasses_full_temp() {
+        let temp_dir = TestTempDir::new();
+        let right = MockAtIo::with_len(160);
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 1;
+        config.dirty_scan_interval = Duration::from_secs(60);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Arc::new(Cache::new(config, right.clone()).unwrap());
+
+        cache.write_locked(4, &[200, 201, 202]).unwrap();
+        cache.read_locked(32, &mut [0u8; 1]).unwrap();
+        right.take_calls();
+
+        let (tx, rx) = mpsc::channel();
+        let read_cache = Arc::clone(&cache);
+        let read_thread = thread::spawn(move || {
+            let mut buffer = [0u8; 1];
+            read_cache.read_locked(64, &mut buffer).unwrap();
+            tx.send(buffer[0]).unwrap();
+        });
+
+        assert_eq!(rx.recv_timeout(Duration::from_millis(200)).unwrap(), 64);
+        read_thread.join().unwrap();
+
+        assert_eq!(
+            right.take_calls(),
+            vec![IoCall::Read {
+                offset: 64,
+                length: 32
+            }]
+        );
+        let state = cache.state.lock().unwrap();
+        assert_eq!(state.foreground_dirty_eviction_waiters, 0);
+        assert!(state.spilled_dirty.contains_key(&0));
+        assert!(state.resident.get(1).is_none());
+        assert!(state.resident.get(2).is_some());
+    }
+
+    #[test]
+    fn dirty_victim_miss_waits_for_temp_release_then_loads_remote() {
+        let temp_dir = TestTempDir::new();
+        let right = MockAtIo::with_len(160);
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 1;
+        config.dirty_scan_interval = Duration::from_secs(60);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Arc::new(Cache::new(config, right.clone()).unwrap());
+
+        cache.write_locked(4, &[200, 201, 202]).unwrap();
+        cache.write_locked(36, &[210, 211]).unwrap();
+        right.take_calls();
+
+        let (tx, rx) = mpsc::channel();
+        let read_cache = Arc::clone(&cache);
+        let read_thread = thread::spawn(move || {
+            let mut buffer = [0u8; 1];
+            read_cache.read_locked(64, &mut buffer).unwrap();
+            tx.send(buffer[0]).unwrap();
+        });
+
+        wait_until(Duration::from_secs(1), || {
+            cache.state.lock().unwrap().foreground_dirty_eviction_waiters == 1
+        });
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+        assert!(!right.calls_snapshot().iter().any(|call| {
+            matches!(
+                call,
+                IoCall::Read {
+                    offset: 64,
+                    length: 32
+                }
+            )
+        }));
+
+        {
+            let mut state = cache.state.lock().unwrap();
+            let removed = state.spilled_dirty.remove(&0);
+            assert!(removed.is_some());
+        }
+        cache.temp.remove_block(0).unwrap();
+        cache.state_changed.notify_all();
+
+        assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), 64);
+        read_thread.join().unwrap();
+
+        assert_eq!(
+            right.take_calls(),
+            vec![IoCall::Read {
+                offset: 64,
+                length: 32
+            }]
+        );
+        let state = cache.state.lock().unwrap();
+        assert_eq!(state.foreground_dirty_eviction_waiters, 0);
+        assert_eq!(
+            state.spilled_dirty.get(&1),
+            Some(&SpilledDirty { valid_len: 32 })
+        );
+        assert!(state.resident.get(2).is_some());
+    }
+
+    #[test]
+    fn resident_hits_continue_while_dirty_eviction_waits() {
+        let temp_dir = TestTempDir::new();
+        let right = MockAtIo::with_len(192);
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 1;
+        config.lru_capacity_blocks = 1;
+        config.dirty_scan_interval = Duration::from_secs(60);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Arc::new(Cache::new(config, right.clone()).unwrap());
+
+        cache.read_locked(96, &mut [0u8; 1]).unwrap();
+        cache.read_locked(96, &mut [0u8; 1]).unwrap();
+        cache.write_locked(4, &[200, 201, 202]).unwrap();
+        cache.write_locked(36, &[210, 211]).unwrap();
+        right.take_calls();
+
+        let waiting_cache = Arc::clone(&cache);
+        let waiting_thread = thread::spawn(move || {
+            let mut buffer = [0u8; 1];
+            waiting_cache.read_locked(64, &mut buffer).unwrap();
+        });
+
+        wait_until(Duration::from_secs(1), || {
+            cache.state.lock().unwrap().foreground_dirty_eviction_waiters == 1
+        });
+
+        let (tx, rx) = mpsc::channel();
+        let hit_cache = Arc::clone(&cache);
+        let hit_thread = thread::spawn(move || {
+            let mut buffer = [0u8; 4];
+            hit_cache.read_locked(96, &mut buffer).unwrap();
+            hit_cache.write_locked(100, &[250, 251]).unwrap();
+            tx.send(buffer).unwrap();
+        });
+
+        assert_eq!(
+            rx.recv_timeout(Duration::from_millis(200)).unwrap(),
+            [96, 97, 98, 99]
+        );
+        hit_thread.join().unwrap();
+
+        {
+            let mut state = cache.state.lock().unwrap();
+            let removed = state.spilled_dirty.remove(&0);
+            assert!(removed.is_some());
+        }
+        cache.temp.remove_block(0).unwrap();
+        cache.state_changed.notify_all();
+        waiting_thread.join().unwrap();
+
+        let mut verify = [0u8; 8];
+        cache.read_locked(96, &mut verify).unwrap();
+        assert_eq!(&verify[..], &[96, 97, 98, 99, 250, 251, 102, 103]);
+    }
+
+    #[test]
+    fn worker_snapshot_creation_yields_to_foreground_temp_waiters() {
+        let temp_dir = TestTempDir::new();
+        let right = MockAtIo::with_len(192);
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 1;
+        config.lru_capacity_blocks = 1;
+        config.dirty_scan_interval = Duration::from_secs(60);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Arc::new(Cache::new(config, right.clone()).unwrap());
+
+        cache.read_locked(96, &mut [0u8; 1]).unwrap();
+        cache.read_locked(96, &mut [0u8; 1]).unwrap();
+        cache.write_locked(100, &[250, 251]).unwrap();
+        cache.write_locked(4, &[200, 201, 202]).unwrap();
+        cache.write_locked(36, &[210, 211]).unwrap();
+        right.take_calls();
+
+        let waiting_cache = Arc::clone(&cache);
+        let waiting_thread = thread::spawn(move || {
+            let mut buffer = [0u8; 1];
+            waiting_cache.read_locked(64, &mut buffer).unwrap();
+        });
+
+        wait_until(Duration::from_secs(1), || {
+            cache.state.lock().unwrap().foreground_dirty_eviction_waiters == 1
+        });
+
+        {
+            let mut state = cache.state.lock().unwrap();
+            let removed = state.spilled_dirty.remove(&0);
+            assert!(removed.is_some());
+            let created = Cache::<MockAtIo>::create_snapshot_temp_locked(
+                cache.config(),
+                &mut state,
+                &cache.temp,
+            )
+            .unwrap();
+            assert!(!created);
+            assert!(state.resident.get(3).unwrap().state.active_snapshot.is_none());
+        }
+        cache.temp.remove_block(0).unwrap();
+        cache.state_changed.notify_all();
+        waiting_thread.join().unwrap();
+
+        let state = cache.state.lock().unwrap();
+        assert!(state.resident.get(3).unwrap().state.active_snapshot.is_none());
+    }
+
+    #[test]
+    fn stop_requested_wakes_dirty_eviction_waiters() {
+        let temp_dir = TestTempDir::new();
+        let right = MockAtIo::with_len(160);
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 1;
+        config.dirty_scan_interval = Duration::from_secs(60);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Arc::new(Cache::new(config, right).unwrap());
+
+        cache.write_locked(4, &[200, 201, 202]).unwrap();
+        cache.write_locked(36, &[210, 211]).unwrap();
+
+        let (tx, rx) = mpsc::channel();
+        let waiting_cache = Arc::clone(&cache);
+        let waiting_thread = thread::spawn(move || {
+            let mut buffer = [0u8; 1];
+            let result = waiting_cache.read_locked(64, &mut buffer);
+            tx.send(result).unwrap();
+        });
+
+        wait_until(Duration::from_secs(1), || {
+            cache.state.lock().unwrap().foreground_dirty_eviction_waiters == 1
+        });
+
+        {
+            let mut state = cache.state.lock().unwrap();
+            state.stop_requested = true;
+        }
+        cache.state_changed.notify_all();
+
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Err(CacheError::Stopped)
+        );
+        waiting_thread.join().unwrap();
+        assert_eq!(cache.state.lock().unwrap().foreground_dirty_eviction_waiters, 0);
+    }
+
+    #[test]
     fn worker_flushes_resident_dirty_and_removes_temp() {
         let temp_dir = TestTempDir::new();
         let right = MockAtIo::with_len(128);
@@ -1513,7 +1848,12 @@ mod tests {
     #[test]
     fn worker_retries_failed_snapshot_flush_and_keeps_temp_until_success() {
         let temp_dir = TestTempDir::new();
-        let right = MockAtIo::with_write_failures(128, 1);
+        let right = MockAtIo::new(
+            test_bytes(128),
+            Duration::ZERO,
+            Duration::from_millis(120),
+            1,
+        );
         let mut config = test_config(32);
         config.dirty_scan_interval = Duration::from_millis(80);
         config.temp_dir = temp_dir.path().to_path_buf();

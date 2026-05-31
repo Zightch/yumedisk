@@ -92,8 +92,18 @@ resident 只维护两条队列：
 - dirty victim
   - 必须先生成或复用 temp snapshot
   - temp 成为唯一权威副本后，才能离开 resident
+- dirty victim 需要新 temp 但 temp 已满
+  - miss 在远端拉块前等待 temp slot
+  - temp slot 释放后再继续 spill 和补块
 
 如果 dirty 块还没有满足可淘汰条件，就不能把它当作可用 victim。
+
+这条背压只作用于需要新资源的 miss：
+
+- `read hit`
+  - 不被阻塞
+- `write hit`
+  - 不被阻塞
 
 ## flush 策略
 

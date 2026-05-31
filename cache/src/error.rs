@@ -34,13 +34,11 @@ pub enum CacheError {
         path: PathBuf,
         kind: ErrorKind,
     },
-    TempFilesExhausted {
-        max_files: usize,
-    },
     ResidentBlockAlreadyExists {
         block_index: u64,
     },
     InvariantViolation(&'static str),
+    Stopped,
     NotImplemented,
 }
 
@@ -90,9 +88,6 @@ impl Display for CacheError {
                 "temp io failed while {operation}: path={}, kind={kind:?}",
                 path.display()
             ),
-            Self::TempFilesExhausted { max_files } => {
-                write!(f, "cache temp file slots exhausted: max_files={max_files}")
-            }
             Self::ResidentBlockAlreadyExists { block_index } => {
                 write!(
                     f,
@@ -100,6 +95,7 @@ impl Display for CacheError {
                 )
             }
             Self::InvariantViolation(reason) => write!(f, "cache invariant violation: {reason}"),
+            Self::Stopped => write!(f, "cache stopped"),
             Self::NotImplemented => write!(f, "cache operation is not implemented"),
         }
     }

@@ -388,21 +388,21 @@ resident block 主表固定按：
 
 任务：
 
-- [ ] clean victim 直接淘汰
-- [ ] dirty victim 必须先 spill
-- [ ] temp 满时，dirty eviction 相关 miss 在右侧拉块前阻塞
-- [ ] `read hit` 不被误阻塞
-- [ ] `write hit` 不被误阻塞
-- [ ] temp slot 释放后正确唤醒等待请求
-- [ ] terminal / stopping 时正确退出等待
-- [ ] 等待 dirty eviction 的前台 miss 优先于 resident dirty 周期扫描
+- [x] clean victim 直接淘汰
+- [x] dirty victim 必须先 spill
+- [x] temp 满时，dirty eviction 相关 miss 在右侧拉块前阻塞
+- [x] `read hit` 不被误阻塞
+- [x] `write hit` 不被误阻塞
+- [x] temp slot 释放后正确唤醒等待请求
+- [x] terminal / stopping 时正确退出等待
+- [x] 等待 dirty eviction 的前台 miss 优先于 resident dirty 周期扫描
 
 测试重点：
 
-- [ ] clean victim 不会被无谓阻塞
-- [ ] dirty victim + temp 满时会阻塞
-- [ ] temp 释放后等待 miss 能继续
-- [ ] 周期扫描和前台 miss 的优先级正确
+- [x] clean victim 不会被无谓阻塞
+- [x] dirty victim + temp 满时会阻塞
+- [x] temp 释放后等待 miss 能继续
+- [x] 周期扫描和前台 miss 的优先级正确
 
 ## 5.9 第九阶段：虚拟测试座子
 

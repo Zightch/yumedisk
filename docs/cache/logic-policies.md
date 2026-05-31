@@ -56,11 +56,12 @@ temp 上限按单盘文件数量控制，不按总字节数控制。
 
 如果 cache 和 temp 都已经顶满，后续凡是还需要新 resident 或新 temp 的请求，都必须排队等待。
 
-当前独立 `cache/` crate 还没有进入这一步：
+当前独立 `cache/` crate 的实现口径是：
 
-- dirty eviction 需要新 temp 但 slot 已满时
-  - 当前先返回显式资源耗尽错误
-  - 阻塞和排队留到后续阶段完成
+- 只有真正卡在 `dirty victim + temp 满` 的 miss 会进入等待
+- `read hit` / `write hit` 不会因为别的 miss 在排队而被连带阻塞
+- temp slot 释放后，等待中的 miss 会被唤醒并重新判定状态
+- 如果缓存正在停止，等待中的 miss 会直接退出
 
 ## 周期扫描优先级
 
@@ -82,8 +83,6 @@ temp 上限按单盘文件数量控制，不按总字节数控制。
 - 如果后续已经有前台 miss 在等待 temp slot
   - 周期扫描不再为 resident dirty 新建 snapshot
 - 但 worker 仍然应该继续发送已经存在的 temp、active snapshot 和 retry 项
-
-“等待 dirty eviction 的前台 miss 先于 resident dirty 周期扫描” 这条更完整的背压优先级，留到后续阻塞排队阶段一起闭环。
 
 ## temp 占用串行策略
 
