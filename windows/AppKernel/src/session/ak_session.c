@@ -72,12 +72,12 @@ static void AkSessionSetBroken(
     session->State.LastError = status;
     ReleaseSRWLockExclusive(&session->Lock);
 
-    queue_status = AkEventQueuePushSessionBroken(session, status);
+    queue_status = AkSessionNoticeQueuePushBroken(session, status);
     if (queue_status != AK_STATUS_SUCCESS) {
         AkSessionLog(
             session,
             3,
-            "AkSessionSetBroken: enqueue broken event failed status=0x%08lX",
+            "AkSessionSetBroken: enqueue session notice failed status=0x%08lX",
             (unsigned long)queue_status);
     }
 }
@@ -244,7 +244,8 @@ static void AkSessionDestroy(
         session->StopEvent = NULL;
     }
 
-    AkEventQueueDestroy(session);
+    AkSessionNoticeQueueDestroy(session);
+    AkResponseQueueDestroy(session);
 
     if ((session->ControlFile != NULL) && (session->ControlFile != INVALID_HANDLE_VALUE)) {
         CloseHandle(session->ControlFile);
@@ -282,7 +283,11 @@ static AK_STATUS AkValidateOpenParams(const AK_OPEN_PARAMS* params)
         return AK_STATUS_INVALID_PARAMETER;
     }
 
-    if (params->InitialEventQueueCapacity == 0u) {
+    if (params->InitialResponseQueueCapacity == 0u) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    if (params->InitialSessionNoticeQueueCapacity == 0u) {
         return AK_STATUS_INVALID_PARAMETER;
     }
 
@@ -314,7 +319,8 @@ AK_STATUS AkSessionOpen(
     }
 
     session->OpenParams = *params;
-    session->EventQueue.InitialCapacity = params->InitialEventQueueCapacity;
+    session->ResponseQueue.InitialCapacity = params->InitialResponseQueueCapacity;
+    session->SessionNoticeQueue.InitialCapacity = params->InitialSessionNoticeQueueCapacity;
     InitializeSRWLock(&session->Lock);
     session->ControlFile = NULL;
     session->StopEvent = NULL;
@@ -336,10 +342,22 @@ AK_STATUS AkSessionOpen(
 
     AkSessionLog(session, 1, "AkOpen: begin");
 
-    status = AkEventQueueInitialize(session);
+    status = AkResponseQueueInitialize(session);
     if (status != AK_STATUS_SUCCESS) {
         AkSessionRecordCommandFailure(session, status);
-        AkSessionLog(session, 3, "AkOpen: init event queue failed status=0x%08lX", (unsigned long)status);
+        AkSessionLog(session, 3, "AkOpen: init response queue failed status=0x%08lX", (unsigned long)status);
+        AkSessionDestroy(session);
+        return status;
+    }
+
+    status = AkSessionNoticeQueueInitialize(session);
+    if (status != AK_STATUS_SUCCESS) {
+        AkSessionRecordCommandFailure(session, status);
+        AkSessionLog(
+            session,
+            3,
+            "AkOpen: init session notice queue failed status=0x%08lX",
+            (unsigned long)status);
         AkSessionDestroy(session);
         return status;
     }

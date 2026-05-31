@@ -38,29 +38,44 @@ AK_STATUS AK_CALL AkQuerySessionStats(
     return AkSessionQueryStats(session, out_stats);
 }
 
-AK_STATUS AK_CALL AkWaitEvent(
+AK_STATUS AK_CALL AkWaitResponse(
     AK_SESSION* session,
     DWORD timeout_ms,
-    AK_EVENT* out_event)
+    AK_RESPONSE* out_response)
 {
-    return AkEventWait(session, timeout_ms, out_event);
+    return AkResponseWait(session, timeout_ms, out_response);
 }
 
-AK_STATUS AK_CALL AkPollEvent(
+AK_STATUS AK_CALL AkPollResponse(
     AK_SESSION* session,
-    AK_EVENT* out_event)
+    AK_RESPONSE* out_response)
 {
-    return AkEventPoll(session, out_event);
+    return AkResponsePoll(session, out_response);
+}
+
+AK_STATUS AK_CALL AkWaitSessionNotice(
+    AK_SESSION* session,
+    DWORD timeout_ms,
+    AK_SESSION_NOTICE* out_notice)
+{
+    return AkSessionNoticeWait(session, timeout_ms, out_notice);
+}
+
+AK_STATUS AK_CALL AkPollSessionNotice(
+    AK_SESSION* session,
+    AK_SESSION_NOTICE* out_notice)
+{
+    return AkSessionNoticePoll(session, out_notice);
 }
 
 AK_STATUS AK_CALL AkCreateDisk(
     AK_SESSION* session,
     const AK_DISK_PARAMS* params,
-    const AK_MEDIA_OPS* media_ops,
-    void* media_ctx,
+    const AK_DISK_OPS* disk_ops,
+    void* disk_ctx,
     AK_DISK** out_disk)
 {
-    return AkDiskCreate(session, params, media_ops, media_ctx, out_disk);
+    return AkDiskCreate(session, params, disk_ops, disk_ctx, out_disk);
 }
 
 AK_STATUS AK_CALL AkRemoveDisk(

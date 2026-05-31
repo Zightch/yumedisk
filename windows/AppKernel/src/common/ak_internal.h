@@ -7,15 +7,24 @@
 #include "appkernel.h"
 #include "yumedisk_proto.h"
 
-typedef struct AK_EVENT_QUEUE {
+typedef struct AK_RESPONSE_QUEUE {
     UINT32 InitialCapacity;
-    AK_EVENT* Items;
+    AK_RESPONSE* Items;
     UINT32 Capacity;
     UINT32 Head;
     UINT32 Count;
-    BOOLEAN SessionBrokenQueued;
     HANDLE WaitEvent;
-} AK_EVENT_QUEUE;
+} AK_RESPONSE_QUEUE;
+
+typedef struct AK_SESSION_NOTICE_QUEUE {
+    UINT32 InitialCapacity;
+    AK_SESSION_NOTICE* Items;
+    UINT32 Capacity;
+    UINT32 Head;
+    UINT32 Count;
+    BOOLEAN BrokenQueued;
+    HANDLE WaitEvent;
+} AK_SESSION_NOTICE_QUEUE;
 
 typedef struct AK_DISK_WORKER_CONTEXT {
     struct AK_DISK* Disk;
@@ -31,7 +40,8 @@ struct AK_SESSION {
     AK_OPEN_PARAMS OpenParams;
     AK_SESSION_STATE State;
     AK_SESSION_STATS Stats;
-    AK_EVENT_QUEUE EventQueue;
+    AK_RESPONSE_QUEUE ResponseQueue;
+    AK_SESSION_NOTICE_QUEUE SessionNoticeQueue;
     SRWLOCK Lock;
     HANDLE ControlFile;
     HANDLE StopEvent;
@@ -46,8 +56,8 @@ struct AK_SESSION {
 struct AK_DISK {
     struct AK_SESSION* Session;
     AK_DISK_PARAMS Params;
-    AK_MEDIA_OPS MediaOps;
-    void* MediaCtx;
+    AK_DISK_OPS DiskOps;
+    void* DiskCtx;
     AK_DISK_STATE State;
     AK_DISK_STATS Stats;
     SRWLOCK Lock;

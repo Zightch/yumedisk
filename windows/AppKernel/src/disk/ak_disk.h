@@ -5,8 +5,8 @@
 AK_STATUS AkDiskCreate(
     AK_SESSION* session,
     const AK_DISK_PARAMS* params,
-    const AK_MEDIA_OPS* media_ops,
-    void* media_ctx,
+    const AK_DISK_OPS* disk_ops,
+    void* disk_ctx,
     AK_DISK** out_disk);
 
 AK_STATUS AkDiskRemove(

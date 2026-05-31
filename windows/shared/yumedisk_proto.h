@@ -23,7 +23,7 @@
 #define YUMEDISK_VERSION_MINOR(_versionBe) (((ULONG)(_versionBe) >> 16) & 0xffu)
 #define YUMEDISK_VERSION_PATCH(_versionBe) (((ULONG)(_versionBe) >> 8) & 0xffu)
 #define YUMEDISK_VERSION_BUILD(_versionBe) ((ULONG)(_versionBe) & 0xffu)
-#define YUMEDISK_COMPONENT_VERSION_BE YUMEDISK_VERSION_BE(0u, 1u, 0u, 1u)
+#define YUMEDISK_COMPONENT_VERSION_BE YUMEDISK_VERSION_BE(0u, 1u, 1u, 0u)
 
 static const GUID GUID_YUMEDISK_CONTROL = {
     0x72d587ef, 0xab50, 0x490a, { 0x9f, 0xf2, 0x90, 0x72, 0xcd, 0xe5, 0x1d, 0x42 }
@@ -44,7 +44,9 @@ typedef enum _YUMEDISK_COMMAND {
     YumeDiskCommandWriteAckBatch = 23,
     YumeDiskCommandSubmitSlot = 24,
     YumeDiskCommandCancelSlot = 25,
-    YumeDiskCommandQueryDebugState = 26
+    YumeDiskCommandQueryDebugState = 26,
+    YumeDiskCommandPostEventSlot = 27,
+    YumeDiskCommandSubmitEventSlot = 28
 } YUMEDISK_COMMAND;
 
 typedef enum _YUMEDISK_SLOT_TYPE {
@@ -187,6 +189,17 @@ typedef struct _YUMEDISK_WRITE_ACK_BATCH_RESULT {
 #define YUMEDISK_WRITE_ACK_BATCH_RESULT_BASE_SIZE FIELD_OFFSET(YUMEDISK_WRITE_ACK_BATCH_RESULT, Failures)
 #define YUMEDISK_WRITE_ACK_BATCH_RESULT_SIZE(_failureCount) \
     (YUMEDISK_WRITE_ACK_BATCH_RESULT_BASE_SIZE + ((_failureCount) * sizeof(YUMEDISK_WRITE_ACK_FAILURE)))
+
+typedef enum _YUMEDISK_DISK_EVENT_KIND {
+    YumeDiskDiskEventSystemEjected = 0
+} YUMEDISK_DISK_EVENT_KIND;
+
+typedef struct _YUMEDISK_DISK_EVENT {
+    UINT32 EventKind;
+    UINT32 Flags;
+    LONG Status;
+    UINT32 Reserved0;
+} YUMEDISK_DISK_EVENT, *PYUMEDISK_DISK_EVENT;
 
 typedef struct _YUMEDISK_DEBUG_STATE {
     UINT64 ActiveSessionId;

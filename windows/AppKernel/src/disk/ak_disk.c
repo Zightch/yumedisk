@@ -71,7 +71,7 @@ typedef struct AK_WRITE_EVENT_RECORD {
     UINT32 AckedSeqCount;
     AK_STATUS FinalStatus;
     BOOLEAN FinalFailed;
-    BOOLEAN FinalEventQueued;
+    BOOLEAN FinalResponseQueued;
     struct AK_WRITE_EVENT_RECORD* Next;
 } AK_WRITE_EVENT_RECORD;
 
@@ -170,18 +170,18 @@ static AK_STATUS AkDiskEmitWriteFinalEvent(
     AK_STATUS final_status,
     BOOLEAN committed)
 {
-    AK_EVENT event_record;
+    AK_RESPONSE response_record;
     AK_STATUS status;
 
-    (void)memset(&event_record, 0, sizeof(event_record));
-    event_record.Type = committed ? AkEventWriteFinalCommitted : AkEventWriteFinalRejected;
-    event_record.TargetId = disk->State.TargetId;
-    event_record.DiskRuntimeId = disk->State.DiskRuntimeId;
-    event_record.EventId = event_id;
-    event_record.TotalSeq = total_seq;
-    event_record.Status = final_status;
+    (void)memset(&response_record, 0, sizeof(response_record));
+    response_record.Type = committed ? AkResponseWriteFinalCommitted : AkResponseWriteFinalRejected;
+    response_record.TargetId = disk->State.TargetId;
+    response_record.DiskRuntimeId = disk->State.DiskRuntimeId;
+    response_record.EventId = event_id;
+    response_record.TotalSeq = total_seq;
+    response_record.Status = final_status;
 
-    status = AkEventQueuePush(disk->Session, &event_record);
+    status = AkResponseQueuePush(disk->Session, &response_record);
     if (status != AK_STATUS_SUCCESS) {
         return status;
     }
@@ -246,7 +246,7 @@ static AK_STATUS AkDiskRememberFinalizedWriteEventLocked(
         record->TotalSeq = total_seq;
         record->FinalStatus = final_status;
         record->FinalFailed = final_failed;
-        record->FinalEventQueued = TRUE;
+        record->FinalResponseQueued = TRUE;
         return AK_STATUS_SUCCESS;
     }
 
@@ -260,7 +260,7 @@ static AK_STATUS AkDiskRememberFinalizedWriteEventLocked(
     record->AckedSeqCount = total_seq;
     record->FinalStatus = final_status;
     record->FinalFailed = final_failed;
-    record->FinalEventQueued = TRUE;
+    record->FinalResponseQueued = TRUE;
     record->Next = NULL;
 
     if (disk->FinalizedWriteEventsTail != NULL) {
@@ -300,7 +300,7 @@ static AK_STATUS AkDiskFinalizeWriteEventLocked(
         return AK_STATUS_INVALID_PARAMETER;
     }
 
-    if (record->FinalEventQueued) {
+    if (record->FinalResponseQueued) {
         return AK_STATUS_SUCCESS;
     }
 
@@ -316,7 +316,7 @@ static AK_STATUS AkDiskFinalizeWriteEventLocked(
         return status;
     }
 
-    record->FinalEventQueued = TRUE;
+    record->FinalResponseQueued = TRUE;
     return AK_STATUS_SUCCESS;
 }
 
@@ -370,7 +370,7 @@ static AK_STATUS AkDiskEnsureWriteEventTracked(
     record->AckedSeqCount = 0u;
     record->FinalStatus = AK_STATUS_SUCCESS;
     record->FinalFailed = FALSE;
-    record->FinalEventQueued = FALSE;
+    record->FinalResponseQueued = FALSE;
     record->Next = disk->ActiveWriteEvents;
     disk->ActiveWriteEvents = record;
 
@@ -574,8 +574,8 @@ static AK_STATUS AkDiskStageWriteSlot(
     write_op.DataLength = header->DataLength;
     write_op.Flags = header->Flags;
 
-    status = disk->MediaOps.stage_write(
-        disk->MediaCtx,
+    status = disk->DiskOps.stage_write(
+        disk->DiskCtx,
         &write_op,
         header->DataLength == 0u ? NULL : header->Data,
         header->DataLength);
@@ -808,9 +808,9 @@ static void AkDiskSetBroken(
 
 static AK_STATUS AkDiskValidateParams(
     const AK_DISK_PARAMS* params,
-    const AK_MEDIA_OPS* media_ops)
+    const AK_DISK_OPS* disk_ops)
 {
-    if ((params == NULL) || (media_ops == NULL)) {
+    if ((params == NULL) || (disk_ops == NULL)) {
         return AK_STATUS_INVALID_PARAMETER;
     }
 
@@ -839,7 +839,7 @@ static AK_STATUS AkDiskValidateParams(
         return AK_STATUS_INVALID_PARAMETER;
     }
 
-    if ((media_ops->read_bytes == NULL) || (media_ops->stage_write == NULL)) {
+    if ((disk_ops->read_bytes == NULL) || (disk_ops->stage_write == NULL)) {
         return AK_STATUS_INVALID_PARAMETER;
     }
 
@@ -1069,8 +1069,8 @@ static AK_STATUS AkDiskCopyReadData(
     {
         AK_STATUS status;
 
-        status = disk->MediaOps.read_bytes(
-            disk->MediaCtx,
+        status = disk->DiskOps.read_bytes(
+            disk->DiskCtx,
             &read_op,
             buffer,
             out_data_length);
@@ -1623,7 +1623,7 @@ static AK_STATUS AkDiskApplyWriteAckResult(
         return AK_STATUS_INVALID_PARAMETER;
     }
 
-    if (!record->FinalEventQueued) {
+    if (!record->FinalResponseQueued) {
         if (range_status != AK_STATUS_SUCCESS) {
             record->FinalFailed = TRUE;
             record->FinalStatus = range_status;
@@ -1640,7 +1640,7 @@ static AK_STATUS AkDiskApplyWriteAckResult(
     final_failed = FALSE;
     final_status = AK_STATUS_SUCCESS;
 
-    if (!record->FinalEventQueued) {
+    if (!record->FinalResponseQueued) {
         if (record->FinalFailed) {
             final_failed = TRUE;
             final_status = record->FinalStatus;
@@ -2721,24 +2721,24 @@ void AkDiskDestroyDetached(
 
 static AK_STATUS AkDiskEmitLifecycleEvent(
     AK_DISK* disk,
-    AK_EVENT_TYPE type,
+    AK_RESPONSE_TYPE type,
     AK_STATUS status)
 {
-    AK_EVENT event_record;
+    AK_RESPONSE response_record;
 
-    (void)memset(&event_record, 0, sizeof(event_record));
-    event_record.Type = type;
-    event_record.TargetId = disk->State.TargetId;
-    event_record.DiskRuntimeId = disk->State.DiskRuntimeId;
-    event_record.Status = status;
-    return AkEventQueuePush(disk->Session, &event_record);
+    (void)memset(&response_record, 0, sizeof(response_record));
+    response_record.Type = type;
+    response_record.TargetId = disk->State.TargetId;
+    response_record.DiskRuntimeId = disk->State.DiskRuntimeId;
+    response_record.Status = status;
+    return AkResponseQueuePush(disk->Session, &response_record);
 }
 
 AK_STATUS AkDiskCreate(
     AK_SESSION* session,
     const AK_DISK_PARAMS* params,
-    const AK_MEDIA_OPS* media_ops,
-    void* media_ctx,
+    const AK_DISK_OPS* disk_ops,
+    void* disk_ctx,
     AK_DISK** out_disk)
 {
     AK_DISK* disk;
@@ -2753,7 +2753,7 @@ AK_STATUS AkDiskCreate(
 
     *out_disk = NULL;
 
-    status = AkDiskValidateParams(params, media_ops);
+    status = AkDiskValidateParams(params, disk_ops);
     if (status != AK_STATUS_SUCCESS) {
         return status;
     }
@@ -2769,8 +2769,8 @@ AK_STATUS AkDiskCreate(
 
     disk->Session = session;
     disk->Params = *params;
-    disk->MediaOps = *media_ops;
-    disk->MediaCtx = media_ctx;
+    disk->DiskOps = *disk_ops;
+    disk->DiskCtx = disk_ctx;
     InitializeSRWLock(&disk->Lock);
     InitializeSRWLock(&disk->WriteAckLock);
     InitializeSRWLock(&disk->WriteTrackLock);
@@ -2834,7 +2834,7 @@ AK_STATUS AkDiskCreate(
     disk->State.LastError = AK_STATUS_SUCCESS;
     ReleaseSRWLockExclusive(&disk->Lock);
 
-    status = AkDiskEmitLifecycleEvent(disk, AkEventDiskOnline, AK_STATUS_SUCCESS);
+    status = AkDiskEmitLifecycleEvent(disk, AkResponseDiskOnline, AK_STATUS_SUCCESS);
     if (status != AK_STATUS_SUCCESS) {
         AkDiskSetLastError(disk, status);
         AcquireSRWLockExclusive(&disk->Lock);
@@ -2894,7 +2894,7 @@ AK_STATUS AkDiskRemove(AK_DISK* disk)
         AkDiskSetLastError(disk, remove_status);
     }
 
-    status = AkDiskEmitLifecycleEvent(disk, AkEventDiskRemoved, remove_status);
+    status = AkDiskEmitLifecycleEvent(disk, AkResponseDiskRemoved, remove_status);
     if (status != AK_STATUS_SUCCESS) {
         AkDiskSetLastError(disk, status);
     }

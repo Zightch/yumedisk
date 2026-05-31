@@ -82,7 +82,7 @@
 当前实现进度补充：
 
 - `session` 最小闭环已经落地。
-- `session-owned` 事件队列已经落地。
+- `session-owned` response / notice 队列已经落地。
 - `protocol transport` 已经开始独立成层：
   - 同步短命令统一走一套内部封装。
   - 异步 slot I/O 的 `OVERLAPPED` 生命周期和 wait/finish/cancel 已统一收口。
@@ -173,19 +173,23 @@ typedef struct AK_WRITE_OP {
     UINT32 Flags;
 } AK_WRITE_OP;
 
-typedef struct AK_MEDIA_OPS {
+typedef struct AK_DISK_OPS {
     LONG (*read_bytes)(
-        void* media_ctx,
+        void* disk_ctx,
         const AK_READ_OP* op,
         void* out_buffer,
         UINT32* out_data_length);
 
     LONG (*stage_write)(
-        void* media_ctx,
+        void* disk_ctx,
         const AK_WRITE_OP* op,
         const void* data_buffer,
         UINT32 data_length);
-} AK_MEDIA_OPS;
+
+    VOID (*on_event)(
+        void* disk_ctx,
+        const AK_DISK_EVENT* event_record);
+} AK_DISK_OPS;
 ```
 
 约束：
@@ -199,49 +203,64 @@ typedef struct AK_MEDIA_OPS {
 
 ## 4.3 事件模型
 
-`AppKernel` 不再为写路径堆一串专用回调。所有最终写裁决和运行通知统一走 session 级事件队列，由业务宿主 `poll/wait` 获取。
+`AppKernel` 当前公开三条事件语义：
+
+- `AK_RESPONSE`
+  - 承接宿主主动发起流程后的结果返回。
+- `AK_SESSION_NOTICE`
+  - 承接 session 级异步通知。
+- `AK_DISK_EVENT`
+  - 承接单盘级驱动主动事件。
 
 ```c
-typedef enum AK_EVENT_TYPE {
-    AkEventDiskOnline,
-    AkEventDiskRemoved,
-    AkEventWriteFinalCommitted,
-    AkEventWriteFinalRejected,
-    AkEventSessionBroken
-} AK_EVENT_TYPE;
+typedef enum AK_RESPONSE_TYPE {
+    AkResponseDiskOnline,
+    AkResponseDiskRemoved,
+    AkResponseWriteFinalCommitted,
+    AkResponseWriteFinalRejected
+} AK_RESPONSE_TYPE;
 
-typedef struct AK_EVENT {
-    AK_EVENT_TYPE Type;
+typedef struct AK_RESPONSE {
+    AK_RESPONSE_TYPE Type;
     UINT32 TargetId;
     UINT64 DiskRuntimeId;
     UINT64 EventId;
     UINT32 TotalSeq;
     UINT32 Flags;
     LONG Status;
-} AK_EVENT;
+} AK_RESPONSE;
+
+typedef enum AK_SESSION_NOTICE_TYPE {
+    AkSessionNoticeBroken
+} AK_SESSION_NOTICE_TYPE;
+
+typedef struct AK_SESSION_NOTICE {
+    AK_SESSION_NOTICE_TYPE Type;
+    UINT32 Flags;
+    LONG Status;
+} AK_SESSION_NOTICE;
+
+typedef enum AK_DISK_EVENT_TYPE {
+    AkDiskEventSystemEjected
+} AK_DISK_EVENT_TYPE;
+
+typedef struct AK_DISK_EVENT {
+    AK_DISK_EVENT_TYPE Type;
+    UINT32 TargetId;
+    UINT64 DiskRuntimeId;
+    UINT32 Flags;
+    LONG Status;
+} AK_DISK_EVENT;
 ```
 
-语义：
+固定规则：
 
-- `AkEventDiskOnline` 表示该盘 runtime 已经启动，read slot 已经进入可用状态，且 `CREATE_DISK` 已完成；它不等同于系统盘符或磁盘管理器可见性已经刷新完成。
-- `AkEventDiskRemoved` 表示该盘的 `AppKernel` 运行态已经完成删除收口。
-- `AkEventWriteFinalCommitted` 表示该 `EventId` 的全部 `seq` 都已被 `SCSI` 接受，业务宿主应把该笔 staged write 合并到正式介质。
-- `AkEventWriteFinalRejected` 表示该 `EventId` 已被最终判定失败、取消、stale 或 not found，业务宿主应丢弃该笔 staged write。
-- 写最终事件的粒度是整笔系统写，不是单个 ACK range。
-
-事件队列规则固定为：
-
-- 写最终事件属于正确性链路，不允许静默丢弃。
-- `AkEventDiskOnline`、`AkEventDiskRemoved`、`AkEventSessionBroken` 也不允许静默丢弃。
-- 事件队列默认实现为 session-owned growable FIFO；`InitialEventQueueCapacity` 只是初始容量，不是硬上限。
-- 如果因为资源耗尽无法继续保留事件，`AppKernel` 必须把 session 置为 `Broken`，拒绝继续接收新工作。
-
-当前已落地口径：
-
-- 事件队列由 `AppKernel session` 独占持有，不向宿主复制镜像状态。
-- 当前已经打通 `AkWaitEvent` / `AkPollEvent` 和 session-owned growable FIFO。
-- `AkEventSessionBroken` 已经具备一次性注入能力，用于承接 heartbeat / transport / event queue 失效。
-- `AkWaitEvent` 只负责取一个事件，不驱动额外状态机推进；状态流转仍由 session / disk runtime 产生端负责。
+- response 队列和 session notice 队列分开维护、分开消费。
+- `AkResponseDiskOnline`、`AkResponseDiskRemoved`、`AkResponseWriteFinalCommitted`、`AkResponseWriteFinalRejected` 只允许进入 response 队列。
+- `AkSessionNoticeBroken` 只允许进入 session notice 队列。
+- `AK_DISK_EVENT` 只允许从单盘 `event slot` 上行，不回塞到 response 或 notice。
+- 当前已经打通 `AkWaitResponse / AkPollResponse` 和 `AkWaitSessionNotice / AkPollSessionNotice` 两条公开消费口。
+- 当前最小闭环下只定义 `AkDiskEventSystemEjected` 类型，不在本节承诺完整系统弹出实现。
 
 ## 5. 对外接口
 
@@ -255,7 +274,8 @@ typedef VOID (*AK_LOG_FN)(
 
 typedef struct AK_OPEN_PARAMS {
     UINT32 HeartbeatIntervalMs;
-    UINT32 InitialEventQueueCapacity;
+    UINT32 InitialResponseQueueCapacity;
+    UINT32 InitialSessionNoticeQueueCapacity;
     AK_LOG_FN LogFn;
     void* LogCtx;
 } AK_OPEN_PARAMS;
@@ -264,7 +284,8 @@ typedef struct AK_OPEN_PARAMS {
 约束：
 
 - `HeartbeatIntervalMs` 是 session 内唯一 heartbeat 周期来源。
-- `InitialEventQueueCapacity` 必须能覆盖稳态下的 in-flight 写最终事件缓存。
+- `InitialResponseQueueCapacity` 必须能覆盖稳态下的 in-flight 写最终事件缓存。
+- `InitialSessionNoticeQueueCapacity` 是 session notice 队列的初始容量。
 
 ## 5.2 磁盘参数
 
@@ -310,22 +331,32 @@ LONG AkQuerySessionStats(
     AK_SESSION* session,
     AK_SESSION_STATS* out_stats);
 
-LONG AkWaitEvent(
+LONG AkWaitResponse(
     AK_SESSION* session,
     DWORD timeout_ms,
-    AK_EVENT* out_event);
+    AK_RESPONSE* out_response);
 
-LONG AkPollEvent(
+LONG AkPollResponse(
     AK_SESSION* session,
-    AK_EVENT* out_event);
+    AK_RESPONSE* out_response);
+
+LONG AkWaitSessionNotice(
+    AK_SESSION* session,
+    DWORD timeout_ms,
+    AK_SESSION_NOTICE* out_notice);
+
+LONG AkPollSessionNotice(
+    AK_SESSION* session,
+    AK_SESSION_NOTICE* out_notice);
 ```
 
 语义：
 
 - `AkClose` 是同步 drain；返回后，不再有任何介质回调和后台 worker 存活。
 - `AkQuerySessionState` / `AkQuerySessionStats` 只读快照，不驱动状态流转。
-- `AkWaitEvent` 取到一个事件就返回；超时返回 `STATUS_TIMEOUT`。
-- `AkPollEvent` 不阻塞；无事件返回 `STATUS_NO_MORE_ENTRIES`。
+- `AkWaitResponse` 取到一个 response 就返回；超时返回 `STATUS_TIMEOUT`。
+- `AkPollResponse` 不阻塞；无 response 返回 `STATUS_NO_MORE_ENTRIES`。
+- `AkWaitSessionNotice` / `AkPollSessionNotice` 只消费 session notice。
 
 ## 5.4 磁盘接口
 
@@ -333,8 +364,8 @@ LONG AkPollEvent(
 LONG AkCreateDisk(
     AK_SESSION* session,
     const AK_DISK_PARAMS* params,
-    const AK_MEDIA_OPS* media_ops,
-    void* media_ctx,
+    const AK_DISK_OPS* disk_ops,
+    void* disk_ctx,
     AK_DISK** out_disk);
 
 LONG AkRemoveDisk(
@@ -368,7 +399,7 @@ LONG AkQueryDiskStats(
 3. 发送 `REMOVE_DISK`。
 4. 停止该盘 worker 并回收 runtime。
 
-返回后，业务宿主可以安全销毁自己的 `media_ctx`。
+返回后，业务宿主可以安全销毁自己的 `disk_ctx`。
 
 `AkNotifyDiskDataChanged` 的固定语义必须是：
 
@@ -467,8 +498,10 @@ typedef struct AK_SESSION_STATS {
     UINT64 HeartbeatSent;
     UINT64 CommandFailures;
     UINT64 ProtocolFailures;
-    UINT64 EventsQueued;
-    UINT64 EventsDropped;
+    UINT64 ResponsesQueued;
+    UINT64 ResponsesDropped;
+    UINT64 SessionNoticesQueued;
+    UINT64 SessionNoticesDropped;
 } AK_SESSION_STATS;
 
 typedef struct AK_DISK_STATS {
@@ -505,19 +538,19 @@ typedef struct AK_DISK_STATS {
 2. `AppKernel` 先调用业务宿主 `stage_write`，把 fragment 写入暂存层。
 3. `AppKernel` 再发送 `WRITE_ACK_BATCH`。
 4. `AppKernel` 根据 batch 结果更新该 `EventId` 的内部 finalize 状态：
-   - 全部 `seq` 都被 `SCSI` 接受后，入队一次 `AkEventWriteFinalCommitted`。
-   - 任一 `seq` 被最终拒绝后，入队一次 `AkEventWriteFinalRejected`，并终止该 `EventId` 的后续 committed 可能。
+   - 全部 `seq` 都被 `SCSI` 接受后，入队一次 `AkResponseWriteFinalCommitted`。
+   - 任一 `seq` 被最终拒绝后，入队一次 `AkResponseWriteFinalRejected`，并终止该 `EventId` 的后续 committed 可能。
 5. 业务宿主收到最终事件后：
-   - `AkEventWriteFinalCommitted`：把该 `EventId` 的 staged write 合并到正式介质。
-   - `AkEventWriteFinalRejected`：把该 `EventId` 的 staged write 直接丢弃。
+   - `AkResponseWriteFinalCommitted`：把该 `EventId` 的 staged write 合并到正式介质。
+   - `AkResponseWriteFinalRejected`：把该 `EventId` 的 staged write 直接丢弃。
 
 这里的最终事件不是“附加通知”，而是 staging 模型的一部分。
 
 固定语义：
 
 - `stage_write` 成功不代表这笔系统写已经最终成立。
-- 只有 `AkEventWriteFinalCommitted` 才允许业务宿主把 staged write 转成正式介质。
-- `AkEventWriteFinalRejected` 到达前，业务宿主必须保留该 `EventId` 的 staged write 记录。
+- 只有 `AkResponseWriteFinalCommitted` 才允许业务宿主把 staged write 转成正式介质。
+- `AkResponseWriteFinalRejected` 到达前，业务宿主必须保留该 `EventId` 的 staged write 记录。
 
 ## 7. 取消模型
 
@@ -531,7 +564,7 @@ typedef struct AK_DISK_STATS {
 
 因此：
 
-- `AkEventWriteFinalRejected` 可能对应真正失败，也可能对应取消后的晚到 ACK。
+- `AkResponseWriteFinalRejected` 可能对应真正失败，也可能对应取消后的晚到 ACK。
 - 业务宿主只能把它当作“这笔 staged write 不能再提交”，不能反推系统仍然保留原始请求。
 
 ## 8. 线程与并发规则
@@ -544,15 +577,16 @@ typedef struct AK_DISK_STATS {
 - per-disk write workers。
 - per-disk write ACK flush worker。
 - session 级 heartbeat 线程。
-- session 级 write finalize / lifecycle 事件队列。
+- session 级 response 队列。
+- session 级 session notice 队列。
 
 固定规则：
 
 - 业务宿主不允许再包一层外部 read/write worker pool。
 - `AppKernel` 内部线程只负责协议推进和调度，不持有介质锁。
-- `media_ctx` 必须在 `AkRemoveDisk` 或 `AkClose` 返回前一直有效。
-- `AkClose` / `AkRemoveDisk` 返回后，不再有任何后台线程访问对应 `media_ctx`。
-- 业务宿主必须保证有专门的消费路径持续调用 `AkWaitEvent` 或 `AkPollEvent`，及时处理 staged write 的最终事件。
+- `disk_ctx` 必须在 `AkRemoveDisk` 或 `AkClose` 返回前一直有效。
+- `AkClose` / `AkRemoveDisk` 返回后，不再有任何后台线程访问对应 `disk_ctx`。
+- 业务宿主必须保证有专门的消费路径持续调用 `AkWaitResponse` 或 `AkPollResponse`，及时处理 staged write 的最终事件。
 
 ## 9. 当前不做的事情
 
@@ -580,3 +614,4 @@ typedef struct AK_DISK_STATS {
 - 驱动只拥有 session、target queue 和系统 I/O。
 - DLL 导出边界在 `MSVC` / `MinGW` 下都可构建、可链接、可被宿主调用。
 - `SDK` 文档能够单独指导宿主完成接入，而不需要回头翻实现源码猜接口语义。
+

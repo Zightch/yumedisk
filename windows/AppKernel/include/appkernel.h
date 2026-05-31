@@ -44,13 +44,20 @@ typedef enum AK_LIFECYCLE_STATE {
     AkStateBroken = 6
 } AK_LIFECYCLE_STATE;
 
-typedef enum AK_EVENT_TYPE {
-    AkEventDiskOnline = 0,
-    AkEventDiskRemoved = 1,
-    AkEventWriteFinalCommitted = 2,
-    AkEventWriteFinalRejected = 3,
-    AkEventSessionBroken = 4
-} AK_EVENT_TYPE;
+typedef enum AK_RESPONSE_TYPE {
+    AkResponseDiskOnline = 0,
+    AkResponseDiskRemoved = 1,
+    AkResponseWriteFinalCommitted = 2,
+    AkResponseWriteFinalRejected = 3
+} AK_RESPONSE_TYPE;
+
+typedef enum AK_SESSION_NOTICE_TYPE {
+    AkSessionNoticeBroken = 0
+} AK_SESSION_NOTICE_TYPE;
+
+typedef enum AK_DISK_EVENT_TYPE {
+    AkDiskEventSystemEjected = 0
+} AK_DISK_EVENT_TYPE;
 
 typedef VOID(AK_CALL* AK_LOG_FN)(
     void* log_ctx,
@@ -59,7 +66,8 @@ typedef VOID(AK_CALL* AK_LOG_FN)(
 
 typedef struct AK_OPEN_PARAMS {
     UINT32 HeartbeatIntervalMs;
-    UINT32 InitialEventQueueCapacity;
+    UINT32 InitialResponseQueueCapacity;
+    UINT32 InitialSessionNoticeQueueCapacity;
     AK_LOG_FN LogFn;
     void* LogCtx;
 } AK_OPEN_PARAMS;
@@ -100,29 +108,47 @@ typedef struct AK_WRITE_OP {
     UINT32 Flags;
 } AK_WRITE_OP;
 
-typedef struct AK_MEDIA_OPS {
+typedef struct AK_DISK_EVENT {
+    AK_DISK_EVENT_TYPE Type;
+    UINT32 TargetId;
+    UINT64 DiskRuntimeId;
+    UINT32 Flags;
+    AK_STATUS Status;
+} AK_DISK_EVENT;
+
+typedef struct AK_DISK_OPS {
     AK_STATUS(AK_CALL* read_bytes)(
-        void* media_ctx,
+        void* disk_ctx,
         const AK_READ_OP* op,
         void* out_buffer,
         UINT32* out_data_length);
 
     AK_STATUS(AK_CALL* stage_write)(
-        void* media_ctx,
+        void* disk_ctx,
         const AK_WRITE_OP* op,
         const void* data_buffer,
         UINT32 data_length);
-} AK_MEDIA_OPS;
 
-typedef struct AK_EVENT {
-    AK_EVENT_TYPE Type;
+    VOID(AK_CALL* on_event)(
+        void* disk_ctx,
+        const AK_DISK_EVENT* event_record);
+} AK_DISK_OPS;
+
+typedef struct AK_RESPONSE {
+    AK_RESPONSE_TYPE Type;
     UINT32 TargetId;
     UINT64 DiskRuntimeId;
     UINT64 EventId;
     UINT32 TotalSeq;
     UINT32 Flags;
     AK_STATUS Status;
-} AK_EVENT;
+} AK_RESPONSE;
+
+typedef struct AK_SESSION_NOTICE {
+    AK_SESSION_NOTICE_TYPE Type;
+    UINT32 Flags;
+    AK_STATUS Status;
+} AK_SESSION_NOTICE;
 
 typedef struct AK_SESSION_STATE {
     AK_LIFECYCLE_STATE Lifecycle;
@@ -150,8 +176,10 @@ typedef struct AK_SESSION_STATS {
     UINT64 HeartbeatSent;
     UINT64 CommandFailures;
     UINT64 ProtocolFailures;
-    UINT64 EventsQueued;
-    UINT64 EventsDropped;
+    UINT64 ResponsesQueued;
+    UINT64 ResponsesDropped;
+    UINT64 SessionNoticesQueued;
+    UINT64 SessionNoticesDropped;
 } AK_SESSION_STATS;
 
 typedef struct AK_DISK_STATS {
@@ -185,20 +213,29 @@ AK_API AK_STATUS AK_CALL AkQuerySessionStats(
     AK_SESSION* session,
     AK_SESSION_STATS* out_stats);
 
-AK_API AK_STATUS AK_CALL AkWaitEvent(
+AK_API AK_STATUS AK_CALL AkWaitResponse(
     AK_SESSION* session,
     DWORD timeout_ms,
-    AK_EVENT* out_event);
+    AK_RESPONSE* out_response);
 
-AK_API AK_STATUS AK_CALL AkPollEvent(
+AK_API AK_STATUS AK_CALL AkPollResponse(
     AK_SESSION* session,
-    AK_EVENT* out_event);
+    AK_RESPONSE* out_response);
+
+AK_API AK_STATUS AK_CALL AkWaitSessionNotice(
+    AK_SESSION* session,
+    DWORD timeout_ms,
+    AK_SESSION_NOTICE* out_notice);
+
+AK_API AK_STATUS AK_CALL AkPollSessionNotice(
+    AK_SESSION* session,
+    AK_SESSION_NOTICE* out_notice);
 
 AK_API AK_STATUS AK_CALL AkCreateDisk(
     AK_SESSION* session,
     const AK_DISK_PARAMS* params,
-    const AK_MEDIA_OPS* media_ops,
-    void* media_ctx,
+    const AK_DISK_OPS* disk_ops,
+    void* disk_ctx,
     AK_DISK** out_disk);
 
 AK_API AK_STATUS AK_CALL AkRemoveDisk(
