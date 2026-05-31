@@ -1,16 +1,7 @@
 #include "queue.h"
+#include "slot/slot.h"
 
 #include "..\core\memory.h"
-
-typedef struct _YUME_POSTED_SLOT {
-    LIST_ENTRY Link;
-    PSTORAGE_REQUEST_BLOCK Srb;
-    UINT64 SlotId;
-    UINT64 KernelVa;
-    ULONG Capacity;
-    ULONG TargetId;
-    ULONG SlotType;
-} YUME_POSTED_SLOT, *PYUME_POSTED_SLOT;
 
 typedef struct _YUME_READ_REQUEST {
     LIST_ENTRY Link;
@@ -40,17 +31,6 @@ typedef struct _YUME_WRITE_REQUEST {
 } YUME_WRITE_REQUEST, *PYUME_WRITE_REQUEST;
 
 static
-VOID
-DiskResetWriteSlotShapeLocked(
-    _Inout_ PYUME_DISK_QUEUE_STATE Queue
-)
-{
-    if (Queue->PostedWriteSlotCount == 0 && Queue->PendingWriteCount == 0) {
-        Queue->WriteSlotPayloadBytes = 0;
-    }
-}
-
-static
 ULONG
 DiskBitmapWordCount(
     _In_ ULONG BitCount
@@ -75,30 +55,6 @@ DiskTickProgress(
 )
 {
     InterlockedIncrement64(&Extension->DebugProgressCounter);
-}
-
-static
-PYUME_POSTED_SLOT
-DiskAllocPostedSlot(
-    _In_ PSTORAGE_REQUEST_BLOCK Srb,
-    _In_ const YUMEDISK_SLOT_DESCRIPTOR* Slot
-)
-{
-    PYUME_POSTED_SLOT postedSlot;
-
-    postedSlot = (PYUME_POSTED_SLOT)DiskAlloc(sizeof(*postedSlot));
-    if (postedSlot == NULL) {
-        return NULL;
-    }
-
-    RtlZeroMemory(postedSlot, sizeof(*postedSlot));
-    postedSlot->Srb = Srb;
-    postedSlot->SlotId = Slot->SlotId;
-    postedSlot->KernelVa = Slot->KernelVa;
-    postedSlot->Capacity = Slot->Capacity;
-    postedSlot->TargetId = Slot->TargetId;
-    postedSlot->SlotType = Slot->SlotType;
-    return postedSlot;
 }
 
 static
@@ -171,24 +127,6 @@ DiskAllocWriteRequest(
 }
 
 static
-ULONG
-DiskComputeWritePayloadBytes(
-    _In_ ULONG SectorSize,
-    _In_ ULONG SlotCapacity
-)
-{
-    ULONG payloadBytes;
-
-    if (SectorSize == 0 || SlotCapacity <= (ULONG)YUMEDISK_WRITE_SLOT_HEADER_BASE_SIZE) {
-        return 0;
-    }
-
-    payloadBytes = SlotCapacity - YUMEDISK_WRITE_SLOT_HEADER_BASE_SIZE;
-    payloadBytes -= (payloadBytes % SectorSize);
-    return payloadBytes;
-}
-
-static
 NTSTATUS
 DiskInitializeWriteRequestLocked(
     _Inout_ PYUME_WRITE_REQUEST Request,
@@ -213,79 +151,6 @@ DiskInitializeWriteRequestLocked(
     Request->PayloadBytes = PayloadBytes;
     Request->TotalSeq = totalSeq;
     return STATUS_SUCCESS;
-}
-
-static
-PSRB_IO_CONTROL
-DiskGetIoctlControl(
-    _In_ PSTORAGE_REQUEST_BLOCK Srb
-)
-{
-    return (PSRB_IO_CONTROL)Srb->DataBuffer;
-}
-
-static
-PYUMEDISK_MESSAGE
-DiskGetIoctlMessage(
-    _In_ PSTORAGE_REQUEST_BLOCK Srb
-)
-{
-    return (PYUMEDISK_MESSAGE)(DiskGetIoctlControl(Srb) + 1);
-}
-
-static
-VOID
-DiskCompleteSlotSrb(
-    _In_ PVOID DeviceExtension,
-    _In_ PYUME_POSTED_SLOT Slot,
-    _In_ NTSTATUS Status
-)
-{
-    PSRB_IO_CONTROL srbIoControl;
-    PYUMEDISK_MESSAGE message;
-
-    srbIoControl = DiskGetIoctlControl(Slot->Srb);
-    message = DiskGetIoctlMessage(Slot->Srb);
-    DiskInitMessageStatus(message, YumeDiskCommandSubmitSlot, Status, 0);
-    DiskCompleteIoctlSrb(Slot->Srb, srbIoControl, Status, message->Header.Size);
-    StorPortNotification(RequestComplete, DeviceExtension, Slot->Srb);
-}
-
-static
-VOID
-DiskCompleteEventSlotSrb(
-    _In_ PVOID DeviceExtension,
-    _In_ UCHAR TargetId,
-    _In_ PSTORAGE_REQUEST_BLOCK Srb,
-    _In_ UINT64 KernelVa,
-    _In_ ULONG Capacity,
-    _In_ NTSTATUS Status,
-    _In_opt_ const YUMEDISK_DISK_EVENT* EventRecord
-)
-{
-    PSRB_IO_CONTROL srbIoControl;
-    PYUMEDISK_MESSAGE message;
-
-    srbIoControl = DiskGetIoctlControl(Srb);
-    message = DiskGetIoctlMessage(Srb);
-
-    if (NT_SUCCESS(Status)) {
-        if (KernelVa == 0 ||
-            Capacity < sizeof(YUMEDISK_DISK_EVENT) ||
-            EventRecord == NULL) {
-            Status = STATUS_DEVICE_PROTOCOL_ERROR;
-        } else {
-            RtlCopyMemory(
-                (PVOID)(ULONG_PTR)KernelVa,
-                EventRecord,
-                sizeof(YUMEDISK_DISK_EVENT));
-        }
-    }
-
-    DiskInitMessageStatus(message, YumeDiskCommandSubmitEventSlot, Status, 0);
-    message->Header.TargetId = TargetId;
-    DiskCompleteIoctlSrb(Srb, srbIoControl, Status, message->Header.Size);
-    StorPortNotification(RequestComplete, DeviceExtension, Srb);
 }
 
 static
@@ -475,72 +340,6 @@ DiskFindWriteRequestByEventIdLocked(
 }
 
 static
-NTSTATUS
-DiskWriteReadSlotEvent(
-    _In_ const PYUME_READ_REQUEST Request,
-    _In_ const PYUME_POSTED_SLOT Slot
-)
-{
-    PYUMEDISK_READ_SLOT_EVENT readEvent;
-
-    if (Slot->KernelVa == 0 || Slot->Capacity < sizeof(*readEvent)) {
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-
-    readEvent = (PYUMEDISK_READ_SLOT_EVENT)(ULONG_PTR)Slot->KernelVa;
-    readEvent->EventId = Request->EventId;
-    readEvent->TargetId = Slot->TargetId;
-    readEvent->Reserved0 = 0;
-    readEvent->Lba = Request->Lba;
-    readEvent->BlockCount = Request->BlockCount;
-    readEvent->DataLength = Request->DataLength;
-    return STATUS_SUCCESS;
-}
-
-static
-NTSTATUS
-DiskWriteWriteSlotPayload(
-    _In_ const PYUME_DISK Disk,
-    _In_ const PYUME_WRITE_REQUEST Request,
-    _In_ ULONG Seq,
-    _In_ const PYUME_POSTED_SLOT Slot
-)
-{
-    PYUMEDISK_WRITE_SLOT_HEADER header;
-    ULONG byteOffset;
-    ULONG remainingBytes;
-    ULONG fragmentBytes;
-
-    if (Slot->KernelVa == 0 || Request->PayloadBytes == 0 || Request->TotalSeq == 0) {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    byteOffset = Seq * Request->PayloadBytes;
-    remainingBytes = Request->TotalBytes - byteOffset;
-    fragmentBytes = (remainingBytes < Request->PayloadBytes) ? remainingBytes : Request->PayloadBytes;
-    if (Slot->Capacity < YUMEDISK_WRITE_SLOT_HEADER_BASE_SIZE + fragmentBytes) {
-        return STATUS_BUFFER_TOO_SMALL;
-    }
-
-    header = (PYUMEDISK_WRITE_SLOT_HEADER)(ULONG_PTR)Slot->KernelVa;
-    header->EventId = Request->EventId;
-    header->Seq = Seq;
-    header->TotalSeq = Request->TotalSeq;
-    header->TargetId = Slot->TargetId;
-    header->Reserved0 = 0;
-    header->Lba = Request->BaseLba + (byteOffset / Disk->SectorSize);
-    header->ByteOffsetInWrite = byteOffset;
-    header->DataLength = fragmentBytes;
-    header->Flags = 0;
-    header->Reserved1 = 0;
-    RtlCopyMemory(
-        header->Data,
-        (PUCHAR)Request->Srb->DataBuffer + byteOffset,
-        fragmentBytes);
-    return STATUS_SUCCESS;
-}
-
-static
 VOID
 DiskDrainReadSlots(
     _In_ PVOID DeviceExtension,
@@ -573,7 +372,12 @@ DiskDrainReadSlots(
         queue->PendingReadIssuedCount++;
         KeReleaseSpinLock(&queue->ReadQueueLock, oldIrql);
 
-        if (NT_SUCCESS(DiskWriteReadSlotEvent(request, slot))) {
+        if (NT_SUCCESS(DiskWriteReadSlotEvent(
+                request->EventId,
+                request->Lba,
+                request->BlockCount,
+                request->DataLength,
+                slot))) {
             InterlockedIncrement64(&extension->DebugReadSlotsIssued);
             DiskTickProgress(extension);
             DiskCompleteSlotSrb(DeviceExtension, slot, STATUS_SUCCESS);
@@ -618,7 +422,16 @@ DiskDrainWriteSlots(
         seq = request->NextIssueSeq++;
         KeReleaseSpinLock(&queue->WriteQueueLock, oldIrql);
 
-        if (NT_SUCCESS(DiskWriteWriteSlotPayload(disk, request, seq, slot))) {
+        if (NT_SUCCESS(DiskWriteWriteSlotPayload(
+                request->Srb->DataBuffer,
+                request->EventId,
+                request->BaseLba,
+                request->TotalBytes,
+                request->PayloadBytes,
+                request->TotalSeq,
+                seq,
+                disk->SectorSize,
+                slot))) {
             InterlockedIncrement64(&extension->DebugWriteFragmentsIssued);
             DiskTickProgress(extension);
             DiskCompleteSlotSrb(DeviceExtension, slot, STATUS_SUCCESS);
@@ -1278,7 +1091,6 @@ DiskHandleCancelSlotIoctl(
     PYUMEDISK_CANCEL_SLOT cancelSlot;
     PYUME_DISK disk;
     PYUME_POSTED_SLOT removedSlot;
-    PLIST_ENTRY entry;
     KIRQL oldIrql;
 
     extension = (PDEVICE_CONTEXT)DeviceExtension;
@@ -1298,35 +1110,21 @@ DiskHandleCancelSlotIoctl(
 
     if (cancelSlot->SlotType == YumeDiskSlotTypeRead) {
         KeAcquireSpinLock(&disk->Queue.ReadQueueLock, &oldIrql);
-        for (entry = disk->Queue.PostedReadSlots.Flink;
-             entry != &disk->Queue.PostedReadSlots;
-             entry = entry->Flink) {
-            PYUME_POSTED_SLOT slot;
-
-            slot = CONTAINING_RECORD(entry, YUME_POSTED_SLOT, Link);
-            if (slot->SlotId == cancelSlot->SlotId) {
-                RemoveEntryList(&slot->Link);
-                disk->Queue.PostedReadSlotCount--;
-                removedSlot = slot;
-                break;
-            }
+        removedSlot = DiskRemovePostedSlotByIdLocked(
+            &disk->Queue.PostedReadSlots,
+            cancelSlot->SlotId);
+        if (removedSlot != NULL) {
+            disk->Queue.PostedReadSlotCount--;
         }
         KeReleaseSpinLock(&disk->Queue.ReadQueueLock, oldIrql);
     } else if (cancelSlot->SlotType == YumeDiskSlotTypeWrite) {
         KeAcquireSpinLock(&disk->Queue.WriteQueueLock, &oldIrql);
-        for (entry = disk->Queue.PostedWriteSlots.Flink;
-             entry != &disk->Queue.PostedWriteSlots;
-             entry = entry->Flink) {
-            PYUME_POSTED_SLOT slot;
-
-            slot = CONTAINING_RECORD(entry, YUME_POSTED_SLOT, Link);
-            if (slot->SlotId == cancelSlot->SlotId) {
-                RemoveEntryList(&slot->Link);
-                disk->Queue.PostedWriteSlotCount--;
-                DiskResetWriteSlotShapeLocked(&disk->Queue);
-                removedSlot = slot;
-                break;
-            }
+        removedSlot = DiskRemovePostedSlotByIdLocked(
+            &disk->Queue.PostedWriteSlots,
+            cancelSlot->SlotId);
+        if (removedSlot != NULL) {
+            disk->Queue.PostedWriteSlotCount--;
+            DiskResetWriteSlotShapeLocked(&disk->Queue);
         }
         KeReleaseSpinLock(&disk->Queue.WriteQueueLock, oldIrql);
     } else {
