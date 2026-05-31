@@ -59,6 +59,15 @@ func TestGatewaySessionMappingHidesUpstreamSessionIDAndForwardsDescribe(t *testi
 	if describeHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected describe status: %d", describeHeader.StatusCode)
 	}
+	expectedDescribeBody := proto.BuildSessionDescribeResponseBody(
+		dataPlane.describeOut.DiskSizeBytes,
+		dataPlane.describeOut.MaxIOBytes,
+		dataPlane.describeOut.ReadOnly,
+		dataPlane.describeOut.BackendID,
+	)
+	if !bytes.Equal(describeResp[proto.HeaderSize:], expectedDescribeBody) {
+		t.Fatalf("unexpected describe body bytes: got=%v want=%v", describeResp[proto.HeaderSize:], expectedDescribeBody)
+	}
 	diskSize, maxIOBytes, readOnly, backendID, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
 	if err != nil {
 		t.Fatalf("parse describe body: %v", err)
@@ -80,6 +89,9 @@ func TestGatewaySessionMappingHidesUpstreamSessionIDAndForwardsDescribe(t *testi
 	if header := mustParseGatewayHeader(t, readResp); header.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected read status: %d", header.StatusCode)
 	}
+	if !bytes.Equal(readResp[proto.HeaderSize:], dataPlane.readOut) {
+		t.Fatalf("unexpected read body bytes: got=%v want=%v", readResp[proto.HeaderSize:], dataPlane.readOut)
+	}
 	if dataPlane.lastReadSessionID != dataPlane.openSessionID {
 		t.Fatalf("read used wrong upstream session id: %d", dataPlane.lastReadSessionID)
 	}
@@ -94,6 +106,9 @@ func TestGatewaySessionMappingHidesUpstreamSessionIDAndForwardsDescribe(t *testi
 	}
 	if dataPlane.lastWriteSessionID != dataPlane.openSessionID {
 		t.Fatalf("write used wrong upstream session id: %d", dataPlane.lastWriteSessionID)
+	}
+	if !bytes.Equal(dataPlane.lastWriteBody, writePayload) {
+		t.Fatalf("unexpected write request body bytes: got=%v want=%v", dataPlane.lastWriteBody, writePayload)
 	}
 
 	closeResp, err := handler.HandlePayload(state, buildNotice(
@@ -392,6 +407,51 @@ func TestGatewayCloseConnectionWithReasonPassesThroughProtocolError(t *testing.T
 	}
 }
 
+func TestGatewaySessionDataChangedNoticeMapsRouteSessionToGatewaySession(t *testing.T) {
+	t.Parallel()
+
+	const diskID = "DISK000000000001"
+	routes := &mappingRouteSource{
+		entry: route.Entry{
+			DiskID:       diskID,
+			RouteTarget:  "storer://conn-51",
+			ConnectionID: 51,
+			Connected:    true,
+		},
+	}
+	dataPlane := &mappingDataPlane{openSessionID: 166}
+
+	handler, err := NewHandler(routes, dataPlane)
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	notifier := &recordingSessionDataChangedNotifier{}
+	handler.SetSessionDataChangedNotifier(notifier)
+
+	state := handler.NewConnectionState(93)
+	authID := handler.grants.Issue(state.ConnectionID(), diskID, time.Now().Add(time.Minute))
+	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, proto.BuildSessionOpenRequestBody(authID)))
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	openHeader := mustParseGatewayHeader(t, openResp)
+	if openHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected open status: %d", openHeader.StatusCode)
+	}
+
+	handler.NotifyRouteSessionDataChanged(routes.entry.ConnectionID, dataPlane.openSessionID)
+	if notifier.count() != 1 {
+		t.Fatalf("expected one data changed notice, got %d", notifier.count())
+	}
+	record := notifier.last()
+	if record.sessionID != openHeader.SessionID {
+		t.Fatalf("unexpected mapped gateway session id: %d", record.sessionID)
+	}
+	if record.clientConnectionID != state.ConnectionID() {
+		t.Fatalf("unexpected client connection id: %d", record.clientConnectionID)
+	}
+}
+
 type mappingRouteSource struct {
 	entry route.Entry
 }
@@ -413,6 +473,7 @@ type mappingDataPlane struct {
 	lastDescribeSessionID uint64
 	lastReadSessionID     uint64
 	lastWriteSessionID    uint64
+	lastWriteBody         []byte
 	lastCloseSessionID    uint64
 	lastCloseBody         []byte
 	lastCloseConnectionID uint64
@@ -448,6 +509,7 @@ func (p *mappingDataPlane) RoundTrip(routeConnectionID uint64, sessionID uint64,
 		return proto.StatusOK, bytes.Clone(p.readOut), nil
 	case proto.OpWriteAt:
 		p.lastWriteSessionID = sessionID
+		p.lastWriteBody = bytes.Clone(body)
 		return proto.StatusOK, nil, nil
 	default:
 		return proto.StatusUnsupportedOp, nil, nil
@@ -473,6 +535,16 @@ type sessionCloseRecord struct {
 	body               []byte
 }
 
+type recordingSessionDataChangedNotifier struct {
+	mu      sync.Mutex
+	records []sessionDataChangedRecord
+}
+
+type sessionDataChangedRecord struct {
+	sessionID          uint64
+	clientConnectionID uint64
+}
+
 func (n *recordingSessionCloseNotifier) NotifySessionClosed(sessionID uint64, clientConnectionID uint64, body []byte) {
 	n.mu.Lock()
 	n.records = append(n.records, sessionCloseRecord{
@@ -490,6 +562,27 @@ func (n *recordingSessionCloseNotifier) count() int {
 }
 
 func (n *recordingSessionCloseNotifier) last() sessionCloseRecord {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.records[len(n.records)-1]
+}
+
+func (n *recordingSessionDataChangedNotifier) NotifySessionDataChanged(sessionID uint64, clientConnectionID uint64) {
+	n.mu.Lock()
+	n.records = append(n.records, sessionDataChangedRecord{
+		sessionID:          sessionID,
+		clientConnectionID: clientConnectionID,
+	})
+	n.mu.Unlock()
+}
+
+func (n *recordingSessionDataChangedNotifier) count() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.records)
+}
+
+func (n *recordingSessionDataChangedNotifier) last() sessionDataChangedRecord {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.records[len(n.records)-1]
