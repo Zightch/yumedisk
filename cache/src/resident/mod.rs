@@ -355,6 +355,28 @@ impl TwoQueueResident {
         Ok(())
     }
 
+    pub(crate) fn clear_active_snapshot(&mut self, block_index: u64) -> Result<(), CacheError> {
+        let entry = self
+            .blocks
+            .get_mut(&block_index)
+            .ok_or(CacheError::InvariantViolation(
+                "resident block missing during snapshot clear",
+            ))?;
+        if entry.state.load_state != LoadState::Ready {
+            return Err(CacheError::InvariantViolation(
+                "snapshot clear requires ready resident block",
+            ));
+        }
+        if entry.state.active_snapshot.is_none() {
+            return Err(CacheError::InvariantViolation(
+                "snapshot clear requires active snapshot",
+            ));
+        }
+
+        entry.state.active_snapshot = None;
+        Ok(())
+    }
+
     pub(crate) fn attach_active_snapshot(&mut self, block_index: u64) -> Result<(), CacheError> {
         let entry = self
             .blocks
@@ -460,6 +482,38 @@ impl TwoQueueResident {
             .values()
             .filter(|entry| entry.state.active_snapshot.is_some())
             .count()
+    }
+
+    pub(crate) fn select_active_snapshot_block<F>(&self, mut can_select: F) -> Option<u64>
+    where
+        F: FnMut(u64) -> bool,
+    {
+        self.blocks
+            .iter()
+            .filter_map(|(&block_index, entry)| {
+                (entry.state.load_state == LoadState::Ready
+                    && entry.state.active_snapshot.is_some()
+                    && can_select(block_index))
+                .then_some(block_index)
+            })
+            .min()
+    }
+
+    pub(crate) fn select_snapshot_candidate<F>(&self, mut can_select: F) -> Option<u64>
+    where
+        F: FnMut(u64) -> bool,
+    {
+        self.blocks
+            .iter()
+            .filter_map(|(&block_index, entry)| {
+                (entry.state.load_state == LoadState::Ready
+                    && entry.state.active_snapshot.is_none()
+                    && !entry.state.dirty_ranges.is_empty()
+                    && entry.state.pending_patches.is_empty()
+                    && can_select(block_index))
+                .then_some(block_index)
+            })
+            .min()
     }
 
     pub(crate) fn evict_block(

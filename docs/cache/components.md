@@ -110,9 +110,15 @@ worker 只做后台脏数据推进，不做前台命中路径。
 
 它主要处理：
 
-- resident dirty 的周期扫描和 snapshot 发送
+- resident dirty 的周期扫描、snapshot 生成和发送
 - `spilled_dirty` 的重试发送
 - temp 释放后的等待唤醒
+
+当前实现口径是：
+
+- worker 按 `dirty_scan_interval` 周期起一轮
+- 每一轮先发已经存在的 temp
+- 没有现成 temp 可发时，才为 resident dirty 新建 snapshot
 
 它不负责：
 

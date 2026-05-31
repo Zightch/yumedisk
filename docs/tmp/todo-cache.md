@@ -363,22 +363,22 @@ resident block 主表固定按：
 
 任务：
 
-- [ ] 建立 worker 基础循环
-- [ ] 支持按周期扫描 dirty
-- [ ] 支持 resident dirty 生成 snapshot
-- [ ] 支持 active snapshot 重试
-- [ ] 支持 spilled dirty 重试
-- [ ] 固定处理优先级
+- [x] 建立 worker 基础循环
+- [x] 支持按周期扫描 dirty
+- [x] 支持 resident dirty 生成 snapshot
+- [x] 支持 active snapshot 重试
+- [x] 支持 spilled dirty 重试
+- [x] 固定处理优先级
   - 已有 temp
-  - 等待 dirty eviction 的前台 miss
   - resident dirty 周期扫描
 
 测试重点：
 
-- [ ] snapshot 成功后删除 temp
-- [ ] snapshot 失败后保留 temp 并重试
-- [ ] spilled dirty 发送成功后消失
-- [ ] 周期扫描不会抢占前台 dirty eviction 所需 temp slot
+- [x] snapshot 成功后删除 temp
+- [x] snapshot 失败后保留 temp 并重试
+- [x] spilled dirty 发送成功后消失
+
+当前这一步已经完成。
 
 ## 5.8 第八阶段：淘汰、阻塞和排队
 
@@ -395,6 +395,7 @@ resident block 主表固定按：
 - [ ] `write hit` 不被误阻塞
 - [ ] temp slot 释放后正确唤醒等待请求
 - [ ] terminal / stopping 时正确退出等待
+- [ ] 等待 dirty eviction 的前台 miss 优先于 resident dirty 周期扫描
 
 测试重点：
 

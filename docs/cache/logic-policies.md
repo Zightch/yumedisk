@@ -67,16 +67,37 @@ temp 上限按单盘文件数量控制，不按总字节数控制。
 周期扫描和前台 dirty eviction 冲突时，优先级固定为：
 
 1. 先推进已经存在的 temp
-2. temp slot 一旦释放，先让等待 dirty eviction 的前台 miss 继续
-3. 最后才轮到 resident dirty 的新一轮周期扫描
+2. 最后才轮到 resident dirty 的新一轮周期扫描
+
+当前独立 `cache/` crate 的实现口径进一步收为：
+
+- worker 只在周期 tick 时起一轮后台处理
+- 一轮处理里，先 flush 已经存在的 temp
+- 只有当前没有可发送 temp 时，才会为 resident dirty 新建 snapshot
 
 这条规则的目的，是避免周期扫描长期抢占 temp slot，导致前台 miss 无法推进。
 
 进一步说：
 
-- 如果已经有前台 miss 在等待 temp slot
+- 如果后续已经有前台 miss 在等待 temp slot
   - 周期扫描不再为 resident dirty 新建 snapshot
 - 但 worker 仍然应该继续发送已经存在的 temp、active snapshot 和 retry 项
+
+“等待 dirty eviction 的前台 miss 先于 resident dirty 周期扫描” 这条更完整的背压优先级，留到后续阻塞排队阶段一起闭环。
+
+## temp 占用串行策略
+
+同一个 temp 文件在同一时刻只允许一个使用者。
+
+当前实现里，temp 可能被两类路径占用：
+
+- worker flush 已有 temp
+- 前台请求从 spilled dirty rehydrate
+
+只要某个块的 temp 正在被其中一条路径使用：
+
+- 另一条路径不能并发读取或发送同一个 temp
+- 相关请求先等待当前 temp 操作完成，再重新判定状态
 
 ## active snapshot 策略
 
