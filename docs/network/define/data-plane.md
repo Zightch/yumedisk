@@ -41,6 +41,27 @@ client 进入数据面前必须已经完成：
 - 中间层不应再生第二套共享数据面 body 形状
 - 中间层不应重新定义第二套共享数据面 `status_code` 语义
 
+## Compression Code
+
+共享数据面里的压缩选择固定使用 `compress:u8`。
+
+当前定义如下：
+
+| 码值 | 含义 |
+| --- | --- |
+| `0` | `raw` |
+| `1` | `zstd-1` |
+| `2` | `zstd-3` |
+| `255` | `solid-byte block` |
+
+补充口径：
+
+- `3..254` 当前未分配
+- `compress=255` 时，`payload` 固定长度为 `1`
+- `compress=255` 时，`payload[0]` 表示“当前块所有字节都等于这个值”
+- `compress=255` 的解码结果长度由 `length` 决定
+- 协议层只定义码表与 wire 形状，不定义发送端何时选择哪种压缩等级
+
 ## SessionDescribe
 
 `SessionDescribe` 返回当前 session 绑定 metadata。
@@ -77,7 +98,18 @@ client 进入数据面前必须已经完成：
 
 ### 成功响应 body
 
-- 返回完整数据段
+| 偏移 | 长度 | 字段 | 类型 |
+| --- | --- | --- | --- |
+| `0` | 1 | `compress` | `u8` |
+| `1` | `N` | `payload` | `bytes[N]` |
+
+约束：
+
+- 请求里的 `length` 表示解码后的真实数据长度
+- `compress=0` 时，`payload` 就是原始数据
+- `compress=1/2` 时，`payload` 是对应压缩结果
+- `compress=255` 时，`payload` 必须正好是 `1` 字节，且解码结果为重复该字节值的整块数据
+- 无论哪种形态，解码后的真实长度都必须等于请求里的 `length`
 
 补充口径：
 
@@ -91,11 +123,15 @@ client 进入数据面前必须已经完成：
 | --- | --- | --- | --- |
 | `0` | 8 | `offset` | `u64` |
 | `8` | 4 | `length` | `u32` |
-| `12` | `N` | `payload` | `bytes[N]` |
+| `12` | 1 | `compress` | `u8` |
+| `13` | `N` | `payload` | `bytes[N]` |
 
 约束：
 
-- `N` 必须等于 `length`
+- `length` 表示解码后的真实数据长度
+- `compress=0` 时，`payload` 必须就是原始数据，且 `N == length`
+- `compress=1/2` 时，`payload` 是对应压缩结果，解压后长度必须等于 `length`
+- `compress=255` 时，`payload` 必须正好是 `1` 字节，且解码结果为重复该字节值的整块数据
 
 ### 成功响应 body
 
@@ -154,6 +190,7 @@ transport 单帧 payload 上限为 `65536` 字节。
 因此协议层固定约束：
 
 - 单次 `ReadAt / WriteAt` 必须服从 `max_io_bytes`
+- `max_io_bytes` 约束的是解码后的真实数据长度
 - 需要大块 I/O 时，由 client 在协议外主动拆片
 - 对端只处理单个 request，不承担跨 request 业务重组
 

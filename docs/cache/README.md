@@ -26,6 +26,7 @@ BackendRust <-> NetworkMedia <-> DiskSession
 
 ## 文档目录
 
+- [SDK 文档](../../cache/cache-SDK文档.md)
 - [主要组件](./components.md)
 - [使用模型](./usage-model.md)
 - [缓存策略](./cache-strategy.md)

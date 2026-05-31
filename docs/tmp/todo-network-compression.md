@@ -114,11 +114,14 @@
 | `0` | `raw` |
 | `1` | `zstd-1` |
 | `2` | `zstd-3` |
+| `255` | `solid-byte block` |
 
 当前固定事实：
 
-- `3..255` 暂不使用
-- 遇到未知 `compress` 码值，按非法 body 处理
+- `3..254` 暂不使用
+- `compress=255` 时，`payload` 固定长度为 `1`
+- `compress=255` 时，`payload[0]` 表示“当前块所有字节都等于这个值”
+- `compress=255` 时，解码结果长度固定由 `length` 决定，而不是由 `payload` 自带
 
 ## 4. 协议形状
 
@@ -144,6 +147,7 @@
 
 - `compress=0` 时，`payload` 就是原始数据
 - `compress=1/2` 时，`payload` 是对应等级的 `zstd` 压缩结果
+- `compress=255` 时，`payload` 必须正好是 `1` 字节，且解码结果为重复该字节值的整块数据
 - 解码后的真实长度必须等于请求里的 `length`
 
 ### 4.3 `WriteAt` 请求 body
@@ -162,6 +166,7 @@
 - `length` 表示解码后的真实数据长度
 - `compress=0` 时，`payload` 必须就是原始数据，且 `N == length`
 - `compress=1/2` 时，`payload` 是压缩结果，解压后长度必须等于 `length`
+- `compress=255` 时，`payload` 必须正好是 `1` 字节，且解码结果为重复该字节值的整块数据
 
 ### 4.4 `WriteAt` 成功响应 body
 
@@ -176,14 +181,17 @@
 1. 先拿到原始数据
 2. 按长度分档决定是否尝试压缩，以及尝试哪个等级
 3. 若压缩收益不成立，则改发 `raw`
-4. 把最终 `compress + payload` 放进请求 body
+4. 正常情况下直接把最终 `compress + payload` 放进请求 body
+5. 若发现当前块所有字节都相同，则可直接改发 `compress=255 + payload[0]`
 
 接收端流程固定为：
 
 1. 先解析 `offset + length + compress`
-2. 按 `compress` 解码 `payload`
-3. 校验解码后长度必须等于 `length`
-4. 再进入真正的 `write_at(offset, data)`
+2. 若 `compress=255`，则要求 `payload` 长度必须为 `1`
+3. 若 `compress=255`，则把 `payload[0]` 重复 `length` 次得到原始数据
+4. 其他码值按各自压缩算法解码
+5. 校验解码后长度必须等于 `length`
+6. 再进入真正的 `write_at(offset, data)`
 
 ### 5.2 `ReadAt`
 
@@ -192,14 +200,17 @@
 1. 先按请求里的 `offset + length` 读出原始数据
 2. 按原始数据长度决定是否尝试压缩，以及尝试哪个等级
 3. 若压缩收益不成立，则改发 `raw`
-4. 把最终 `compress + payload` 放进成功响应 body
+4. 正常情况下直接把最终 `compress + payload` 放进成功响应 body
+5. 若发现当前块所有字节都相同，则可直接改发 `compress=255 + payload[0]`
 
 客户端流程固定为：
 
 1. 先解析响应里的 `compress`
-2. 按 `compress` 解码 `payload`
-3. 校验解码后长度必须等于请求里的 `length`
-4. 再把结果拷入目标 buffer
+2. 若 `compress=255`，则要求 `payload` 长度必须为 `1`
+3. 若 `compress=255`，则把 `payload[0]` 重复请求 `length` 次得到原始数据
+4. 其他码值按各自压缩算法解码
+5. 校验解码后长度必须等于请求里的 `length`
+6. 再把结果拷入目标 buffer
 
 ### 5.3 gateway 路径固定口径
 
@@ -296,6 +307,7 @@ transport 单帧 payload 上限固定为 `65536` 字节。
 以下情况统一按 `BadBody` 或等价协议错误处理：
 
 - `compress` 码值未知
+- `compress=255` 但 `payload` 长度不等于 `1`
 - `zstd` 解压失败
 - `WriteAt` 解压后长度不等于 `length`
 - `ReadAt` 解压后长度不等于请求 `length`
@@ -380,6 +392,7 @@ transport 单帧 payload 上限固定为 `65536` 字节。
 5. 接入 `zstd` 编解码
 6. 实现“尝试压缩，不合适则回退 raw”
 7. 补齐 raw / compressed / bad code / bad length / 不可压缩回退 测试
+8. 补齐 `compress=255` escape 码路径测试
 
 ## 12. 当前建议结论
 
@@ -390,7 +403,15 @@ transport 单帧 payload 上限固定为 `65536` 字节。
 - `ReadAt response` 形状为 `compress:u8 | payload`
 - `WriteAt request` 形状为 `offset:u64 | length:u32 | compress:u8 | payload`
 - `WriteAt response` 仍为空
-- 压缩码表先只保留 `raw / zstd-1 / zstd-3`
+- 压缩码表先保留：
+  - `0 = raw`
+  - `1 = zstd-1`
+  - `2 = zstd-3`
+  - `255 = solid-byte block`
+- `compress=255` 时：
+  - `payload` 固定为 1 字节
+  - `payload[0] = 当前块重复字节值`
+  - 解码结果 = `length` 个 `payload[0]`
 - 分档先只保留：
   - `< 1024 => raw`
   - `1024..4095 => 尝试 zstd-1`
