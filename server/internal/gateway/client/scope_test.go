@@ -20,7 +20,6 @@ const (
 	scopeTestRWRouteConnID   = uint64(101)
 	scopeTestRORouteConnID   = uint64(202)
 	scopeTestDiskSizeBytes   = uint64(4096)
-	scopeTestMaxIOBytes      = session.MaxDataPlaneRawBytes
 	scopeTestPendingConnIDRW = uint64(9001)
 	scopeTestPendingConnIDRO = uint64(9002)
 )
@@ -428,13 +427,11 @@ func newScopeTestBackend(t *testing.T) *scopeTestBackend {
 				DiskID:        scopeTestRWDiskID,
 				DiskSizeBytes: scopeTestDiskSizeBytes,
 				ReadOnly:      false,
-				MaxIOBytes:    scopeTestMaxIOBytes,
 			}),
 			scopeTestRORouteConnID: session.NewService(session.NewSharedManager(), storage, session.Metadata{
 				DiskID:        scopeTestRODiskID,
 				DiskSizeBytes: scopeTestDiskSizeBytes,
 				ReadOnly:      true,
-				MaxIOBytes:    scopeTestMaxIOBytes,
 			}),
 		},
 		upstreamByKey: make(map[scopeSessionKey]uint64),
@@ -480,7 +477,6 @@ func (b *scopeTestBackend) RoundTrip(routeConnectionID uint64, sessionID uint64,
 		}
 		return proto.StatusOK, proto.BuildSessionDescribeResponseBody(
 			metadata.DiskSizeBytes,
-			metadata.MaxIOBytes,
 			metadata.ReadOnly,
 			metadata.BackendID,
 		), nil

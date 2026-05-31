@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use super::error::NetworkClientError;
 use super::gateway_connection::GatewayConnection;
-use super::protocol_client::MAX_DATA_PLANE_RAW_BYTES;
 use super::protocol_client::ProtocolClientError;
 use super::protocol_client::ProtocolStatusCode;
 use super::protocol_client::SessionDescribeRequest;
@@ -11,7 +10,6 @@ use super::protocol_client::SessionDescribeResponse;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SessionMetadata {
     pub disk_size_bytes: u64,
-    pub max_io_bytes: u32,
     pub read_only: bool,
     pub backend_id: [u8; 16],
 }
@@ -19,20 +17,15 @@ pub struct SessionMetadata {
 impl SessionMetadata {
     pub(crate) fn new(
         disk_size_bytes: u64,
-        max_io_bytes: u32,
         read_only: bool,
         backend_id: [u8; 16],
     ) -> Result<Self, NetworkClientError> {
         if disk_size_bytes == 0 {
             return Err(NetworkClientError::InvalidArgument("disk_size_bytes"));
         }
-        if max_io_bytes != MAX_DATA_PLANE_RAW_BYTES {
-            return Err(NetworkClientError::InvalidArgument("max_io_bytes"));
-        }
 
         Ok(Self {
             disk_size_bytes,
-            max_io_bytes,
             read_only,
             backend_id,
         })
@@ -65,7 +58,6 @@ impl SessionDescriber {
 
         SessionMetadata::new(
             response.disk_size_bytes,
-            response.max_io_bytes,
             response.read_only,
             response.backend_id,
         )
@@ -92,7 +84,6 @@ mod tests {
     use crate::network::FLAG_RESPONSE;
     use crate::network::GatewayConnection;
     use crate::network::HEADER_SIZE;
-    use crate::network::MAX_DATA_PLANE_RAW_BYTES;
     use crate::network::PROTOCOL_VERSION;
     use crate::network::ProtocolHeader;
     use crate::network::ProtocolStatusCode;
@@ -125,7 +116,6 @@ mod tests {
 
             let mut body = Vec::new();
             body.extend_from_slice(&4096u64.to_be_bytes());
-            body.extend_from_slice(&MAX_DATA_PLANE_RAW_BYTES.to_be_bytes());
             body.extend_from_slice(&1u16.to_be_bytes());
             body.extend_from_slice(&0u16.to_be_bytes());
             body.extend_from_slice(&[9u8; 16]);
@@ -158,7 +148,6 @@ mod tests {
             metadata,
             SessionMetadata {
                 disk_size_bytes: 4096,
-                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 read_only: true,
                 backend_id: [9u8; 16],
             }

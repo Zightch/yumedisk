@@ -92,7 +92,6 @@ func (h *dataPlaneHandler) handleSessionDescribe(header proto.Header, body []byt
 		header,
 		proto.BuildSessionDescribeResponseBody(
 			metadata.DiskSizeBytes,
-			metadata.MaxIOBytes,
 			metadata.ReadOnly,
 			metadata.BackendID,
 		),

@@ -62,7 +62,6 @@ func (b *testGatewayBackend) RoundTrip(routeConnectionID uint64, sessionID uint6
 		}
 		return proto.StatusOK, proto.BuildSessionDescribeResponseBody(
 			metadata.DiskSizeBytes,
-			metadata.MaxIOBytes,
 			metadata.ReadOnly,
 			metadata.BackendID,
 		), nil

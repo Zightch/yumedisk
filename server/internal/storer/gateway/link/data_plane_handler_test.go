@@ -185,7 +185,6 @@ func newLinkTestCore(t *testing.T) *linkTestCore {
 		DiskID:        "DISK000000000001",
 		DiskSizeBytes: 4096,
 		ReadOnly:      false,
-		MaxIOBytes:    session.MaxDataPlaneRawBytes,
 	}
 	return &linkTestCore{
 		sessions: session.NewService(session.NewExclusiveManager(), storage, metadata),

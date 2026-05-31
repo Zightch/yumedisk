@@ -94,16 +94,8 @@ client 进入数据面前必须已经完成：
 当前最小 metadata 集固定为：
 
 - `disk_size_bytes`
-- `max_io_bytes`
 - `read_only`
 - `backend_id`
-
-当前 `SessionDescribe` body 仍保留 `max_io_bytes` 字段。
-
-固定口径：
-
-- 该字段当前固定写 `60KiB`
-- 它不再单独承载另一套长度语义；共享数据面的正式定义统一以上文 `60KiB raw 数据` 为准
 
 它描述的是这个 session 的可见视图，不额外承诺动态 metadata 刷新模型。
 

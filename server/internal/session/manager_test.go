@@ -10,7 +10,6 @@ func TestExclusiveManagerCloseWaitsForInflightIOBeforeDrain(t *testing.T) {
 		Metadata: Metadata{
 			DiskID:        "A1b2C3d4E5f6G7h8",
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    MaxDataPlaneRawBytes,
 		},
 	})
 	if err != nil {
@@ -64,7 +63,6 @@ func TestExclusiveManagerCloseConnectionWaitsForInflightIOBeforeDrain(t *testing
 		Metadata: Metadata{
 			DiskID:        "A1b2C3d4E5f6G7h8",
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    MaxDataPlaneRawBytes,
 		},
 	})
 	if err != nil {
@@ -108,7 +106,6 @@ func TestSharedManagerAllowsMultipleLiveSessions(t *testing.T) {
 		Metadata: Metadata{
 			DiskID:        "A1b2C3d4E5f6G7h8",
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    MaxDataPlaneRawBytes,
 		},
 	})
 	if err != nil {
@@ -119,7 +116,6 @@ func TestSharedManagerAllowsMultipleLiveSessions(t *testing.T) {
 		Metadata: Metadata{
 			DiskID:        "A1b2C3d4E5f6G7h8",
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    MaxDataPlaneRawBytes,
 		},
 	})
 	if err != nil {
@@ -138,7 +134,6 @@ func TestSharedManagerCloseOnlyAffectsTargetSession(t *testing.T) {
 		Metadata: Metadata{
 			DiskID:        "A1b2C3d4E5f6G7h8",
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    MaxDataPlaneRawBytes,
 		},
 	})
 	if err != nil {
@@ -149,7 +144,6 @@ func TestSharedManagerCloseOnlyAffectsTargetSession(t *testing.T) {
 		Metadata: Metadata{
 			DiskID:        "A1b2C3d4E5f6G7h8",
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    MaxDataPlaneRawBytes,
 		},
 	})
 	if err != nil {
@@ -174,7 +168,6 @@ func TestSharedManagerCloseConnectionOnlyAffectsMatchingSessions(t *testing.T) {
 		Metadata: Metadata{
 			DiskID:        "A1b2C3d4E5f6G7h8",
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    MaxDataPlaneRawBytes,
 		},
 	})
 	if err != nil {
@@ -185,7 +178,6 @@ func TestSharedManagerCloseConnectionOnlyAffectsMatchingSessions(t *testing.T) {
 		Metadata: Metadata{
 			DiskID:        "A1b2C3d4E5f6G7h8",
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    MaxDataPlaneRawBytes,
 		},
 	})
 	if err != nil {
@@ -196,7 +188,6 @@ func TestSharedManagerCloseConnectionOnlyAffectsMatchingSessions(t *testing.T) {
 		Metadata: Metadata{
 			DiskID:        "A1b2C3d4E5f6G7h8",
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    1024,
 		},
 	})
 	if err != nil {

@@ -248,15 +248,14 @@
 
 ### 成功响应 body
 
-固定长度 `32` 字节：
+固定长度 `28` 字节：
 
 | 偏移 | 长度 | 字段 | 类型 |
 | --- | --- | --- | --- |
 | `0` | 8 | `disk_size_bytes` | `u64` |
-| `8` | 4 | `max_io_bytes` | `u32` |
-| `12` | 2 | `flags` | `u16` |
-| `14` | 2 | `reserved` | `u16` |
-| `16` | 16 | `backend_id` | `bytes[16]` |
+| `8` | 2 | `flags` | `u16` |
+| `10` | 2 | `reserved` | `u16` |
+| `12` | 16 | `backend_id` | `bytes[16]` |
 
 当前定义的 flag：
 
@@ -272,7 +271,6 @@
 
 - 这条边上的 `SessionDescribe` body 语义与 `gateway-storer` 边上的 route-facing `SessionDescribe` 一致
 - gateway 不应在这条边上再生一份不同形状的 metadata body
-- 当前 `max_io_bytes` 字段固定写 `60KiB`
 - 共享数据面的单次 `60KiB raw 数据` 语义统一见 [data-plane](data-plane.md)
 
 ## ConnHeartbeat

@@ -25,7 +25,6 @@ type Service struct {
 }
 
 func NewService(manager Manager, storage *filestorage.Backend, metadata Metadata) *Service {
-	metadata.MaxIOBytes = MaxDataPlaneRawBytes
 	return &Service{
 		manager:  manager,
 		storage:  storage,
@@ -50,10 +49,6 @@ func (s *Service) Close(sessionID uint64) {
 
 func (s *Service) CloseConnection(connectionID uint64) {
 	s.manager.CloseConnection(connectionID)
-}
-
-func (s *Service) MaxIOBytes() uint32 {
-	return MaxDataPlaneRawBytes
 }
 
 func (s *Service) Describe(sessionID uint64) (Metadata, error) {

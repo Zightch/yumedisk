@@ -41,9 +41,6 @@ impl NetworkMedia {
         if metadata.disk_size_bytes == 0 {
             return Err(NetworkClientError::InvalidArgument("disk_size_bytes"));
         }
-        if metadata.max_io_bytes != MAX_DATA_PLANE_RAW_BYTES {
-            return Err(NetworkClientError::InvalidArgument("max_io_bytes"));
-        }
 
         Ok(Self {
             disk_id,
@@ -215,7 +212,6 @@ mod tests {
             SessionMetadata {
                 disk_size_bytes: 2048,
                 read_only: false,
-                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 backend_id: [0u8; 16],
             },
         )
@@ -297,7 +293,6 @@ mod tests {
             SessionMetadata {
                 disk_size_bytes: u64::from(MAX_DATA_PLANE_RAW_BYTES) + 4,
                 read_only: false,
-                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 backend_id: [0u8; 16],
             },
         )
@@ -390,7 +385,6 @@ mod tests {
             SessionMetadata {
                 disk_size_bytes: u64::from(MAX_DATA_PLANE_RAW_BYTES) + 4,
                 read_only: false,
-                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 backend_id: [0u8; 16],
             },
         )
@@ -467,7 +461,6 @@ mod tests {
             SessionMetadata {
                 disk_size_bytes: 4096,
                 read_only: false,
-                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 backend_id: [0u8; 16],
             },
         )

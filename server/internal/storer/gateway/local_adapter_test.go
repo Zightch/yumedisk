@@ -199,13 +199,11 @@ func newGatewayTestExports(t *testing.T) (*gatewayTestExport, *gatewayTestExport
 		DiskID:        "DISK000000000001",
 		DiskSizeBytes: 4096,
 		ReadOnly:      false,
-		MaxIOBytes:    session.MaxDataPlaneRawBytes,
 	}
 	roMetadata := session.Metadata{
 		DiskID:        "DISK000000000002",
 		DiskSizeBytes: 4096,
 		ReadOnly:      true,
-		MaxIOBytes:    session.MaxDataPlaneRawBytes,
 	}
 	return &gatewayTestExport{
 			sessions: session.NewService(session.NewExclusiveManager(), storage, rwMetadata),

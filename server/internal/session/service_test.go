@@ -33,7 +33,6 @@ func TestReadAndWriteKeepSessionOpen(t *testing.T) {
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
-		MaxIOBytes:    MaxDataPlaneRawBytes,
 	})
 	desc, err := service.Open(1)
 	if err != nil {
@@ -81,7 +80,6 @@ func TestCloseMakesSessionUnavailable(t *testing.T) {
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
-		MaxIOBytes:    MaxDataPlaneRawBytes,
 	})
 	desc, err := service.Open(1)
 	if err != nil {
@@ -123,7 +121,6 @@ func TestOpenRejectsWhileSessionIsLive(t *testing.T) {
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
-		MaxIOBytes:    MaxDataPlaneRawBytes,
 	})
 	first, err := service.Open(1)
 	if err != nil {
@@ -164,7 +161,6 @@ func TestServiceCloseKeepsWriterSlotOccupiedUntilInflightIODrains(t *testing.T) 
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
-		MaxIOBytes:    MaxDataPlaneRawBytes,
 	})
 	desc, err := service.Open(1)
 	if err != nil {
@@ -230,7 +226,6 @@ func TestServiceAllowsMaxRawIoBytesButRejectsLargerRead(t *testing.T) {
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
-		MaxIOBytes:    MaxDataPlaneRawBytes,
 	})
 	desc, err := service.Open(1)
 	if err != nil {
@@ -270,7 +265,6 @@ func TestServiceAllowsMaxRawIoBytesButRejectsLargerWrite(t *testing.T) {
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
-		MaxIOBytes:    MaxDataPlaneRawBytes,
 	})
 	desc, err := service.Open(1)
 	if err != nil {

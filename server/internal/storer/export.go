@@ -27,7 +27,6 @@ func newRWExport(material auth.Material, storage *sharedStorage, backendID [16]b
 		DiskID:        material.DiskID,
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      false,
-		MaxIOBytes:    session.MaxDataPlaneRawBytes,
 		BackendID:     backendID,
 	}
 	return &Export{
@@ -44,7 +43,6 @@ func newROExport(material auth.Material, storage *sharedStorage, backendID [16]b
 		DiskID:        material.DiskID,
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      true,
-		MaxIOBytes:    session.MaxDataPlaneRawBytes,
 		BackendID:     backendID,
 	}
 	return &Export{

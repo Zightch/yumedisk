@@ -103,7 +103,6 @@ func (b *LocalAdapter) RoundTrip(routeConnectionID uint64, sessionID uint64, opC
 		}
 		return proto.StatusOK, proto.BuildSessionDescribeResponseBody(
 			metadata.DiskSizeBytes,
-			metadata.MaxIOBytes,
 			metadata.ReadOnly,
 			metadata.BackendID,
 		), nil

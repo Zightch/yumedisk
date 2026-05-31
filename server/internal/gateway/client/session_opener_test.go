@@ -28,12 +28,12 @@ func TestSessionOpenDescribeReadWriteAndClose(t *testing.T) {
 	if describeHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected describe status: %d", describeHeader.StatusCode)
 	}
-	diskSize, maxIOBytes, readOnly, _, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	diskSize, readOnly, _, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
 	if err != nil {
 		t.Fatalf("parse describe body: %v", err)
 	}
-	if diskSize != 4096 || maxIOBytes != 60*1024 || readOnly {
-		t.Fatalf("unexpected describe body: size=%d maxIO=%d readOnly=%v", diskSize, maxIOBytes, readOnly)
+	if diskSize != 4096 || readOnly {
+		t.Fatalf("unexpected describe body: size=%d readOnly=%v", diskSize, readOnly)
 	}
 
 	writePayload := append(proto.BuildReadWriteBody(4, 4), []byte("ABCD")...)
@@ -260,7 +260,6 @@ func newSessionTestHandlerWithRaw(t *testing.T, readOnly bool) (*Handler, *Conne
 		DiskID:        material.DiskID,
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
-		MaxIOBytes:    session.MaxDataPlaneRawBytes,
 	})
 	backend := newTestGatewayBackend(material, sessions, storage.Size(), storage.ReadOnly())
 	handler, err := NewHandler(backend, backend)

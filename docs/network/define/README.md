@@ -134,7 +134,6 @@ TCP
 - `SessionDescribe(session_id)` 单独返回 session 绑定 metadata
 - 当前最小 metadata 集固定为：
   - `disk_size_bytes`
-  - `max_io_bytes`
   - `read_only`
   - `backend_id`
 

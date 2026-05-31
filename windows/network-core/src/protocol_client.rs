@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-pub const PROTOCOL_VERSION: u8 = 1;
+pub const PROTOCOL_VERSION: u8 = 2;
 pub const HEADER_LEN: u8 = 24;
 pub const HEADER_SIZE: usize = 24;
 pub const FLAG_RESPONSE: u8 = 1 << 0;
@@ -14,7 +14,7 @@ pub const BACKEND_ID_BYTES: usize = 16;
 pub const AUTH_CHALLENGE_TOKEN_MIN_BYTES: usize = 1;
 pub const AUTH_ALGO_VERSION_V1: u8 = 1;
 pub const AUTH_FINISH_RESPONSE_BYTES: usize = 8;
-pub const SESSION_DESCRIBE_RESPONSE_BYTES: usize = 32;
+pub const SESSION_DESCRIBE_RESPONSE_BYTES: usize = 28;
 pub const SESSION_CLOSE_NOTICE_BYTES: usize = 2;
 pub const READ_AT_REQUEST_BODY_BYTES: usize = 12;
 pub const WRITE_AT_REQUEST_HEADER_BYTES: usize = 13;
@@ -237,7 +237,6 @@ pub struct SessionDescribeRequest {
 pub struct SessionDescribeResponse {
     pub session_id: u64,
     pub disk_size_bytes: u64,
-    pub max_io_bytes: u32,
     pub read_only: bool,
     pub backend_id: [u8; BACKEND_ID_BYTES],
 }
@@ -499,10 +498,8 @@ impl SessionDescribeResponse {
 
         let disk_size_bytes =
             u64::from_be_bytes(body[0..8].try_into().expect("slice length fixed"));
-        let max_io_bytes = u32::from_be_bytes(body[8..12].try_into().expect("slice length fixed"));
-        let session_flags =
-            u16::from_be_bytes(body[12..14].try_into().expect("slice length fixed"));
-        let reserved = u16::from_be_bytes(body[14..16].try_into().expect("slice length fixed"));
+        let session_flags = u16::from_be_bytes(body[8..10].try_into().expect("slice length fixed"));
+        let reserved = u16::from_be_bytes(body[10..12].try_into().expect("slice length fixed"));
 
         if reserved != 0 {
             return Err(ProtocolClientError::InvalidBody(
@@ -515,16 +512,12 @@ impl SessionDescribeResponse {
         if disk_size_bytes == 0 {
             return Err(ProtocolClientError::InvalidBody("disk_size_bytes"));
         }
-        if max_io_bytes != MAX_DATA_PLANE_RAW_BYTES {
-            return Err(ProtocolClientError::InvalidBody("max_io_bytes"));
-        }
         let mut backend_id = [0u8; BACKEND_ID_BYTES];
-        backend_id.copy_from_slice(&body[16..32]);
+        backend_id.copy_from_slice(&body[12..28]);
 
         Ok(Self {
             session_id: expected_session_id,
             disk_size_bytes,
-            max_io_bytes,
             read_only: session_flags & SESSION_FLAG_READ_ONLY != 0,
             backend_id,
         })
@@ -1075,7 +1068,6 @@ mod tests {
 
         let mut body = Vec::new();
         body.extend_from_slice(&4096u64.to_be_bytes());
-        body.extend_from_slice(&MAX_DATA_PLANE_RAW_BYTES.to_be_bytes());
         body.extend_from_slice(&1u16.to_be_bytes());
         body.extend_from_slice(&0u16.to_be_bytes());
         body.extend_from_slice(&[7u8; BACKEND_ID_BYTES]);
@@ -1094,18 +1086,16 @@ mod tests {
             .expect("decode should succeed");
         assert_eq!(response.session_id, 9);
         assert_eq!(response.disk_size_bytes, 4096);
-        assert_eq!(response.max_io_bytes, MAX_DATA_PLANE_RAW_BYTES);
         assert!(response.read_only);
         assert_eq!(response.backend_id, [7u8; BACKEND_ID_BYTES]);
     }
 
     #[test]
-    fn session_describe_rejects_max_io_bytes_above_raw_limit() {
+    fn session_describe_rejects_reserved_bits() {
         let mut body = Vec::new();
         body.extend_from_slice(&4096u64.to_be_bytes());
-        body.extend_from_slice(&(MAX_DATA_PLANE_RAW_BYTES + 1).to_be_bytes());
         body.extend_from_slice(&0u16.to_be_bytes());
-        body.extend_from_slice(&0u16.to_be_bytes());
+        body.extend_from_slice(&1u16.to_be_bytes());
         body.extend_from_slice(&[7u8; BACKEND_ID_BYTES]);
         let response_payload = ProtocolHeader {
             protocol_version: PROTOCOL_VERSION,
@@ -1121,7 +1111,10 @@ mod tests {
 
         let error = SessionDescribeResponse::decode_response(&response_payload, 21, 9)
             .expect_err("decode should fail");
-        assert_eq!(error, ProtocolClientError::InvalidBody("max_io_bytes"));
+        assert_eq!(
+            error,
+            ProtocolClientError::InvalidBody("session_describe_reserved")
+        );
     }
 
     #[test]

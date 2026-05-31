@@ -490,7 +490,6 @@ mod tests {
     fn sample_metadata() -> SessionMetadata {
         SessionMetadata {
             disk_size_bytes: 4096,
-            max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
             read_only: false,
             backend_id: [0; 16],
         }
@@ -807,8 +806,6 @@ mod tests {
 
             let mut describe_body = Vec::new();
             describe_body.extend_from_slice(&4096u64.to_be_bytes());
-            describe_body
-                .extend_from_slice(&network_core::protocol::MAX_DATA_PLANE_RAW_BYTES.to_be_bytes());
             describe_body.extend_from_slice(&0u16.to_be_bytes());
             describe_body.extend_from_slice(&0u16.to_be_bytes());
             describe_body.extend_from_slice(&[9u8; 16]);

@@ -28,7 +28,6 @@ func TestGatewaySessionMappingHidesUpstreamSessionIDAndForwardsDescribe(t *testi
 		readOut:       []byte("OK"),
 		describeOut: session.Metadata{
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    session.MaxDataPlaneRawBytes,
 		},
 	}
 
@@ -61,19 +60,18 @@ func TestGatewaySessionMappingHidesUpstreamSessionIDAndForwardsDescribe(t *testi
 	}
 	expectedDescribeBody := proto.BuildSessionDescribeResponseBody(
 		dataPlane.describeOut.DiskSizeBytes,
-		dataPlane.describeOut.MaxIOBytes,
 		dataPlane.describeOut.ReadOnly,
 		dataPlane.describeOut.BackendID,
 	)
 	if !bytes.Equal(describeResp[proto.HeaderSize:], expectedDescribeBody) {
 		t.Fatalf("unexpected describe body bytes: got=%v want=%v", describeResp[proto.HeaderSize:], expectedDescribeBody)
 	}
-	diskSize, maxIOBytes, readOnly, backendID, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	diskSize, readOnly, backendID, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
 	if err != nil {
 		t.Fatalf("parse describe body: %v", err)
 	}
-	if diskSize != dataPlane.describeOut.DiskSizeBytes || maxIOBytes != dataPlane.describeOut.MaxIOBytes || readOnly != dataPlane.describeOut.ReadOnly {
-		t.Fatalf("unexpected describe body: size=%d maxIO=%d readOnly=%v", diskSize, maxIOBytes, readOnly)
+	if diskSize != dataPlane.describeOut.DiskSizeBytes || readOnly != dataPlane.describeOut.ReadOnly {
+		t.Fatalf("unexpected describe body: size=%d readOnly=%v", diskSize, readOnly)
 	}
 	if backendID != dataPlane.describeOut.BackendID {
 		t.Fatal("unexpected backend id")
@@ -147,7 +145,6 @@ func TestGatewaySessionMappingIsReleasedOnConnectionClose(t *testing.T) {
 		openSessionID: 88,
 		describeOut: session.Metadata{
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    session.MaxDataPlaneRawBytes,
 		},
 	}
 
@@ -501,7 +498,6 @@ func (p *mappingDataPlane) RoundTrip(routeConnectionID uint64, sessionID uint64,
 		p.lastDescribeSessionID = sessionID
 		return proto.StatusOK, proto.BuildSessionDescribeResponseBody(
 			p.describeOut.DiskSizeBytes,
-			p.describeOut.MaxIOBytes,
 			p.describeOut.ReadOnly,
 			p.describeOut.BackendID,
 		), nil

@@ -10,10 +10,7 @@ type Metadata struct {
 	DiskID        string
 	DiskSizeBytes uint64
 	ReadOnly      bool
-	// Compatibility field for on-wire session metadata. Production data-plane
-	// semantics normalize this to MaxDataPlaneRawBytes.
-	MaxIOBytes uint32
-	BackendID  [16]byte
+	BackendID     [16]byte
 }
 
 type Record struct {

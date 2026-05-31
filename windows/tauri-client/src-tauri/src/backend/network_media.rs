@@ -43,9 +43,6 @@ impl NetworkMedia {
         if metadata.disk_size_bytes == 0 {
             return Err(NetworkClientError::InvalidArgument("disk_size_bytes"));
         }
-        if metadata.max_io_bytes != MAX_DATA_PLANE_RAW_BYTES {
-            return Err(NetworkClientError::InvalidArgument("max_io_bytes"));
-        }
 
         Ok(Self {
             remote_disk_id,
@@ -174,7 +171,6 @@ mod tests {
     use backend_rust::Media;
     use network_core::client::DiskSession;
     use network_core::client::SessionMetadata;
-    use network_core::protocol::MAX_DATA_PLANE_RAW_BYTES;
     use network_core::test_support::clear_session;
     use network_core::test_support::stage_connection;
     use network_core::transport::TransportEndpoint;
@@ -195,7 +191,6 @@ mod tests {
             SessionMetadata {
                 disk_size_bytes: 4096,
                 read_only: false,
-                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 backend_id: [0; 16],
             },
             false,
@@ -227,7 +222,6 @@ mod tests {
             SessionMetadata {
                 disk_size_bytes: 4096,
                 read_only: false,
-                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 backend_id: [0; 16],
             },
             true,

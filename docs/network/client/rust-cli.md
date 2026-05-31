@@ -83,7 +83,6 @@ CliHost
 - `DiskSession`
 - `disk_size_bytes`
 - `read_only`
-- `max_io_bytes`
 - `remote_backend_id`
 
 `NetworkMedia` 不负责：
@@ -184,7 +183,6 @@ acquire/reuse GatewayConnection
 
 - `disk_size_bytes`
 - `read_only`
-- `max_io_bytes`
 - `backend_id`
 
 大块 I/O 的当前策略为：

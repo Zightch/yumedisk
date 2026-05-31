@@ -194,13 +194,11 @@ client SessionDescribe(gateway_session_id)
 当前最小 metadata 集固定为：
 
 - `disk_size_bytes`
-- `max_io_bytes`
 - `read_only`
 - `backend_id`
 
 其中：
 
-- `max_io_bytes` 当前固定返回 `60KiB`；共享数据面的正式长度语义统一见 [Data Plane 定义](../define/data-plane.md)
 - `backend_id` 由 storer 在程序启动时为本地 backend 临时生成
 - 同一个本地 backend 下的 `rw` 和 `ro` 导出必须共用同一个 `backend_id`
 - `backend_id` 不要求跨重启稳定

@@ -119,12 +119,12 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 	if describeHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("describe status: %d", describeHeader.StatusCode)
 	}
-	diskSize, maxIOBytes, readOnly, _, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	diskSize, readOnly, _, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
 	if err != nil {
 		t.Fatalf("parse describe response: %v", err)
 	}
-	if diskSize != 4096 || maxIOBytes != 60*1024 || readOnly {
-		t.Fatalf("unexpected describe response: size=%d maxIO=%d readOnly=%v", diskSize, maxIOBytes, readOnly)
+	if diskSize != 4096 || readOnly {
+		t.Fatalf("unexpected describe response: size=%d readOnly=%v", diskSize, readOnly)
 	}
 	requestID++
 
@@ -320,12 +320,12 @@ func TestGatewayAndStorerSupportsReadOnlyExportDataPlane(t *testing.T) {
 	if describeHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("ro describe status: %d", describeHeader.StatusCode)
 	}
-	diskSize, maxIOBytes, readOnly, _, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
+	diskSize, readOnly, _, err := proto.ParseSessionDescribeResponseBody(describeResp[proto.HeaderSize:])
 	if err != nil {
 		t.Fatalf("parse ro describe response: %v", err)
 	}
-	if diskSize != 4096 || maxIOBytes != 60*1024 || !readOnly {
-		t.Fatalf("unexpected ro describe response: size=%d maxIO=%d readOnly=%v", diskSize, maxIOBytes, readOnly)
+	if diskSize != 4096 || !readOnly {
+		t.Fatalf("unexpected ro describe response: size=%d readOnly=%v", diskSize, readOnly)
 	}
 	roRequestID++
 

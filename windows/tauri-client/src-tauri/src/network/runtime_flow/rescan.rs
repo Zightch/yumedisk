@@ -586,7 +586,6 @@ mod tests {
     fn sample_metadata() -> SessionMetadata {
         SessionMetadata {
             disk_size_bytes: 4096,
-            max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
             read_only: false,
             backend_id: [0; 16],
         }
@@ -764,7 +763,6 @@ mod tests {
                                 .expect("disk should exist for describe");
                             let mut body = Vec::new();
                             body.extend_from_slice(&disk.metadata.disk_size_bytes.to_be_bytes());
-                            body.extend_from_slice(&disk.metadata.max_io_bytes.to_be_bytes());
                             body.extend_from_slice(
                                 &(u16::from(disk.metadata.read_only)).to_be_bytes(),
                             );
@@ -953,7 +951,6 @@ mod tests {
             session_id: 91,
             metadata: SessionMetadata {
                 disk_size_bytes: 8192,
-                max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                 read_only: false,
                 backend_id: [2; 16],
             },
@@ -1021,7 +1018,6 @@ mod tests {
                 session_id: 201,
                 metadata: SessionMetadata {
                     disk_size_bytes: 4096,
-                    max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                     read_only: false,
                     backend_id: [5; 16],
                 },
@@ -1032,7 +1028,6 @@ mod tests {
                 session_id: 202,
                 metadata: SessionMetadata {
                     disk_size_bytes: 4096,
-                    max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                     read_only: true,
                     backend_id: [5; 16],
                 },
@@ -1118,7 +1113,6 @@ mod tests {
                 session_id: 211,
                 metadata: SessionMetadata {
                     disk_size_bytes: 4096,
-                    max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                     read_only: true,
                     backend_id: [6; 16],
                 },
@@ -1129,7 +1123,6 @@ mod tests {
                 session_id: 212,
                 metadata: SessionMetadata {
                     disk_size_bytes: 4096,
-                    max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                     read_only: true,
                     backend_id: [6; 16],
                 },

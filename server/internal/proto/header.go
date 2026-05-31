@@ -6,7 +6,7 @@ import (
 )
 
 const (
-	ProtocolVersion = 1
+	ProtocolVersion = 2
 	HeaderSize      = 24
 	FlagResponse    = 1 << 0
 	FlagNotice      = 1 << 1
