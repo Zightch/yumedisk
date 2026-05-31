@@ -8,7 +8,7 @@
 
 - `rw` 走 `cache`
 - `ro` 继续由 `mux` 旁路直通 `DiskSession`
-- `mux` 只做路径复用，不做对齐、拼接、裁剪
+- `mux` 只做路径复用和真实容量前置校验，不做对齐、拼接、尾块补零或尾块裁剪
 - `DiskSession` 继续只负责远端 I/O
 
 本轮不再讨论：
@@ -80,16 +80,19 @@ BackendRust <-> NetworkMedia <-> DiskSession
 
 ### 3.1 `mux` 的边界
 
-`mux` 只负责下面两件事：
+`mux` 只负责下面三件事：
 
 - 判定当前盘走 `ro` 直通路径还是 `rw` 缓存路径
 - 复用同一个 `DiskSession` 及其宿主生命周期
+- 依据 metadata 给出的 `disk_size_bytes` 对外层 `read_locked()` / `write_locked()` 请求做真实范围前置判断
 
 `mux` 明确不负责：
 
 - 按块大小对齐
 - 任意字节请求拆块
 - `max_io_bytes` 拆片
+- 尾块补零
+- 尾块裁剪
 - dirty 状态管理
 - temp 文件管理
 - flush worker
@@ -162,7 +165,10 @@ BackendRust <-> NetworkMedia <-> DiskSession
 这层适配器至少要负责：
 
 - 把 `DiskSession` 包成 `AtIo`
-- 用 `disk_size_bytes` 做真实越界校验
+- 用 `disk_size_bytes` 和 `block_size_bytes` 推导右侧逻辑容量 `align_up(disk_size_bytes, block_size_bytes)`
+- 命中最后一个不足整块的尾块时，只读真实前缀并在本地补 `0`
+- 命中最后一个不足整块的尾块时，只写真实前缀并丢弃超出真实 EOF 的尾部
+- 对 `align_up(...)` 后的右侧逻辑范围做防御性越界校验
 - 在需要时按 `max_io_bytes` 继续拆片
 - 把 `NetworkClientError` 映射成 `CacheError`
 - 遇到 terminal error 时，把失效上抛回 `NetworkMedia` 的 invalidation handler
@@ -172,6 +178,8 @@ BackendRust <-> NetworkMedia <-> DiskSession
 - `cache` 左侧看不到 `NetworkClientError`
 - `DiskSession` 看不到 `CacheConfig`
 - invalidation 仍由 `NetworkMedia` 统一收束
+- 右侧逻辑越界只属于 `DiskSessionAtIo` 的内部防御分支，不属于对外 `read_locked()` / `write_locked()` 的新增业务语义
+- 对外真实越界仍应由 `mux` 在进入 `cache` 前先挡掉
 
 ### 4.3 `temp_dir` 和 `CacheConfig`
 
@@ -244,6 +252,7 @@ BackendRust <-> NetworkMedia <-> DiskSession
 - [ ] 在 `NetworkMedia` 内定义最薄路径模型
 - [ ] 收出 `ro` 旁路逻辑
 - [ ] 收出 `rw` 缓存逻辑入口
+- [ ] 固定 `mux` 入口按 `disk_size_bytes` 做真实越界前置判断
 - [ ] 明确 `mux` 不持有额外缓存状态
 
 固定实现要求：
@@ -261,7 +270,10 @@ BackendRust <-> NetworkMedia <-> DiskSession
 任务：
 
 - [ ] 设计最小 `DiskSessionAtIo`
-- [ ] 保留 `disk_size_bytes` 真实范围校验
+- [ ] 补右侧 `align_up(disk_size_bytes, block_size_bytes)` 逻辑容量
+- [ ] 补最后短尾块读取前缀 + 本地补零
+- [ ] 补最后短尾块写入前缀推送 + 超出真实 EOF 尾部丢弃
+- [ ] 补右侧逻辑越界防御性校验
 - [ ] 保留 `max_io_bytes` 拆片能力
 - [ ] 补 `NetworkClientError -> CacheError` 映射
 - [ ] 补 terminal error -> invalidation 上抛
@@ -271,6 +283,7 @@ BackendRust <-> NetworkMedia <-> DiskSession
 - `DiskSessionAtIo` 只做 I/O 适配，不做 resident 逻辑
 - `DiskSessionAtIo` 不复制 `cache` 内部状态
 - `DiskSessionAtIo` 不把 `DiskSession` 变成新的缓存管理器
+- `DiskSessionAtIo` 的逻辑越界分支只用于守住 cache 右侧不变量，不新增前台布尔式成功/失败语义
 
 ### 5.4 第四阶段：把 `cache` 接入 `rw` 路径
 
@@ -398,6 +411,21 @@ BackendRust <-> NetworkMedia <-> DiskSession
 
 先把这条边界守住，复杂度最低。
 
+### 6.6 不要把右侧逻辑越界变成前台业务分支
+
+对外请求是否越界，只应由 `mux` 基于 metadata 的 `disk_size_bytes` 提前裁决。
+
+`DiskSessionAtIo` 里的“右侧逻辑越界”只用于防御下面这种内部错误：
+
+- `cache` 发出了超出 `align_up(disk_size_bytes, block_size_bytes)` 的块请求
+- 宿主接线把 block size / capacity 关系接错
+
+因此这里不要再发明新的：
+
+- `read_locked() -> bool`
+- `write_locked() -> bool`
+- “尾块特殊失败码”
+
 ## 7. 验收口径
 
 本轮完成后，至少要满足下面这些结果：
@@ -411,6 +439,9 @@ BackendRust <-> NetworkMedia <-> DiskSession
 7. `rw` 正式通过 `cache` 承接读写
 8. terminal error 的 invalidation 语义不回退
 9. 不把 `cache` 业务语义扩散到 `network-core`
+10. 对外超出 metadata 容量的请求在 `mux` 层直接挡掉
+11. 最后一个不足整块的尾块在 cache 右侧能做到“读前缀补零、写前缀裁剪”
+12. 右侧逻辑越界只保留为适配层内部防御分支，不扩散成新的 `read_locked()` / `write_locked()` 业务语义
 
 ## 8. 推荐推进顺序
 

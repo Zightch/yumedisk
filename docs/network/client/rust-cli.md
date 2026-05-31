@@ -193,6 +193,18 @@ acquire/reuse GatewayConnection
 - 每片都走一次独立 `ReadAt / WriteAt`
 - server 不负责替 client 做跨请求重组
 
+### 后续接入 `cache` 的固定风险提示
+
+当前 `rust-cli` 主线尚未把 `rw` 路径接入 `cache`。
+
+但后续一旦接入，固定口径应提前收住为：
+
+- `mux` 先按 `SessionDescribe.disk_size_bytes` 对外层请求做真实越界判断
+- `cache` 右侧 `DiskSessionAtIo` 会把真实容量按 cache block size 视为一个向上对齐后的逻辑尾块，只用于服务最后一个不足整块的块
+- 命中最后一个不足整块的尾块时，读路径只拉取真实前缀并在本地补 `0`；写路径只推送真实前缀，超出真实 EOF 的尾部直接丢弃
+- `rw` 路径的 `write_locked()` 成功，只表示本地 cache 已接受写入，不再等价于远端已经确认写成功
+- 若后续 flush 失败，包括最后短尾块的真实前缀写失败，当前项目不把这个延迟失败再追到 kernel，也不额外提供解释或恢复语义
+
 ## 当前故障收束策略
 
 `docs/network/define` 只定义 session / connection / route 失效事实。当前 `rust-cli` 采用的具体策略是：
