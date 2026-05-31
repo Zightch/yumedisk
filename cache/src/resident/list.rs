@@ -115,7 +115,7 @@ impl IndexedList {
         true
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub(crate) fn values_from_head(&self) -> Vec<u64> {
         let mut values = Vec::with_capacity(self.len);
         let mut cursor = self.head;

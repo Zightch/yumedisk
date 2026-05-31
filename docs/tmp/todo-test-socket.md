@@ -334,11 +334,27 @@ hook 点要少，但要卡在稳定边界上。
 
 任务：
 
-- [ ] 建立 test-only hook 模块
-- [ ] 建立 `state dump hook`
-- [ ] 建立 `gate hook`
+- [x] 建立 test-only hook 模块
+- [x] 建立 `state dump hook`
+- [x] 建立 `gate hook`
 - [ ] 建立最小测试侧控制器
-- [ ] 明确 hook 点枚举
+- [x] 明确 hook 点枚举
+
+当前已完成：
+
+- `cache` crate 已增加 `test-hooks` feature，默认关闭
+- 已建立 `test_support/` 模块与最小 hooks/snapshot 类型
+- 已建立 `CacheDeps` 内部 seam，不改正式 `Cache::new(...)` 边界
+- 已增加 `Cache::new_for_test(...)` 与 `debug_snapshot()`
+- 已把第一批 hook 点接到：
+  - `debug_snapshot`
+  - 右侧 `read_at / write_at` 前后
+  - dirty victim spill temp 写前后
+
+当前未完成：
+
+- 还没有真正可控的 gate 测试控制器
+- 还没有把更多时序卡点接入主流程
 
 ### 9.2 第二阶段：虚拟右侧与日志
 

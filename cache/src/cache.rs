@@ -4,8 +4,11 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::block::{BlockLayout, TouchedBlock};
+use crate::deps::CacheDeps;
 use crate::resident::{LoadState, TwoQueueResident};
 use crate::temp::TempStore;
+#[cfg(any(test, feature = "test-hooks"))]
+use crate::test_support::{CacheSnapshot, HookPoint, SpilledDirtySnapshot, TestHooks};
 use crate::{AtIo, CacheConfig, CacheError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,13 +71,28 @@ pub struct Cache<R> {
     layout: BlockLayout,
     state: Arc<Mutex<CacheState>>,
     state_changed: Arc<Condvar>,
-    temp: TempStore,
+    deps: CacheDeps,
     right: Arc<R>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl<R: AtIo + 'static> Cache<R> {
     pub fn new(config: CacheConfig, right: R) -> Result<Self, CacheError> {
+        let deps = CacheDeps::new(config.temp_dir.clone());
+        Self::build(config, right, deps)
+    }
+
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn new_for_test(
+        config: CacheConfig,
+        right: R,
+        hooks: TestHooks,
+    ) -> Result<Self, CacheError> {
+        let deps = CacheDeps::new(config.temp_dir.clone()).with_test_hooks(hooks);
+        Self::build(config, right, deps)
+    }
+
+    fn build(config: CacheConfig, right: R, deps: CacheDeps) -> Result<Self, CacheError> {
         if config.temp_max_files == 0 {
             return Err(CacheError::InvalidConfig(
                 "temp_max_files must be greater than 0",
@@ -94,18 +112,17 @@ impl<R: AtIo + 'static> Cache<R> {
             stop_requested: false,
         }));
         let state_changed = Arc::new(Condvar::new());
-        let temp = TempStore::new(config.temp_dir.clone());
         let right = Arc::new(right);
         let worker = Self::spawn_flush_worker(
             config.clone(),
             layout.clone(),
             Arc::clone(&state),
             Arc::clone(&state_changed),
-            temp.clone(),
+            deps.temp_clone(),
             Arc::clone(&right),
         );
         Ok(Self {
-            temp,
+            deps,
             config,
             layout,
             state,
@@ -150,6 +167,43 @@ impl<R: AtIo + 'static> Cache<R> {
         &self.layout
     }
 
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn debug_snapshot(&self) -> CacheSnapshot {
+        let snapshot = {
+            let state = self.state.lock().unwrap();
+            let mut spilled_dirty = state
+                .spilled_dirty
+                .iter()
+                .map(|(&block_index, spilled)| SpilledDirtySnapshot {
+                    block_index,
+                    valid_len: spilled.valid_len,
+                })
+                .collect::<Vec<_>>();
+            spilled_dirty.sort_by_key(|block| block.block_index);
+
+            let mut active_temp_blocks =
+                state.active_temp_blocks.iter().copied().collect::<Vec<_>>();
+            active_temp_blocks.sort_unstable();
+
+            CacheSnapshot {
+                resident: state.resident.debug_snapshot(),
+                spilled_dirty,
+                active_temp_blocks,
+                foreground_dirty_eviction_waiters: state.foreground_dirty_eviction_waiters,
+                stop_requested: state.stop_requested,
+            }
+        };
+        self.deps
+            .hooks()
+            .observe_state(HookPoint::DebugSnapshot, &snapshot);
+        snapshot
+    }
+
+    #[cfg(test)]
+    fn temp_store(&self) -> &TempStore {
+        self.deps.temp()
+    }
+
     fn read_touched_block(
         &self,
         touched: &TouchedBlock,
@@ -163,7 +217,8 @@ impl<R: AtIo + 'static> Cache<R> {
                 Self::release_foreground_dirty_waiter(&mut state, &mut waiting_for_temp_slot)?;
                 return Err(CacheError::Stopped);
             }
-            let action = match self.plan_read_touched_block(&mut state, touched, buffer, valid_len) {
+            let action = match self.plan_read_touched_block(&mut state, touched, buffer, valid_len)
+            {
                 Ok(action) => action,
                 Err(error) => {
                     Self::release_foreground_dirty_waiter(&mut state, &mut waiting_for_temp_slot)?;
@@ -597,7 +652,17 @@ impl<R: AtIo + 'static> Cache<R> {
                         "resident dirty victim missing during temp spill",
                     ),
                 )?;
-                self.temp.write_block(victim_block_index, &entry.data)?;
+                #[cfg(any(test, feature = "test-hooks"))]
+                self.deps
+                    .hooks()
+                    .reach_gate(HookPoint::BeforeDirtyVictimSpillTempWrite);
+                self.deps
+                    .temp()
+                    .write_block(victim_block_index, &entry.data)?;
+                #[cfg(any(test, feature = "test-hooks"))]
+                self.deps
+                    .hooks()
+                    .reach_gate(HookPoint::AfterDirtyVictimSpillTempWrite);
             }
             state.resident.mark_snapshot_written(victim_block_index)?;
         }
@@ -920,7 +985,12 @@ impl<R: AtIo + 'static> Cache<R> {
     #[allow(dead_code)]
     fn read_right_block(&self, offset: u64, buffer: &mut [u8]) -> Result<(), CacheError> {
         self.layout.validate_right_io(offset, buffer.len())?;
-        self.right.read_at(offset, buffer)
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.deps.hooks().reach_gate(HookPoint::BeforeRightRead);
+        let result = self.right.read_at(offset, buffer);
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.deps.hooks().reach_gate(HookPoint::AfterRightRead);
+        result
     }
 
     fn read_temp_block(&self, block_index: u64, buffer: &mut [u8]) -> Result<(), CacheError> {
@@ -932,13 +1002,18 @@ impl<R: AtIo + 'static> Cache<R> {
             });
         }
 
-        self.temp.read_block(block_index, buffer)
+        self.deps.temp().read_block(block_index, buffer)
     }
 
     #[allow(dead_code)]
     fn write_right_block(&self, offset: u64, data: &[u8]) -> Result<(), CacheError> {
         self.layout.validate_right_io(offset, data.len())?;
-        self.right.write_at(offset, data)
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.deps.hooks().reach_gate(HookPoint::BeforeRightWrite);
+        let result = self.right.write_at(offset, data);
+        #[cfg(any(test, feature = "test-hooks"))]
+        self.deps.hooks().reach_gate(HookPoint::AfterRightWrite);
+        result
     }
 }
 
@@ -965,6 +1040,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use super::{Cache, SpilledDirty};
+    use crate::test_support::{LoadStateSnapshot, QueueKindSnapshot, TestHooks};
     use crate::{AtIo, CacheConfig, CacheError};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1241,6 +1317,38 @@ mod tests {
     }
 
     #[test]
+    fn debug_snapshot_reports_resident_state_for_test_build() {
+        let temp_dir = TestTempDir::new();
+        let right = MockAtIo::with_len(128);
+        let mut config = test_config(32);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Cache::new_for_test(config, right, TestHooks::default()).unwrap();
+
+        cache.write_locked(4, &[200, 201]).unwrap();
+
+        let snapshot = cache.debug_snapshot();
+        assert_eq!(snapshot.resident.fifo_order, vec![0]);
+        assert!(snapshot.resident.lru_order.is_empty());
+        assert!(snapshot.spilled_dirty.is_empty());
+        assert!(snapshot.active_temp_blocks.is_empty());
+        assert_eq!(snapshot.foreground_dirty_eviction_waiters, 0);
+        assert!(!snapshot.stop_requested);
+
+        let block = snapshot
+            .resident
+            .blocks
+            .iter()
+            .find(|block| block.block_index == 0)
+            .unwrap();
+        assert_eq!(block.queue, QueueKindSnapshot::Fifo);
+        assert_eq!(block.load_state, LoadStateSnapshot::Ready);
+        assert_eq!(block.dirty_ranges, vec![4..6]);
+        assert!(!block.has_active_snapshot);
+        assert_eq!(block.pending_patch_count, 0);
+        assert_eq!(block.valid_len, 32);
+    }
+
+    #[test]
     fn read_locked_hits_resident_after_first_miss() {
         let right = MockAtIo::with_len(128);
         let cache = Cache::new(test_config(32), right.clone()).unwrap();
@@ -1493,7 +1601,7 @@ mod tests {
         config.dirty_scan_interval = Duration::from_secs(60);
         config.temp_dir = temp_dir.path().to_path_buf();
         let cache = Cache::new(config, right.clone()).unwrap();
-        let temp_path = cache.temp.path_for_block(0);
+        let temp_path = cache.temp_store().path_for_block(0);
 
         cache.write_locked(4, &[200, 201, 202]).unwrap();
         cache.read_locked(32, &mut [0u8; 1]).unwrap();
@@ -1626,7 +1734,12 @@ mod tests {
         });
 
         wait_until(Duration::from_secs(1), || {
-            cache.state.lock().unwrap().foreground_dirty_eviction_waiters == 1
+            cache
+                .state
+                .lock()
+                .unwrap()
+                .foreground_dirty_eviction_waiters
+                == 1
         });
         assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
         assert!(!right.calls_snapshot().iter().any(|call| {
@@ -1644,7 +1757,7 @@ mod tests {
             let removed = state.spilled_dirty.remove(&0);
             assert!(removed.is_some());
         }
-        cache.temp.remove_block(0).unwrap();
+        cache.temp_store().remove_block(0).unwrap();
         cache.state_changed.notify_all();
 
         assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), 64);
@@ -1690,7 +1803,12 @@ mod tests {
         });
 
         wait_until(Duration::from_secs(1), || {
-            cache.state.lock().unwrap().foreground_dirty_eviction_waiters == 1
+            cache
+                .state
+                .lock()
+                .unwrap()
+                .foreground_dirty_eviction_waiters
+                == 1
         });
 
         let (tx, rx) = mpsc::channel();
@@ -1713,7 +1831,7 @@ mod tests {
             let removed = state.spilled_dirty.remove(&0);
             assert!(removed.is_some());
         }
-        cache.temp.remove_block(0).unwrap();
+        cache.temp_store().remove_block(0).unwrap();
         cache.state_changed.notify_all();
         waiting_thread.join().unwrap();
 
@@ -1747,7 +1865,12 @@ mod tests {
         });
 
         wait_until(Duration::from_secs(1), || {
-            cache.state.lock().unwrap().foreground_dirty_eviction_waiters == 1
+            cache
+                .state
+                .lock()
+                .unwrap()
+                .foreground_dirty_eviction_waiters
+                == 1
         });
 
         {
@@ -1757,18 +1880,34 @@ mod tests {
             let created = Cache::<MockAtIo>::create_snapshot_temp_locked(
                 cache.config(),
                 &mut state,
-                &cache.temp,
+                cache.temp_store(),
             )
             .unwrap();
             assert!(!created);
-            assert!(state.resident.get(3).unwrap().state.active_snapshot.is_none());
+            assert!(
+                state
+                    .resident
+                    .get(3)
+                    .unwrap()
+                    .state
+                    .active_snapshot
+                    .is_none()
+            );
         }
-        cache.temp.remove_block(0).unwrap();
+        cache.temp_store().remove_block(0).unwrap();
         cache.state_changed.notify_all();
         waiting_thread.join().unwrap();
 
         let state = cache.state.lock().unwrap();
-        assert!(state.resident.get(3).unwrap().state.active_snapshot.is_none());
+        assert!(
+            state
+                .resident
+                .get(3)
+                .unwrap()
+                .state
+                .active_snapshot
+                .is_none()
+        );
     }
 
     #[test]
@@ -1793,7 +1932,12 @@ mod tests {
         });
 
         wait_until(Duration::from_secs(1), || {
-            cache.state.lock().unwrap().foreground_dirty_eviction_waiters == 1
+            cache
+                .state
+                .lock()
+                .unwrap()
+                .foreground_dirty_eviction_waiters
+                == 1
         });
 
         {
@@ -1807,7 +1951,14 @@ mod tests {
             Err(CacheError::Stopped)
         );
         waiting_thread.join().unwrap();
-        assert_eq!(cache.state.lock().unwrap().foreground_dirty_eviction_waiters, 0);
+        assert_eq!(
+            cache
+                .state
+                .lock()
+                .unwrap()
+                .foreground_dirty_eviction_waiters,
+            0
+        );
     }
 
     #[test]
@@ -1818,7 +1969,7 @@ mod tests {
         config.dirty_scan_interval = Duration::from_millis(20);
         config.temp_dir = temp_dir.path().to_path_buf();
         let cache = Cache::new(config, right.clone()).unwrap();
-        let temp_path = cache.temp.path_for_block(0);
+        let temp_path = cache.temp_store().path_for_block(0);
 
         cache.write_locked(4, &[200, 201, 202]).unwrap();
 
@@ -1858,7 +2009,7 @@ mod tests {
         config.dirty_scan_interval = Duration::from_millis(80);
         config.temp_dir = temp_dir.path().to_path_buf();
         let cache = Cache::new(config, right.clone()).unwrap();
-        let temp_path = cache.temp.path_for_block(0);
+        let temp_path = cache.temp_store().path_for_block(0);
 
         cache.write_locked(4, &[200, 201, 202]).unwrap();
 
@@ -1911,7 +2062,7 @@ mod tests {
         config.dirty_scan_interval = Duration::from_millis(20);
         config.temp_dir = temp_dir.path().to_path_buf();
         let cache = Cache::new(config, right.clone()).unwrap();
-        let temp_path = cache.temp.path_for_block(0);
+        let temp_path = cache.temp_store().path_for_block(0);
 
         cache.write_locked(4, &[200, 201, 202]).unwrap();
         cache.read_locked(32, &mut [0u8; 1]).unwrap();

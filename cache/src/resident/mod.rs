@@ -8,6 +8,10 @@ use std::ops::Range;
 use list::{IndexedList, ListNodeId};
 
 use crate::CacheError;
+#[cfg(any(test, feature = "test-hooks"))]
+use crate::test_support::{
+    LoadStateSnapshot, QueueKindSnapshot, ResidentBlockSnapshot, ResidentSnapshot,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum QueueRef {
@@ -558,6 +562,30 @@ impl TwoQueueResident {
                 "resident block missing after queue removal",
             ))?;
         Ok(Some(EvictedBlock { block_index, entry }))
+    }
+
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn debug_snapshot(&self) -> ResidentSnapshot {
+        let mut blocks = self
+            .blocks
+            .iter()
+            .map(|(&block_index, entry)| ResidentBlockSnapshot {
+                block_index,
+                queue: QueueKindSnapshot::from(entry.state.queue_ref),
+                load_state: LoadStateSnapshot::from(entry.state.load_state),
+                dirty_ranges: entry.state.dirty_ranges.clone(),
+                has_active_snapshot: entry.state.active_snapshot.is_some(),
+                pending_patch_count: entry.state.pending_patches.len(),
+                valid_len: entry.state.valid_len,
+            })
+            .collect::<Vec<_>>();
+        blocks.sort_by_key(|block| block.block_index);
+
+        ResidentSnapshot {
+            fifo_order: self.fifo.values_from_head(),
+            lru_order: self.lru.values_from_head(),
+            blocks,
+        }
     }
 
     #[cfg(test)]
