@@ -175,6 +175,9 @@ async function handleRescanRuntimeDisks() {
   try {
     const snapshot = await runRescanRuntimeDisks();
     if (snapshot === null) {
+      if (errorText.value) {
+        ElMessage.error(errorText.value);
+      }
       return;
     }
 
