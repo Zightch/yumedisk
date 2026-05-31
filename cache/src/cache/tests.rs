@@ -1,0 +1,1648 @@
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::Duration;
+
+use super::Cache;
+use super::state::SpilledDirty;
+use crate::test_support::{
+    HookPoint, IoFailureController, IoOperation, IoTimings, LoadStateSnapshot,
+    ManualGateController, MemoryAtIo, QueueKindSnapshot, TempFailureController, TempFaultOperation,
+    TestHooks, TestTempDir, wait_until,
+};
+use crate::{AtIo, CacheConfig, CacheError};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum IoCall {
+    Read { offset: u64, length: usize },
+    Write { offset: u64, length: usize },
+}
+
+#[derive(Debug)]
+struct MockAtIoInner {
+    calls: Mutex<Vec<IoCall>>,
+    storage: Mutex<Vec<u8>>,
+    read_delay: Duration,
+    write_delay: Duration,
+    write_failures_remaining: Mutex<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct MockAtIo {
+    inner: Arc<MockAtIoInner>,
+}
+
+impl MockAtIo {
+    fn new(
+        storage: Vec<u8>,
+        read_delay: Duration,
+        write_delay: Duration,
+        write_failures: usize,
+    ) -> Self {
+        Self {
+            inner: Arc::new(MockAtIoInner {
+                calls: Mutex::new(Vec::new()),
+                storage: Mutex::new(storage),
+                read_delay,
+                write_delay,
+                write_failures_remaining: Mutex::new(write_failures),
+            }),
+        }
+    }
+
+    fn with_len(length: usize) -> Self {
+        Self::new(test_bytes(length), Duration::ZERO, Duration::ZERO, 0)
+    }
+
+    fn with_delay(length: usize, read_delay: Duration) -> Self {
+        Self::new(test_bytes(length), read_delay, Duration::ZERO, 0)
+    }
+
+    fn with_write_delay(length: usize, write_delay: Duration) -> Self {
+        Self::new(test_bytes(length), Duration::ZERO, write_delay, 0)
+    }
+
+    fn take_calls(&self) -> Vec<IoCall> {
+        self.inner.calls.lock().unwrap().drain(..).collect()
+    }
+
+    fn calls_snapshot(&self) -> Vec<IoCall> {
+        self.inner.calls.lock().unwrap().clone()
+    }
+
+    fn storage_slice(&self, offset: usize, length: usize) -> Vec<u8> {
+        self.inner.storage.lock().unwrap()[offset..offset + length].to_vec()
+    }
+}
+
+impl AtIo for MockAtIo {
+    fn read_at(&self, offset: u64, buffer: &mut [u8]) -> Result<(), CacheError> {
+        self.inner.calls.lock().unwrap().push(IoCall::Read {
+            offset,
+            length: buffer.len(),
+        });
+        if self.inner.read_delay != Duration::ZERO {
+            thread::sleep(self.inner.read_delay);
+        }
+
+        let start = usize::try_from(offset)
+            .map_err(|_| CacheError::ArithmeticOverflow("mock read offset"))?;
+        let end = start
+            .checked_add(buffer.len())
+            .ok_or(CacheError::ArithmeticOverflow("mock read end"))?;
+        let storage = self.inner.storage.lock().unwrap();
+        buffer.copy_from_slice(&storage[start..end]);
+        Ok(())
+    }
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> Result<(), CacheError> {
+        self.inner.calls.lock().unwrap().push(IoCall::Write {
+            offset,
+            length: data.len(),
+        });
+        if self.inner.write_delay != Duration::ZERO {
+            thread::sleep(self.inner.write_delay);
+        }
+        {
+            let mut failures_remaining = self.inner.write_failures_remaining.lock().unwrap();
+            if *failures_remaining > 0 {
+                *failures_remaining -= 1;
+                return Err(CacheError::NotImplemented);
+            }
+        }
+
+        let start = usize::try_from(offset)
+            .map_err(|_| CacheError::ArithmeticOverflow("mock write offset"))?;
+        let end = start
+            .checked_add(data.len())
+            .ok_or(CacheError::ArithmeticOverflow("mock write end"))?;
+        let mut storage = self.inner.storage.lock().unwrap();
+        storage[start..end].copy_from_slice(data);
+        Ok(())
+    }
+}
+
+impl Default for MockAtIo {
+    fn default() -> Self {
+        Self::with_len(256)
+    }
+}
+
+fn test_config(block_size_bytes: u32) -> CacheConfig {
+    CacheConfig {
+        fifo_capacity_blocks: 2,
+        lru_capacity_blocks: 2,
+        block_size_bytes,
+        dirty_scan_interval: Duration::from_secs(1),
+        temp_max_files: 1,
+        temp_dir: "tmp/cache-tests".into(),
+    }
+}
+
+fn test_bytes(length: usize) -> Vec<u8> {
+    (0..length).map(|index| index as u8).collect()
+}
+
+fn expected_bytes(offset: usize, length: usize) -> Vec<u8> {
+    (offset..offset + length).map(|index| index as u8).collect()
+}
+
+fn open_all_hooks_except(gate: &ManualGateController, blocked: HookPoint) {
+    for point in [
+        HookPoint::DebugSnapshot,
+        HookPoint::BeforeRightRead,
+        HookPoint::AfterRightRead,
+        HookPoint::BeforeRightWrite,
+        HookPoint::AfterRightWrite,
+        HookPoint::BeforeDirtyVictimSpillTempWrite,
+        HookPoint::AfterDirtyVictimSpillTempWrite,
+    ] {
+        if point != blocked {
+            gate.open(point);
+        }
+    }
+}
+
+#[test]
+fn new_rejects_zero_block_size() {
+    let error = Cache::new(test_config(0), MockAtIo::default()).unwrap_err();
+    assert_eq!(
+        error,
+        CacheError::InvalidConfig("block_size_bytes must be greater than 0")
+    );
+}
+
+#[test]
+fn new_rejects_zero_fifo_capacity() {
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 0;
+
+    let error = Cache::new(config, MockAtIo::default()).unwrap_err();
+    assert_eq!(
+        error,
+        CacheError::InvalidConfig("fifo_capacity_blocks must be greater than 0")
+    );
+}
+
+#[test]
+fn new_rejects_zero_lru_capacity() {
+    let mut config = test_config(32);
+    config.lru_capacity_blocks = 0;
+
+    let error = Cache::new(config, MockAtIo::default()).unwrap_err();
+    assert_eq!(
+        error,
+        CacheError::InvalidConfig("lru_capacity_blocks must be greater than 0")
+    );
+}
+
+#[test]
+fn new_rejects_zero_temp_file_limit() {
+    let mut config = test_config(32);
+    config.temp_max_files = 0;
+
+    let error = Cache::new(config, MockAtIo::default()).unwrap_err();
+    assert_eq!(
+        error,
+        CacheError::InvalidConfig("temp_max_files must be greater than 0")
+    );
+}
+
+#[test]
+fn read_right_block_rejects_misaligned_offset() {
+    let cache = Cache::new(test_config(32), MockAtIo::default()).unwrap();
+    let mut buffer = [0u8; 32];
+    let error = cache.read_right_block(1, &mut buffer).unwrap_err();
+    assert_eq!(
+        error,
+        CacheError::MisalignedRightIo {
+            offset: 1,
+            length: 32,
+            block_size: 32,
+        }
+    );
+}
+
+#[test]
+fn read_right_block_rejects_wrong_length() {
+    let cache = Cache::new(test_config(32), MockAtIo::default()).unwrap();
+    let mut buffer = [0u8; 16];
+    let error = cache.read_right_block(32, &mut buffer).unwrap_err();
+    assert_eq!(
+        error,
+        CacheError::MisalignedRightIo {
+            offset: 32,
+            length: 16,
+            block_size: 32,
+        }
+    );
+}
+
+#[test]
+fn aligned_right_io_reaches_backend_once() {
+    let right = MockAtIo::with_len(160);
+    let cache = Cache::new(test_config(32), right.clone()).unwrap();
+    let mut read_buffer = [0u8; 32];
+    let write_buffer = [7u8; 32];
+
+    cache.read_right_block(64, &mut read_buffer).unwrap();
+    cache.write_right_block(96, &write_buffer).unwrap();
+
+    assert_eq!(read_buffer[0], 64);
+    assert_eq!(read_buffer[31], 95);
+    assert_eq!(
+        right.take_calls(),
+        vec![
+            IoCall::Read {
+                offset: 64,
+                length: 32
+            },
+            IoCall::Write {
+                offset: 96,
+                length: 32
+            }
+        ]
+    );
+}
+
+#[test]
+fn debug_snapshot_reports_resident_state_for_test_build() {
+    let temp_dir = TestTempDir::new();
+    let right = MockAtIo::with_len(128);
+    let mut config = test_config(32);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new_for_test(config, right, TestHooks::default()).unwrap();
+
+    cache.write_locked(4, &[200, 201]).unwrap();
+
+    let snapshot = cache.debug_snapshot();
+    assert_eq!(snapshot.resident.fifo_order, vec![0]);
+    assert!(snapshot.resident.lru_order.is_empty());
+    assert!(snapshot.spilled_dirty.is_empty());
+    assert!(snapshot.active_temp_blocks.is_empty());
+    assert_eq!(snapshot.foreground_dirty_eviction_waiters, 0);
+    assert!(!snapshot.stop_requested);
+
+    let block = snapshot
+        .resident
+        .blocks
+        .iter()
+        .find(|block| block.block_index == 0)
+        .unwrap();
+    assert_eq!(block.queue, QueueKindSnapshot::Fifo);
+    assert_eq!(block.load_state, LoadStateSnapshot::Ready);
+    assert_eq!(block.dirty_ranges, vec![4..6]);
+    assert!(!block.has_active_snapshot);
+    assert_eq!(block.pending_patch_count, 0);
+    assert_eq!(block.valid_len, 32);
+}
+
+#[test]
+fn configured_block_size_controls_right_io_granularity() {
+    let temp_dir = TestTempDir::with_prefix("cache-block-size");
+    let right = MemoryAtIo::from_bytes(16, test_bytes(96));
+    let mut config = test_config(16);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new(config, right.clone()).unwrap();
+    let mut buffer = [0u8; 6];
+
+    cache.write_locked(14, &[200, 201, 202, 203]).unwrap();
+    cache.read_locked(12, &mut buffer).unwrap();
+
+    assert_eq!(&buffer[..], &[12, 13, 200, 201, 202, 203]);
+    let log = right.take_log();
+    assert_eq!(log.len(), 2);
+    assert_eq!(log[0].operation, IoOperation::Read);
+    assert_eq!(log[0].offset, 0);
+    assert_eq!(log[0].length, 16);
+    assert_eq!(log[0].block_index, 0);
+    assert_eq!(log[1].operation, IoOperation::Read);
+    assert_eq!(log[1].offset, 16);
+    assert_eq!(log[1].length, 16);
+    assert_eq!(log[1].block_index, 1);
+}
+
+#[test]
+fn first_cache_hit_promotes_fifo_block_into_lru() {
+    let temp_dir = TestTempDir::with_prefix("cache-promote-fifo");
+    let right = MockAtIo::with_len(128);
+    let mut config = test_config(32);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new_for_test(config, right, TestHooks::default()).unwrap();
+
+    cache.read_locked(0, &mut [0u8; 8]).unwrap();
+    let before_hit = cache.debug_snapshot();
+    cache.read_locked(0, &mut [0u8; 8]).unwrap();
+    let after_hit = cache.debug_snapshot();
+
+    assert_eq!(before_hit.resident.fifo_order, vec![0]);
+    assert!(before_hit.resident.lru_order.is_empty());
+    assert!(after_hit.resident.fifo_order.is_empty());
+    assert_eq!(after_hit.resident.lru_order, vec![0]);
+    assert_eq!(after_hit.resident.blocks[0].queue, QueueKindSnapshot::Lru);
+}
+
+#[test]
+fn lru_hit_moves_block_to_tail_in_cache_flow() {
+    let temp_dir = TestTempDir::with_prefix("cache-lru-tail");
+    let right = MockAtIo::with_len(192);
+    let mut config = test_config(32);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new_for_test(config, right, TestHooks::default()).unwrap();
+
+    cache.read_locked(0, &mut [0u8; 1]).unwrap();
+    cache.read_locked(0, &mut [0u8; 1]).unwrap();
+    cache.read_locked(32, &mut [0u8; 1]).unwrap();
+    cache.read_locked(32, &mut [0u8; 1]).unwrap();
+    let before_refresh = cache.debug_snapshot();
+    cache.read_locked(0, &mut [0u8; 1]).unwrap();
+    let after_refresh = cache.debug_snapshot();
+
+    assert_eq!(before_refresh.resident.lru_order, vec![0, 1]);
+    assert_eq!(after_refresh.resident.lru_order, vec![1, 0]);
+}
+
+#[test]
+fn insert_evicts_fifo_head_before_lru_resident() {
+    let temp_dir = TestTempDir::with_prefix("cache-fifo-victim");
+    let right = MockAtIo::with_len(192);
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.lru_capacity_blocks = 1;
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new_for_test(config, right.clone(), TestHooks::default()).unwrap();
+
+    cache.read_locked(0, &mut [0u8; 1]).unwrap();
+    cache.read_locked(0, &mut [0u8; 1]).unwrap();
+    cache.read_locked(32, &mut [0u8; 1]).unwrap();
+    cache.read_locked(64, &mut [0u8; 1]).unwrap();
+    let snapshot = cache.debug_snapshot();
+    right.take_calls();
+
+    assert_eq!(snapshot.resident.fifo_order, vec![2]);
+    assert_eq!(snapshot.resident.lru_order, vec![0]);
+    assert_eq!(
+        snapshot
+            .resident
+            .blocks
+            .iter()
+            .map(|block| block.block_index)
+            .collect::<Vec<_>>(),
+        vec![0, 2]
+    );
+
+    cache.read_locked(0, &mut [0u8; 1]).unwrap();
+    assert!(right.take_calls().is_empty());
+}
+
+#[test]
+fn temp_file_limit_two_allows_second_snapshot_then_stops() {
+    let temp_dir = TestTempDir::with_prefix("cache-temp-limit-two");
+    let right = MockAtIo::with_len(192);
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.lru_capacity_blocks = 1;
+    config.temp_max_files = 2;
+    config.dirty_scan_interval = Duration::from_secs(60);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new(config, right).unwrap();
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    cache.read_locked(32, &mut [0u8; 1]).unwrap();
+    cache.write_locked(36, &[210, 211]).unwrap();
+
+    let mut state = cache.state.lock().unwrap();
+    let created = Cache::<MockAtIo>::create_snapshot_temp_locked(
+        cache.config(),
+        &mut state,
+        cache.temp_store(),
+    )
+    .unwrap();
+    assert!(created);
+    assert_eq!(state.spilled_dirty.len(), 1);
+    assert!(state.spilled_dirty.contains_key(&0));
+    assert_eq!(state.temp_file_count(), 2);
+    assert!(
+        state
+            .resident
+            .get(1)
+            .unwrap()
+            .state
+            .active_snapshot
+            .is_some()
+    );
+
+    let created_again = Cache::<MockAtIo>::create_snapshot_temp_locked(
+        cache.config(),
+        &mut state,
+        cache.temp_store(),
+    )
+    .unwrap();
+    assert!(!created_again);
+    assert_eq!(state.temp_file_count(), 2);
+}
+
+#[test]
+fn right_read_failure_aborts_placeholder_and_allows_retry() {
+    let temp_dir = TestTempDir::with_prefix("cache-right-read-fault");
+    let failures = IoFailureController::new();
+    failures.fail_once(IoOperation::Read, Some(0), CacheError::NotImplemented);
+    let right = MemoryAtIo::with_failures(32, test_bytes(128), IoTimings::default(), failures);
+    let mut config = test_config(32);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new(config, right.clone()).unwrap();
+
+    let error = cache.read_locked(0, &mut [0u8; 8]).unwrap_err();
+    assert_eq!(error, CacheError::NotImplemented);
+    assert!(cache.state.lock().unwrap().resident.get(0).is_none());
+
+    let mut buffer = [0u8; 8];
+    cache.read_locked(0, &mut buffer).unwrap();
+
+    assert_eq!(&buffer[..], &[0, 1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(
+        right
+            .take_log()
+            .into_iter()
+            .map(|entry| entry.result)
+            .collect::<Vec<_>>(),
+        vec![Err(CacheError::NotImplemented), Ok(())]
+    );
+}
+
+#[test]
+fn read_locked_hits_resident_after_first_miss() {
+    let right = MockAtIo::with_len(128);
+    let cache = Cache::new(test_config(32), right.clone()).unwrap();
+    let mut first = [0u8; 7];
+    let mut second = [0u8; 7];
+
+    cache.read_locked(5, &mut first).unwrap();
+    cache.read_locked(5, &mut second).unwrap();
+
+    assert_eq!(&first[..], &expected_bytes(5, 7));
+    assert_eq!(&second[..], &expected_bytes(5, 7));
+    assert_eq!(
+        right.take_calls(),
+        vec![IoCall::Read {
+            offset: 0,
+            length: 32
+        }]
+    );
+}
+
+#[test]
+fn read_locked_spans_multiple_blocks_with_aligned_backend_reads() {
+    let right = MockAtIo::with_len(160);
+    let cache = Cache::new(test_config(32), right.clone()).unwrap();
+    let mut buffer = [0u8; 40];
+
+    cache.read_locked(28, &mut buffer).unwrap();
+
+    assert_eq!(&buffer[..], &expected_bytes(28, 40));
+    assert_eq!(
+        right.take_calls(),
+        vec![
+            IoCall::Read {
+                offset: 0,
+                length: 32
+            },
+            IoCall::Read {
+                offset: 32,
+                length: 32
+            },
+            IoCall::Read {
+                offset: 64,
+                length: 32
+            }
+        ]
+    );
+}
+
+#[test]
+fn read_locked_reads_tail_slice_from_single_loaded_block() {
+    let right = MockAtIo::with_len(128);
+    let cache = Cache::new(test_config(32), right.clone()).unwrap();
+    let mut buffer = [0u8; 4];
+
+    cache.read_locked(60, &mut buffer).unwrap();
+
+    assert_eq!(&buffer[..], &expected_bytes(60, 4));
+    assert_eq!(
+        right.take_calls(),
+        vec![IoCall::Read {
+            offset: 32,
+            length: 32
+        }]
+    );
+}
+
+#[test]
+fn write_locked_patches_resident_hit_without_backend_write() {
+    let right = MockAtIo::with_len(128);
+    let cache = Cache::new(test_config(32), right.clone()).unwrap();
+    let mut warm = [0u8; 1];
+    let mut buffer = [0u8; 8];
+
+    cache.read_locked(0, &mut warm).unwrap();
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    cache.read_locked(0, &mut buffer).unwrap();
+
+    assert_eq!(&buffer[..], &[0, 1, 2, 3, 200, 201, 202, 7]);
+    assert_eq!(
+        right.take_calls(),
+        vec![IoCall::Read {
+            offset: 0,
+            length: 32
+        }]
+    );
+}
+
+#[test]
+fn write_locked_miss_reads_full_block_once_and_patches_resident() {
+    let right = MockAtIo::with_len(128);
+    let cache = Cache::new(test_config(32), right.clone()).unwrap();
+    let mut buffer = [0u8; 10];
+
+    cache.write_locked(5, &[90, 91, 92]).unwrap();
+    cache.read_locked(0, &mut buffer).unwrap();
+
+    assert_eq!(&buffer[..], &[0, 1, 2, 3, 4, 90, 91, 92, 8, 9]);
+    assert_eq!(
+        right.take_calls(),
+        vec![IoCall::Read {
+            offset: 0,
+            length: 32
+        }]
+    );
+}
+
+#[test]
+fn write_locked_spans_multiple_blocks_without_backend_write() {
+    let right = MockAtIo::with_len(160);
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 4;
+    let cache = Cache::new(config, right.clone()).unwrap();
+    let patch = vec![0xAB; 40];
+    let mut buffer = [0u8; 40];
+
+    cache.write_locked(28, &patch).unwrap();
+    cache.read_locked(28, &mut buffer).unwrap();
+
+    assert_eq!(&buffer[..], &patch[..]);
+    assert_eq!(
+        right.take_calls(),
+        vec![
+            IoCall::Read {
+                offset: 0,
+                length: 32
+            },
+            IoCall::Read {
+                offset: 32,
+                length: 32
+            },
+            IoCall::Read {
+                offset: 64,
+                length: 32
+            }
+        ]
+    );
+}
+
+#[test]
+fn concurrent_same_block_miss_loads_backend_once() {
+    let right = MockAtIo::with_delay(128, Duration::from_millis(100));
+    let cache = Arc::new(Cache::new(test_config(32), right.clone()).unwrap());
+
+    let first_cache = Arc::clone(&cache);
+    let first = thread::spawn(move || {
+        let mut buffer = vec![0u8; 16];
+        first_cache.read_locked(3, &mut buffer).unwrap();
+        buffer
+    });
+
+    thread::sleep(Duration::from_millis(20));
+
+    let second_cache = Arc::clone(&cache);
+    let second = thread::spawn(move || {
+        let mut buffer = vec![0u8; 8];
+        second_cache.read_locked(5, &mut buffer).unwrap();
+        buffer
+    });
+
+    assert_eq!(first.join().unwrap(), expected_bytes(3, 16));
+    assert_eq!(second.join().unwrap(), expected_bytes(5, 8));
+    assert_eq!(
+        right.take_calls(),
+        vec![IoCall::Read {
+            offset: 0,
+            length: 32
+        }]
+    );
+}
+
+#[test]
+fn concurrent_same_block_miss_loads_backend_once_with_gate() {
+    let temp_dir = TestTempDir::with_prefix("cache-same-block-read-gate");
+    let gate = Arc::new(ManualGateController::new());
+    open_all_hooks_except(&gate, HookPoint::BeforeRightRead);
+    let right = MockAtIo::with_len(128);
+    let mut config = test_config(32);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Arc::new(
+        Cache::new_for_test(config, right.clone(), TestHooks::with_gate(gate.clone())).unwrap(),
+    );
+
+    let first_cache = Arc::clone(&cache);
+    let (first_tx, first_rx) = mpsc::channel();
+    let first = thread::spawn(move || {
+        let mut buffer = vec![0u8; 16];
+        let result = first_cache.read_locked(3, &mut buffer).map(|_| buffer);
+        first_tx.send(result).unwrap();
+    });
+
+    assert!(gate.wait_until_reached(HookPoint::BeforeRightRead, 1, Duration::from_secs(1)));
+
+    let second_cache = Arc::clone(&cache);
+    let (second_tx, second_rx) = mpsc::channel();
+    let second = thread::spawn(move || {
+        let mut buffer = vec![0u8; 8];
+        let result = second_cache.read_locked(5, &mut buffer).map(|_| buffer);
+        second_tx.send(result).unwrap();
+    });
+
+    assert!(first_rx.recv_timeout(Duration::from_millis(50)).is_err());
+    assert!(second_rx.recv_timeout(Duration::from_millis(50)).is_err());
+    assert!(right.calls_snapshot().is_empty());
+    assert_eq!(gate.arrival_count(HookPoint::BeforeRightRead), 1);
+
+    gate.release_one(HookPoint::BeforeRightRead);
+
+    assert_eq!(
+        first_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap(),
+        expected_bytes(3, 16)
+    );
+    assert_eq!(
+        second_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap(),
+        expected_bytes(5, 8)
+    );
+    first.join().unwrap();
+    second.join().unwrap();
+    assert_eq!(
+        right.take_calls(),
+        vec![IoCall::Read {
+            offset: 0,
+            length: 32
+        }]
+    );
+}
+
+#[test]
+fn concurrent_same_block_write_miss_loads_backend_once() {
+    let right = MockAtIo::with_delay(128, Duration::from_millis(100));
+    let cache = Arc::new(Cache::new(test_config(32), right.clone()).unwrap());
+
+    let first_cache = Arc::clone(&cache);
+    let first = thread::spawn(move || {
+        first_cache.write_locked(3, &[200, 201, 202, 203]).unwrap();
+    });
+
+    thread::sleep(Duration::from_millis(20));
+
+    let second_cache = Arc::clone(&cache);
+    let second = thread::spawn(move || {
+        second_cache.write_locked(10, &[150, 151, 152]).unwrap();
+    });
+
+    first.join().unwrap();
+    second.join().unwrap();
+
+    let mut buffer = [0u8; 16];
+    cache.read_locked(0, &mut buffer).unwrap();
+
+    assert_eq!(
+        &buffer[..],
+        &[
+            0, 1, 2, 200, 201, 202, 203, 7, 8, 9, 150, 151, 152, 13, 14, 15
+        ]
+    );
+    assert_eq!(
+        right.take_calls(),
+        vec![IoCall::Read {
+            offset: 0,
+            length: 32
+        }]
+    );
+}
+
+#[test]
+fn concurrent_same_block_write_miss_loads_backend_once_with_gate() {
+    let temp_dir = TestTempDir::with_prefix("cache-same-block-write-gate");
+    let gate = Arc::new(ManualGateController::new());
+    open_all_hooks_except(&gate, HookPoint::BeforeRightRead);
+    let right = MockAtIo::with_len(128);
+    let mut config = test_config(32);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Arc::new(
+        Cache::new_for_test(config, right.clone(), TestHooks::with_gate(gate.clone())).unwrap(),
+    );
+
+    let first_cache = Arc::clone(&cache);
+    let (first_tx, first_rx) = mpsc::channel();
+    let first = thread::spawn(move || {
+        first_tx
+            .send(first_cache.write_locked(3, &[200, 201, 202, 203]))
+            .unwrap();
+    });
+
+    assert!(gate.wait_until_reached(HookPoint::BeforeRightRead, 1, Duration::from_secs(1)));
+
+    let second_cache = Arc::clone(&cache);
+    let (second_tx, second_rx) = mpsc::channel();
+    let second = thread::spawn(move || {
+        second_tx
+            .send(second_cache.write_locked(10, &[150, 151, 152]))
+            .unwrap();
+    });
+
+    assert!(first_rx.recv_timeout(Duration::from_millis(50)).is_err());
+    assert!(second_rx.recv_timeout(Duration::from_millis(50)).is_err());
+    assert!(right.calls_snapshot().is_empty());
+    assert_eq!(gate.arrival_count(HookPoint::BeforeRightRead), 1);
+
+    gate.release_one(HookPoint::BeforeRightRead);
+
+    assert_eq!(
+        first_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+        Ok(())
+    );
+    assert_eq!(
+        second_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+        Ok(())
+    );
+    first.join().unwrap();
+    second.join().unwrap();
+
+    let mut buffer = [0u8; 16];
+    cache.read_locked(0, &mut buffer).unwrap();
+
+    assert_eq!(
+        &buffer[..],
+        &[
+            0, 1, 2, 200, 201, 202, 203, 7, 8, 9, 150, 151, 152, 13, 14, 15
+        ]
+    );
+    assert_eq!(
+        right.take_calls(),
+        vec![IoCall::Read {
+            offset: 0,
+            length: 32
+        }]
+    );
+}
+
+#[test]
+fn write_locked_waits_for_read_load_without_second_backend_read() {
+    let right = MockAtIo::with_delay(128, Duration::from_millis(100));
+    let cache = Arc::new(Cache::new(test_config(32), right.clone()).unwrap());
+
+    let first_cache = Arc::clone(&cache);
+    let first = thread::spawn(move || {
+        let mut buffer = vec![0u8; 8];
+        first_cache.read_locked(2, &mut buffer).unwrap();
+        buffer
+    });
+
+    thread::sleep(Duration::from_millis(20));
+
+    let second_cache = Arc::clone(&cache);
+    let second = thread::spawn(move || {
+        second_cache.write_locked(6, &[222, 223, 224]).unwrap();
+    });
+
+    assert_eq!(first.join().unwrap(), expected_bytes(2, 8));
+    second.join().unwrap();
+
+    let mut buffer = [0u8; 12];
+    cache.read_locked(0, &mut buffer).unwrap();
+
+    assert_eq!(&buffer[..], &[0, 1, 2, 3, 4, 5, 222, 223, 224, 9, 10, 11]);
+    assert_eq!(
+        right.take_calls(),
+        vec![IoCall::Read {
+            offset: 0,
+            length: 32
+        }]
+    );
+}
+
+#[test]
+fn write_locked_waits_for_read_load_without_second_backend_read_with_gate() {
+    let temp_dir = TestTempDir::with_prefix("cache-read-write-gate");
+    let gate = Arc::new(ManualGateController::new());
+    open_all_hooks_except(&gate, HookPoint::BeforeRightRead);
+    let right = MockAtIo::with_len(128);
+    let mut config = test_config(32);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Arc::new(
+        Cache::new_for_test(config, right.clone(), TestHooks::with_gate(gate.clone())).unwrap(),
+    );
+
+    let first_cache = Arc::clone(&cache);
+    let (first_tx, first_rx) = mpsc::channel();
+    let first = thread::spawn(move || {
+        let mut buffer = vec![0u8; 8];
+        let result = first_cache.read_locked(2, &mut buffer).map(|_| buffer);
+        first_tx.send(result).unwrap();
+    });
+
+    assert!(gate.wait_until_reached(HookPoint::BeforeRightRead, 1, Duration::from_secs(1)));
+
+    let second_cache = Arc::clone(&cache);
+    let (second_tx, second_rx) = mpsc::channel();
+    let second = thread::spawn(move || {
+        second_tx
+            .send(second_cache.write_locked(6, &[222, 223, 224]))
+            .unwrap();
+    });
+
+    assert!(first_rx.recv_timeout(Duration::from_millis(50)).is_err());
+    assert!(second_rx.recv_timeout(Duration::from_millis(50)).is_err());
+    assert!(right.calls_snapshot().is_empty());
+    assert_eq!(gate.arrival_count(HookPoint::BeforeRightRead), 1);
+
+    gate.release_one(HookPoint::BeforeRightRead);
+
+    assert_eq!(
+        first_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap(),
+        expected_bytes(2, 8)
+    );
+    assert_eq!(
+        second_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+        Ok(())
+    );
+    first.join().unwrap();
+    second.join().unwrap();
+
+    let mut buffer = [0u8; 12];
+    cache.read_locked(0, &mut buffer).unwrap();
+
+    assert_eq!(&buffer[..], &[0, 1, 2, 3, 4, 5, 222, 223, 224, 9, 10, 11]);
+    assert_eq!(
+        right.take_calls(),
+        vec![IoCall::Read {
+            offset: 0,
+            length: 32
+        }]
+    );
+}
+
+#[test]
+fn dirty_eviction_writes_temp_then_rehydrates_without_second_remote_read() {
+    let temp_dir = TestTempDir::new();
+    let right = MockAtIo::with_len(128);
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.dirty_scan_interval = Duration::from_secs(60);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new(config, right.clone()).unwrap();
+    let temp_path = cache.temp_store().path_for_block(0);
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    cache.read_locked(32, &mut [0u8; 1]).unwrap();
+
+    assert!(temp_path.is_file());
+    {
+        let state = cache.state.lock().unwrap();
+        assert!(state.resident.get(0).is_none());
+        assert_eq!(
+            state.spilled_dirty.get(&0),
+            Some(&SpilledDirty { valid_len: 32 })
+        );
+    }
+
+    let mut buffer = [0u8; 8];
+    cache.read_locked(0, &mut buffer).unwrap();
+
+    assert_eq!(&buffer[..], &[0, 1, 2, 3, 200, 201, 202, 7]);
+    assert!(temp_path.is_file());
+    {
+        let state = cache.state.lock().unwrap();
+        let entry = state.resident.get(0).unwrap();
+        assert!(entry.state.active_snapshot.is_some());
+        assert!(entry.state.dirty_ranges.is_empty());
+        assert!(!state.spilled_dirty.contains_key(&0));
+    }
+    assert_eq!(
+        right.take_calls(),
+        vec![
+            IoCall::Read {
+                offset: 0,
+                length: 32
+            },
+            IoCall::Read {
+                offset: 32,
+                length: 32
+            }
+        ]
+    );
+}
+
+#[test]
+fn dirty_eviction_preserves_dirty_ranges_when_temp_write_fails() {
+    let temp_dir = TestTempDir::new();
+    let right = MockAtIo::with_len(128);
+    let temp_failures = TempFailureController::new();
+    temp_failures.fail_once(
+        TempFaultOperation::Write,
+        Some(0),
+        std::io::ErrorKind::PermissionDenied,
+    );
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.dirty_scan_interval = Duration::from_secs(60);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache =
+        Cache::new_for_test_with_temp_failures(config, right, TestHooks::default(), temp_failures)
+            .unwrap();
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    let error = cache.read_locked(32, &mut [0u8; 1]).unwrap_err();
+
+    match error {
+        CacheError::TempIo { kind, .. } => {
+            assert_eq!(kind, std::io::ErrorKind::PermissionDenied);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+
+    let state = cache.state.lock().unwrap();
+    let entry = state.resident.get(0).unwrap();
+    assert_eq!(&entry.data[..8], &[0, 1, 2, 3, 200, 201, 202, 7]);
+    assert_eq!(entry.state.dirty_ranges, vec![4..7]);
+    assert!(entry.state.active_snapshot.is_none());
+    assert!(state.spilled_dirty.is_empty());
+    assert!(state.resident.get(1).is_none());
+}
+
+#[test]
+fn spilled_rehydrate_keeps_dirty_state_when_temp_read_fails() {
+    let temp_dir = TestTempDir::with_prefix("cache-temp-read-fault");
+    let right = MemoryAtIo::from_bytes(32, test_bytes(128));
+    let temp_failures = TempFailureController::new();
+    let rule_id = temp_failures.fail_persistently(
+        TempFaultOperation::Read,
+        Some(0),
+        std::io::ErrorKind::Interrupted,
+    );
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.dirty_scan_interval = Duration::from_secs(60);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new_for_test_with_temp_failures(
+        config,
+        right,
+        TestHooks::default(),
+        temp_failures.clone(),
+    )
+    .unwrap();
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    cache.read_locked(32, &mut [0u8; 1]).unwrap();
+
+    let error = cache.read_locked(0, &mut [0u8; 8]).unwrap_err();
+    assert_eq!(
+        error,
+        CacheError::TempIo {
+            operation: "read temp file",
+            path: cache.temp_store().path_for_block(0),
+            kind: std::io::ErrorKind::Interrupted,
+        }
+    );
+    {
+        let state = cache.state.lock().unwrap();
+        assert_eq!(
+            state.spilled_dirty.get(&0),
+            Some(&SpilledDirty { valid_len: 32 })
+        );
+        assert!(state.resident.get(0).is_none());
+        assert!(!state.active_temp_blocks.contains(&0));
+    }
+
+    assert!(temp_failures.clear_rule(rule_id));
+    let mut buffer = [0u8; 8];
+    cache.read_locked(0, &mut buffer).unwrap();
+
+    assert_eq!(&buffer[..], &[0, 1, 2, 3, 200, 201, 202, 7]);
+    let state = cache.state.lock().unwrap();
+    assert!(state.spilled_dirty.get(&0).is_none());
+    assert!(state.resident.get(0).is_some());
+}
+
+#[test]
+fn clean_victim_miss_bypasses_full_temp() {
+    let temp_dir = TestTempDir::new();
+    let right = MockAtIo::with_len(160);
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.dirty_scan_interval = Duration::from_secs(60);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Arc::new(Cache::new(config, right.clone()).unwrap());
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    cache.read_locked(32, &mut [0u8; 1]).unwrap();
+    right.take_calls();
+
+    let (tx, rx) = mpsc::channel();
+    let read_cache = Arc::clone(&cache);
+    let read_thread = thread::spawn(move || {
+        let mut buffer = [0u8; 1];
+        read_cache.read_locked(64, &mut buffer).unwrap();
+        tx.send(buffer[0]).unwrap();
+    });
+
+    assert_eq!(rx.recv_timeout(Duration::from_millis(200)).unwrap(), 64);
+    read_thread.join().unwrap();
+
+    assert_eq!(
+        right.take_calls(),
+        vec![IoCall::Read {
+            offset: 64,
+            length: 32
+        }]
+    );
+    let state = cache.state.lock().unwrap();
+    assert_eq!(state.foreground_dirty_eviction_waiters, 0);
+    assert!(state.spilled_dirty.contains_key(&0));
+    assert!(state.resident.get(1).is_none());
+    assert!(state.resident.get(2).is_some());
+}
+
+#[test]
+fn dirty_victim_miss_waits_for_temp_release_then_loads_remote() {
+    let temp_dir = TestTempDir::new();
+    let right = MockAtIo::with_len(160);
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.dirty_scan_interval = Duration::from_secs(60);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Arc::new(Cache::new(config, right.clone()).unwrap());
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    cache.write_locked(36, &[210, 211]).unwrap();
+    right.take_calls();
+
+    let (tx, rx) = mpsc::channel();
+    let read_cache = Arc::clone(&cache);
+    let read_thread = thread::spawn(move || {
+        let mut buffer = [0u8; 1];
+        read_cache.read_locked(64, &mut buffer).unwrap();
+        tx.send(buffer[0]).unwrap();
+    });
+
+    wait_until(Duration::from_secs(1), || {
+        cache
+            .state
+            .lock()
+            .unwrap()
+            .foreground_dirty_eviction_waiters
+            == 1
+    });
+    assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+    assert!(!right.calls_snapshot().iter().any(|call| {
+        matches!(
+            call,
+            IoCall::Read {
+                offset: 64,
+                length: 32
+            }
+        )
+    }));
+
+    {
+        let mut state = cache.state.lock().unwrap();
+        let removed = state.spilled_dirty.remove(&0);
+        assert!(removed.is_some());
+    }
+    cache.temp_store().remove_block(0).unwrap();
+    cache.state_changed.notify_all();
+
+    assert_eq!(rx.recv_timeout(Duration::from_secs(2)).unwrap(), 64);
+    read_thread.join().unwrap();
+
+    assert_eq!(
+        right.take_calls(),
+        vec![IoCall::Read {
+            offset: 64,
+            length: 32
+        }]
+    );
+    let state = cache.state.lock().unwrap();
+    assert_eq!(state.foreground_dirty_eviction_waiters, 0);
+    assert_eq!(
+        state.spilled_dirty.get(&1),
+        Some(&SpilledDirty { valid_len: 32 })
+    );
+    assert!(state.resident.get(2).is_some());
+}
+
+#[test]
+fn resident_hits_continue_while_dirty_eviction_waits() {
+    let temp_dir = TestTempDir::new();
+    let right = MockAtIo::with_len(192);
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.lru_capacity_blocks = 1;
+    config.dirty_scan_interval = Duration::from_secs(60);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Arc::new(Cache::new(config, right.clone()).unwrap());
+
+    cache.read_locked(96, &mut [0u8; 1]).unwrap();
+    cache.read_locked(96, &mut [0u8; 1]).unwrap();
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    cache.write_locked(36, &[210, 211]).unwrap();
+    right.take_calls();
+
+    let waiting_cache = Arc::clone(&cache);
+    let waiting_thread = thread::spawn(move || {
+        let mut buffer = [0u8; 1];
+        waiting_cache.read_locked(64, &mut buffer).unwrap();
+    });
+
+    wait_until(Duration::from_secs(1), || {
+        cache
+            .state
+            .lock()
+            .unwrap()
+            .foreground_dirty_eviction_waiters
+            == 1
+    });
+
+    let (tx, rx) = mpsc::channel();
+    let hit_cache = Arc::clone(&cache);
+    let hit_thread = thread::spawn(move || {
+        let mut buffer = [0u8; 4];
+        hit_cache.read_locked(96, &mut buffer).unwrap();
+        hit_cache.write_locked(100, &[250, 251]).unwrap();
+        tx.send(buffer).unwrap();
+    });
+
+    assert_eq!(
+        rx.recv_timeout(Duration::from_millis(200)).unwrap(),
+        [96, 97, 98, 99]
+    );
+    hit_thread.join().unwrap();
+
+    {
+        let mut state = cache.state.lock().unwrap();
+        let removed = state.spilled_dirty.remove(&0);
+        assert!(removed.is_some());
+    }
+    cache.temp_store().remove_block(0).unwrap();
+    cache.state_changed.notify_all();
+    waiting_thread.join().unwrap();
+
+    let mut verify = [0u8; 8];
+    cache.read_locked(96, &mut verify).unwrap();
+    assert_eq!(&verify[..], &[96, 97, 98, 99, 250, 251, 102, 103]);
+}
+
+#[test]
+fn worker_snapshot_creation_yields_to_foreground_temp_waiters() {
+    let temp_dir = TestTempDir::new();
+    let right = MockAtIo::with_len(192);
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.lru_capacity_blocks = 1;
+    config.dirty_scan_interval = Duration::from_secs(60);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Arc::new(Cache::new(config, right.clone()).unwrap());
+
+    cache.read_locked(96, &mut [0u8; 1]).unwrap();
+    cache.read_locked(96, &mut [0u8; 1]).unwrap();
+    cache.write_locked(100, &[250, 251]).unwrap();
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    cache.write_locked(36, &[210, 211]).unwrap();
+    right.take_calls();
+
+    let waiting_cache = Arc::clone(&cache);
+    let waiting_thread = thread::spawn(move || {
+        let mut buffer = [0u8; 1];
+        waiting_cache.read_locked(64, &mut buffer).unwrap();
+    });
+
+    wait_until(Duration::from_secs(1), || {
+        cache
+            .state
+            .lock()
+            .unwrap()
+            .foreground_dirty_eviction_waiters
+            == 1
+    });
+
+    {
+        let mut state = cache.state.lock().unwrap();
+        let removed = state.spilled_dirty.remove(&0);
+        assert!(removed.is_some());
+        let created = Cache::<MockAtIo>::create_snapshot_temp_locked(
+            cache.config(),
+            &mut state,
+            cache.temp_store(),
+        )
+        .unwrap();
+        assert!(!created);
+        assert!(
+            state
+                .resident
+                .get(3)
+                .unwrap()
+                .state
+                .active_snapshot
+                .is_none()
+        );
+    }
+    cache.temp_store().remove_block(0).unwrap();
+    cache.state_changed.notify_all();
+    waiting_thread.join().unwrap();
+
+    let state = cache.state.lock().unwrap();
+    assert!(
+        state
+            .resident
+            .get(3)
+            .unwrap()
+            .state
+            .active_snapshot
+            .is_none()
+    );
+}
+
+#[test]
+fn stop_requested_wakes_dirty_eviction_waiters() {
+    let temp_dir = TestTempDir::new();
+    let right = MockAtIo::with_len(160);
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.dirty_scan_interval = Duration::from_secs(60);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Arc::new(Cache::new(config, right).unwrap());
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    cache.write_locked(36, &[210, 211]).unwrap();
+
+    let (tx, rx) = mpsc::channel();
+    let waiting_cache = Arc::clone(&cache);
+    let waiting_thread = thread::spawn(move || {
+        let mut buffer = [0u8; 1];
+        let result = waiting_cache.read_locked(64, &mut buffer);
+        tx.send(result).unwrap();
+    });
+
+    wait_until(Duration::from_secs(1), || {
+        cache
+            .state
+            .lock()
+            .unwrap()
+            .foreground_dirty_eviction_waiters
+            == 1
+    });
+
+    {
+        let mut state = cache.state.lock().unwrap();
+        state.stop_requested = true;
+    }
+    cache.state_changed.notify_all();
+
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+        Err(CacheError::Stopped)
+    );
+    waiting_thread.join().unwrap();
+    assert_eq!(
+        cache
+            .state
+            .lock()
+            .unwrap()
+            .foreground_dirty_eviction_waiters,
+        0
+    );
+}
+
+#[test]
+fn worker_flushes_resident_dirty_and_removes_temp() {
+    let temp_dir = TestTempDir::new();
+    let right = MockAtIo::with_len(128);
+    let mut config = test_config(32);
+    config.dirty_scan_interval = Duration::from_millis(20);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new(config, right.clone()).unwrap();
+    let temp_path = cache.temp_store().path_for_block(0);
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+
+    wait_until(Duration::from_secs(2), || {
+        let state = cache.state.lock().unwrap();
+        let entry = match state.resident.get(0) {
+            Some(entry) => entry,
+            None => return false,
+        };
+        entry.state.active_snapshot.is_none()
+            && entry.state.dirty_ranges.is_empty()
+            && !temp_path.exists()
+            && right.storage_slice(0, 8) == vec![0, 1, 2, 3, 200, 201, 202, 7]
+    });
+
+    let calls = right.take_calls();
+    assert!(calls.contains(&IoCall::Read {
+        offset: 0,
+        length: 32,
+    }));
+    assert!(calls.contains(&IoCall::Write {
+        offset: 0,
+        length: 32,
+    }));
+}
+
+#[test]
+fn worker_retries_failed_snapshot_flush_and_keeps_temp_until_success() {
+    let temp_dir = TestTempDir::new();
+    let right = MockAtIo::new(
+        test_bytes(128),
+        Duration::ZERO,
+        Duration::from_millis(120),
+        1,
+    );
+    let mut config = test_config(32);
+    config.dirty_scan_interval = Duration::from_millis(80);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new(config, right.clone()).unwrap();
+    let temp_path = cache.temp_store().path_for_block(0);
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+
+    wait_until(Duration::from_secs(2), || {
+        let state = cache.state.lock().unwrap();
+        let entry = match state.resident.get(0) {
+            Some(entry) => entry,
+            None => return false,
+        };
+        entry.state.active_snapshot.is_some()
+            && entry.state.dirty_ranges.is_empty()
+            && temp_path.is_file()
+            && right.storage_slice(0, 8) == vec![0, 1, 2, 3, 4, 5, 6, 7]
+    });
+
+    wait_until(Duration::from_secs(2), || {
+        let state = cache.state.lock().unwrap();
+        let entry = match state.resident.get(0) {
+            Some(entry) => entry,
+            None => return false,
+        };
+        entry.state.active_snapshot.is_none()
+            && entry.state.dirty_ranges.is_empty()
+            && !temp_path.exists()
+            && right.storage_slice(0, 8) == vec![0, 1, 2, 3, 200, 201, 202, 7]
+    });
+
+    let write_count = right
+        .take_calls()
+        .into_iter()
+        .filter(|call| {
+            matches!(
+                call,
+                IoCall::Write {
+                    offset: 0,
+                    length: 32
+                }
+            )
+        })
+        .count();
+    assert_eq!(write_count, 2);
+}
+
+#[test]
+fn worker_retries_after_temp_delete_failure_and_clears_snapshot() {
+    let temp_dir = TestTempDir::with_prefix("cache-temp-delete-worker");
+    let right = MemoryAtIo::from_bytes(32, test_bytes(128));
+    let temp_failures = TempFailureController::new();
+    let rule_id = temp_failures.fail_persistently(
+        TempFaultOperation::Delete,
+        Some(0),
+        std::io::ErrorKind::PermissionDenied,
+    );
+    let mut config = test_config(32);
+    config.dirty_scan_interval = Duration::from_millis(20);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new_for_test_with_temp_failures(
+        config,
+        right.clone(),
+        TestHooks::default(),
+        temp_failures.clone(),
+    )
+    .unwrap();
+    let temp_path = cache.temp_store().path_for_block(0);
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+
+    wait_until(Duration::from_secs(2), || {
+        let state = cache.state.lock().unwrap();
+        let entry = match state.resident.get(0) {
+            Some(entry) => entry,
+            None => return false,
+        };
+        entry.state.active_snapshot.is_some()
+            && entry.state.dirty_ranges.is_empty()
+            && temp_path.is_file()
+            && right.storage_slice(0, 8) == vec![0, 1, 2, 3, 200, 201, 202, 7]
+    });
+
+    assert!(cache.temp_store().path_for_block(0).exists());
+    assert!(
+        cache
+            .state
+            .lock()
+            .unwrap()
+            .resident
+            .get(0)
+            .unwrap()
+            .state
+            .active_snapshot
+            .is_some()
+    );
+    assert!(
+        cache
+            .state
+            .lock()
+            .unwrap()
+            .resident
+            .get(0)
+            .unwrap()
+            .state
+            .dirty_ranges
+            .is_empty()
+    );
+    assert!(temp_failures.clear_rule(rule_id));
+
+    wait_until(Duration::from_secs(2), || {
+        let state = cache.state.lock().unwrap();
+        let entry = match state.resident.get(0) {
+            Some(entry) => entry,
+            None => return false,
+        };
+        entry.state.active_snapshot.is_none()
+            && entry.state.dirty_ranges.is_empty()
+            && !temp_path.exists()
+            && right.storage_slice(0, 8) == vec![0, 1, 2, 3, 200, 201, 202, 7]
+    });
+
+    let write_count = right
+        .take_log()
+        .into_iter()
+        .filter(|entry| {
+            entry.operation == IoOperation::Write && entry.offset == 0 && entry.length == 32
+        })
+        .count();
+    assert!(write_count >= 2);
+}
+
+#[test]
+fn worker_flushes_spilled_dirty_and_clears_spilled_entry() {
+    let temp_dir = TestTempDir::new();
+    let right = MockAtIo::with_len(128);
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.dirty_scan_interval = Duration::from_millis(20);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Cache::new(config, right.clone()).unwrap();
+    let temp_path = cache.temp_store().path_for_block(0);
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    cache.read_locked(32, &mut [0u8; 1]).unwrap();
+
+    wait_until(Duration::from_secs(2), || {
+        let state = cache.state.lock().unwrap();
+        state.spilled_dirty.is_empty()
+            && !temp_path.exists()
+            && right.storage_slice(0, 8) == vec![0, 1, 2, 3, 200, 201, 202, 7]
+    });
+
+    let mut buffer = [0u8; 8];
+    cache.read_locked(0, &mut buffer).unwrap();
+
+    assert_eq!(&buffer[..], &[0, 1, 2, 3, 200, 201, 202, 7]);
+    assert!(right.take_calls().contains(&IoCall::Write {
+        offset: 0,
+        length: 32,
+    }));
+}
+
+#[test]
+fn spilled_rehydrate_waits_for_worker_flush_then_reads_remote() {
+    let temp_dir = TestTempDir::new();
+    let right = MockAtIo::with_write_delay(128, Duration::from_millis(150));
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.dirty_scan_interval = Duration::from_millis(20);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Arc::new(Cache::new(config, right.clone()).unwrap());
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    cache.read_locked(32, &mut [0u8; 1]).unwrap();
+
+    wait_until(Duration::from_secs(2), || {
+        cache.state.lock().unwrap().active_temp_blocks.contains(&0)
+    });
+
+    let (tx, rx) = mpsc::channel();
+    let read_cache = Arc::clone(&cache);
+    let read_thread = thread::spawn(move || {
+        let mut buffer = [0u8; 8];
+        read_cache.read_locked(0, &mut buffer).unwrap();
+        tx.send(buffer).unwrap();
+    });
+
+    assert!(rx.recv_timeout(Duration::from_millis(50)).is_err());
+    let buffer = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    read_thread.join().unwrap();
+
+    assert_eq!(&buffer[..], &[0, 1, 2, 3, 200, 201, 202, 7]);
+
+    let calls = right.take_calls();
+    assert!(calls.contains(&IoCall::Write {
+        offset: 0,
+        length: 32,
+    }));
+    assert!(
+        calls
+            .iter()
+            .filter(|call| {
+                matches!(
+                    call,
+                    IoCall::Read {
+                        offset: 0,
+                        length: 32
+                    }
+                )
+            })
+            .count()
+            >= 2
+    );
+}
+
+#[test]
+fn spilled_rehydrate_waits_for_worker_flush_then_reads_remote_with_gate() {
+    let temp_dir = TestTempDir::with_prefix("cache-rehydrate-gate");
+    let gate = Arc::new(ManualGateController::new());
+    open_all_hooks_except(&gate, HookPoint::BeforeRightWrite);
+    let right = MockAtIo::with_len(128);
+    let mut config = test_config(32);
+    config.fifo_capacity_blocks = 1;
+    config.dirty_scan_interval = Duration::from_millis(20);
+    config.temp_dir = temp_dir.path().to_path_buf();
+    let cache = Arc::new(
+        Cache::new_for_test(config, right.clone(), TestHooks::with_gate(gate.clone())).unwrap(),
+    );
+
+    cache.write_locked(4, &[200, 201, 202]).unwrap();
+    cache.read_locked(32, &mut [0u8; 1]).unwrap();
+    right.take_calls();
+
+    assert!(gate.wait_until_reached(HookPoint::BeforeRightWrite, 1, Duration::from_secs(2)));
+
+    let (tx, rx) = mpsc::channel();
+    let read_cache = Arc::clone(&cache);
+    let read_thread = thread::spawn(move || {
+        let mut buffer = [0u8; 8];
+        let result = read_cache.read_locked(0, &mut buffer).map(|_| buffer);
+        tx.send(result).unwrap();
+    });
+
+    assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+    assert!(right.calls_snapshot().is_empty());
+    assert_eq!(gate.arrival_count(HookPoint::BeforeRightWrite), 1);
+
+    gate.release_one(HookPoint::BeforeRightWrite);
+
+    let buffer = rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+    read_thread.join().unwrap();
+
+    assert_eq!(&buffer[..], &[0, 1, 2, 3, 200, 201, 202, 7]);
+
+    let calls = right.take_calls();
+    assert!(calls.contains(&IoCall::Write {
+        offset: 0,
+        length: 32,
+    }));
+    assert!(calls.contains(&IoCall::Read {
+        offset: 0,
+        length: 32,
+    }));
+}
