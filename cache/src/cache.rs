@@ -135,6 +135,8 @@ impl<R: AtIo + 'static> Cache<R> {
             Arc::clone(&state_changed),
             deps.temp_clone(),
             Arc::clone(&right),
+            #[cfg(any(test, feature = "test-hooks"))]
+            deps.hooks().clone(),
         );
         Ok(Self {
             deps,
@@ -742,11 +744,21 @@ impl<R: AtIo + 'static> Cache<R> {
         state_changed: Arc<Condvar>,
         temp: TempStore,
         right: Arc<R>,
+        #[cfg(any(test, feature = "test-hooks"))] hooks: TestHooks,
     ) -> JoinHandle<()> {
         thread::Builder::new()
             .name("cache-flush-worker".into())
             .spawn(move || {
-                Self::run_flush_worker(config, layout, state, state_changed, temp, right);
+                Self::run_flush_worker(
+                    config,
+                    layout,
+                    state,
+                    state_changed,
+                    temp,
+                    right,
+                    #[cfg(any(test, feature = "test-hooks"))]
+                    hooks,
+                );
             })
             .expect("cache flush worker thread must start")
     }
@@ -758,6 +770,7 @@ impl<R: AtIo + 'static> Cache<R> {
         state_changed: Arc<Condvar>,
         temp: TempStore,
         right: Arc<R>,
+        #[cfg(any(test, feature = "test-hooks"))] hooks: TestHooks,
     ) {
         let wait_duration = Self::worker_wait_duration(config.dirty_scan_interval);
         let mut scan_due = false;
@@ -807,6 +820,8 @@ impl<R: AtIo + 'static> Cache<R> {
                         right.as_ref(),
                         block_index,
                         block_base,
+                        #[cfg(any(test, feature = "test-hooks"))]
+                        &hooks,
                     )
                     .expect("cache worker temp flush must preserve invariants");
                 }
@@ -919,13 +934,19 @@ impl<R: AtIo + 'static> Cache<R> {
         right: &R,
         block_index: u64,
         block_base: u64,
+        #[cfg(any(test, feature = "test-hooks"))] hooks: &TestHooks,
     ) -> Result<(), CacheError> {
         let mut temp_buffer = vec![0u8; layout.block_size_usize()?];
         let flush_result = temp
             .read_block(block_index, &mut temp_buffer)
             .and_then(|_| {
                 layout.validate_right_io(block_base, temp_buffer.len())?;
-                right.write_at(block_base, &temp_buffer)
+                #[cfg(any(test, feature = "test-hooks"))]
+                hooks.reach_gate(HookPoint::BeforeRightWrite);
+                let result = right.write_at(block_base, &temp_buffer);
+                #[cfg(any(test, feature = "test-hooks"))]
+                hooks.reach_gate(HookPoint::AfterRightWrite);
+                result
             })
             .and_then(|_| temp.remove_block(block_index));
 
@@ -1053,9 +1074,9 @@ mod tests {
 
     use super::{Cache, SpilledDirty};
     use crate::test_support::{
-        IoFailureController, IoOperation, IoTimings, LoadStateSnapshot, MemoryAtIo,
-        QueueKindSnapshot, TempFailureController, TempFaultOperation, TestHooks, TestTempDir,
-        wait_until,
+        HookPoint, IoFailureController, IoOperation, IoTimings, LoadStateSnapshot,
+        ManualGateController, MemoryAtIo, QueueKindSnapshot, TempFailureController,
+        TempFaultOperation, TestHooks, TestTempDir, wait_until,
     };
     use crate::{AtIo, CacheConfig, CacheError};
 
@@ -1192,6 +1213,22 @@ mod tests {
 
     fn expected_bytes(offset: usize, length: usize) -> Vec<u8> {
         (offset..offset + length).map(|index| index as u8).collect()
+    }
+
+    fn open_all_hooks_except(gate: &ManualGateController, blocked: HookPoint) {
+        for point in [
+            HookPoint::DebugSnapshot,
+            HookPoint::BeforeRightRead,
+            HookPoint::AfterRightRead,
+            HookPoint::BeforeRightWrite,
+            HookPoint::AfterRightWrite,
+            HookPoint::BeforeDirtyVictimSpillTempWrite,
+            HookPoint::AfterDirtyVictimSpillTempWrite,
+        ] {
+            if point != blocked {
+                gate.open(point);
+            }
+        }
     }
 
     #[test]
@@ -1673,6 +1710,68 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_same_block_miss_loads_backend_once_with_gate() {
+        let temp_dir = TestTempDir::with_prefix("cache-same-block-read-gate");
+        let gate = Arc::new(ManualGateController::new());
+        open_all_hooks_except(&gate, HookPoint::BeforeRightRead);
+        let right = MockAtIo::with_len(128);
+        let mut config = test_config(32);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Arc::new(
+            Cache::new_for_test(config, right.clone(), TestHooks::with_gate(gate.clone())).unwrap(),
+        );
+
+        let first_cache = Arc::clone(&cache);
+        let (first_tx, first_rx) = mpsc::channel();
+        let first = thread::spawn(move || {
+            let mut buffer = vec![0u8; 16];
+            let result = first_cache.read_locked(3, &mut buffer).map(|_| buffer);
+            first_tx.send(result).unwrap();
+        });
+
+        assert!(gate.wait_until_reached(HookPoint::BeforeRightRead, 1, Duration::from_secs(1)));
+
+        let second_cache = Arc::clone(&cache);
+        let (second_tx, second_rx) = mpsc::channel();
+        let second = thread::spawn(move || {
+            let mut buffer = vec![0u8; 8];
+            let result = second_cache.read_locked(5, &mut buffer).map(|_| buffer);
+            second_tx.send(result).unwrap();
+        });
+
+        assert!(first_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(second_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(right.calls_snapshot().is_empty());
+        assert_eq!(gate.arrival_count(HookPoint::BeforeRightRead), 1);
+
+        gate.release_one(HookPoint::BeforeRightRead);
+
+        assert_eq!(
+            first_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap(),
+            expected_bytes(3, 16)
+        );
+        assert_eq!(
+            second_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap(),
+            expected_bytes(5, 8)
+        );
+        first.join().unwrap();
+        second.join().unwrap();
+        assert_eq!(
+            right.take_calls(),
+            vec![IoCall::Read {
+                offset: 0,
+                length: 32
+            }]
+        );
+    }
+
+    #[test]
     fn concurrent_same_block_write_miss_loads_backend_once() {
         let right = MockAtIo::with_delay(128, Duration::from_millis(100));
         let cache = Arc::new(Cache::new(test_config(32), right.clone()).unwrap());
@@ -1689,6 +1788,72 @@ mod tests {
             second_cache.write_locked(10, &[150, 151, 152]).unwrap();
         });
 
+        first.join().unwrap();
+        second.join().unwrap();
+
+        let mut buffer = [0u8; 16];
+        cache.read_locked(0, &mut buffer).unwrap();
+
+        assert_eq!(
+            &buffer[..],
+            &[
+                0, 1, 2, 200, 201, 202, 203, 7, 8, 9, 150, 151, 152, 13, 14, 15
+            ]
+        );
+        assert_eq!(
+            right.take_calls(),
+            vec![IoCall::Read {
+                offset: 0,
+                length: 32
+            }]
+        );
+    }
+
+    #[test]
+    fn concurrent_same_block_write_miss_loads_backend_once_with_gate() {
+        let temp_dir = TestTempDir::with_prefix("cache-same-block-write-gate");
+        let gate = Arc::new(ManualGateController::new());
+        open_all_hooks_except(&gate, HookPoint::BeforeRightRead);
+        let right = MockAtIo::with_len(128);
+        let mut config = test_config(32);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Arc::new(
+            Cache::new_for_test(config, right.clone(), TestHooks::with_gate(gate.clone())).unwrap(),
+        );
+
+        let first_cache = Arc::clone(&cache);
+        let (first_tx, first_rx) = mpsc::channel();
+        let first = thread::spawn(move || {
+            first_tx
+                .send(first_cache.write_locked(3, &[200, 201, 202, 203]))
+                .unwrap();
+        });
+
+        assert!(gate.wait_until_reached(HookPoint::BeforeRightRead, 1, Duration::from_secs(1)));
+
+        let second_cache = Arc::clone(&cache);
+        let (second_tx, second_rx) = mpsc::channel();
+        let second = thread::spawn(move || {
+            second_tx
+                .send(second_cache.write_locked(10, &[150, 151, 152]))
+                .unwrap();
+        });
+
+        assert!(first_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(second_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(right.calls_snapshot().is_empty());
+        assert_eq!(gate.arrival_count(HookPoint::BeforeRightRead), 1);
+
+        gate.release_one(HookPoint::BeforeRightRead);
+
+        assert_eq!(
+            first_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Ok(())
+        );
+        assert_eq!(
+            second_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Ok(())
+        );
         first.join().unwrap();
         second.join().unwrap();
 
@@ -1730,6 +1895,70 @@ mod tests {
         });
 
         assert_eq!(first.join().unwrap(), expected_bytes(2, 8));
+        second.join().unwrap();
+
+        let mut buffer = [0u8; 12];
+        cache.read_locked(0, &mut buffer).unwrap();
+
+        assert_eq!(&buffer[..], &[0, 1, 2, 3, 4, 5, 222, 223, 224, 9, 10, 11]);
+        assert_eq!(
+            right.take_calls(),
+            vec![IoCall::Read {
+                offset: 0,
+                length: 32
+            }]
+        );
+    }
+
+    #[test]
+    fn write_locked_waits_for_read_load_without_second_backend_read_with_gate() {
+        let temp_dir = TestTempDir::with_prefix("cache-read-write-gate");
+        let gate = Arc::new(ManualGateController::new());
+        open_all_hooks_except(&gate, HookPoint::BeforeRightRead);
+        let right = MockAtIo::with_len(128);
+        let mut config = test_config(32);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Arc::new(
+            Cache::new_for_test(config, right.clone(), TestHooks::with_gate(gate.clone())).unwrap(),
+        );
+
+        let first_cache = Arc::clone(&cache);
+        let (first_tx, first_rx) = mpsc::channel();
+        let first = thread::spawn(move || {
+            let mut buffer = vec![0u8; 8];
+            let result = first_cache.read_locked(2, &mut buffer).map(|_| buffer);
+            first_tx.send(result).unwrap();
+        });
+
+        assert!(gate.wait_until_reached(HookPoint::BeforeRightRead, 1, Duration::from_secs(1)));
+
+        let second_cache = Arc::clone(&cache);
+        let (second_tx, second_rx) = mpsc::channel();
+        let second = thread::spawn(move || {
+            second_tx
+                .send(second_cache.write_locked(6, &[222, 223, 224]))
+                .unwrap();
+        });
+
+        assert!(first_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(second_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        assert!(right.calls_snapshot().is_empty());
+        assert_eq!(gate.arrival_count(HookPoint::BeforeRightRead), 1);
+
+        gate.release_one(HookPoint::BeforeRightRead);
+
+        assert_eq!(
+            first_rx
+                .recv_timeout(Duration::from_secs(2))
+                .unwrap()
+                .unwrap(),
+            expected_bytes(2, 8)
+        );
+        assert_eq!(
+            second_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Ok(())
+        );
+        first.join().unwrap();
         second.join().unwrap();
 
         let mut buffer = [0u8; 12];
@@ -2439,5 +2668,55 @@ mod tests {
                 .count()
                 >= 2
         );
+    }
+
+    #[test]
+    fn spilled_rehydrate_waits_for_worker_flush_then_reads_remote_with_gate() {
+        let temp_dir = TestTempDir::with_prefix("cache-rehydrate-gate");
+        let gate = Arc::new(ManualGateController::new());
+        open_all_hooks_except(&gate, HookPoint::BeforeRightWrite);
+        let right = MockAtIo::with_len(128);
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 1;
+        config.dirty_scan_interval = Duration::from_millis(20);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Arc::new(
+            Cache::new_for_test(config, right.clone(), TestHooks::with_gate(gate.clone())).unwrap(),
+        );
+
+        cache.write_locked(4, &[200, 201, 202]).unwrap();
+        cache.read_locked(32, &mut [0u8; 1]).unwrap();
+        right.take_calls();
+
+        assert!(gate.wait_until_reached(HookPoint::BeforeRightWrite, 1, Duration::from_secs(2)));
+
+        let (tx, rx) = mpsc::channel();
+        let read_cache = Arc::clone(&cache);
+        let read_thread = thread::spawn(move || {
+            let mut buffer = [0u8; 8];
+            let result = read_cache.read_locked(0, &mut buffer).map(|_| buffer);
+            tx.send(result).unwrap();
+        });
+
+        assert!(rx.recv_timeout(Duration::from_millis(100)).is_err());
+        assert!(right.calls_snapshot().is_empty());
+        assert_eq!(gate.arrival_count(HookPoint::BeforeRightWrite), 1);
+
+        gate.release_one(HookPoint::BeforeRightWrite);
+
+        let buffer = rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        read_thread.join().unwrap();
+
+        assert_eq!(&buffer[..], &[0, 1, 2, 3, 200, 201, 202, 7]);
+
+        let calls = right.take_calls();
+        assert!(calls.contains(&IoCall::Write {
+            offset: 0,
+            length: 32,
+        }));
+        assert!(calls.contains(&IoCall::Read {
+            offset: 0,
+            length: 32,
+        }));
     }
 }

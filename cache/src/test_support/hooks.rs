@@ -34,6 +34,7 @@ pub struct ManualGateController {
 struct GateState {
     arrived: usize,
     released: usize,
+    open: bool,
 }
 
 impl ManualGateController {
@@ -89,6 +90,13 @@ impl ManualGateController {
         drop(state);
         self.state_changed.notify_all();
     }
+
+    pub fn open(&self, point: HookPoint) {
+        let mut state = self.state.lock().unwrap();
+        state.entry(point).or_default().open = true;
+        drop(state);
+        self.state_changed.notify_all();
+    }
 }
 
 impl GateHook for ManualGateController {
@@ -101,7 +109,9 @@ impl GateHook for ManualGateController {
         };
         self.state_changed.notify_all();
 
-        while state.get(&point).map_or(0, |gate| gate.released) < ordinal {
+        while !state.get(&point).is_some_and(|gate| gate.open)
+            && state.get(&point).map_or(0, |gate| gate.released) < ordinal
+        {
             state = self.state_changed.wait(state).unwrap();
         }
     }
@@ -194,5 +204,19 @@ mod tests {
         assert_eq!(gate.arrival_count(HookPoint::BeforeRightRead), 1);
         gate.release_one(HookPoint::BeforeRightRead);
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn manual_gate_controller_open_makes_future_arrivals_pass_through() {
+        let gate = Arc::new(ManualGateController::new());
+        gate.open(HookPoint::AfterRightRead);
+
+        let worker_gate = Arc::clone(&gate);
+        let worker = thread::spawn(move || {
+            worker_gate.reach(HookPoint::AfterRightRead);
+        });
+
+        worker.join().unwrap();
+        assert_eq!(gate.arrival_count(HookPoint::AfterRightRead), 1);
     }
 }

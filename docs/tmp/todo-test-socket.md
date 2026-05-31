@@ -337,7 +337,7 @@ hook 点要少，但要卡在稳定边界上。
 - [x] 建立 test-only hook 模块
 - [x] 建立 `state dump hook`
 - [x] 建立 `gate hook`
-- [ ] 建立最小测试侧控制器
+- [x] 建立最小测试侧控制器
 - [x] 明确 hook 点枚举
 
 当前已完成：
@@ -346,6 +346,7 @@ hook 点要少，但要卡在稳定边界上。
 - 已建立 `test_support/` 模块与最小 hooks/snapshot 类型
 - 已建立 `CacheDeps` 内部 seam，不改正式 `Cache::new(...)` 边界
 - 已增加 `Cache::new_for_test(...)` 与 `debug_snapshot()`
+- 已补最小 `ManualGateController`
 - 已把第一批 hook 点接到：
   - `debug_snapshot`
   - 右侧 `read_at / write_at` 前后
@@ -353,47 +354,162 @@ hook 点要少，但要卡在稳定边界上。
 
 当前未完成：
 
-- 还没有真正可控的 gate 测试控制器
 - 还没有把更多时序卡点接入主流程
 
 ### 9.2 第二阶段：虚拟右侧与日志
 
 任务：
 
-- [ ] 做右侧内存假设备
-- [ ] 做右侧文件假设备
-- [ ] 做 `_at` 结构化调用日志
-- [ ] 做 temp 目录夹具
-- [ ] 做 quiesce 辅助
+- [x] 做右侧内存假设备
+- [x] 做右侧文件假设备
+- [x] 做 `_at` 结构化调用日志
+- [x] 做 temp 目录夹具
+- [x] 做 quiesce 辅助
+
+当前已完成：
+
+- `cache/src/test_support/io.rs` 已增加：
+  - `MemoryAtIo`
+  - `FileBackedAtIo`
+  - `_at` 结构化日志
+  - `IoTimings`
+  - `TestAtIo`
+- `_at` 日志当前已固定导出：
+  - 自增序号
+  - `read / write`
+  - `offset`
+  - `length`
+  - `block_index`
+  - `Result<(), CacheError>`
+- `cache/src/test_support/temp_dir.rs` 已增加统一 temp 目录夹具 `TestTempDir`
+- `cache/src/test_support/quiesce.rs` 已增加：
+  - `wait_until(...)`
+  - `wait_for_quiesce(...)`
+  - `CacheSnapshot::is_quiescent()`
+- `cache/src/cache.rs` 现有测试已切回统一 `TestTempDir` / `wait_until`
+- 当前已补最小验证：
+  - gate 控制器阻塞/放行
+  - 内存假设备读写与结构化日志
+  - 文件假设备读写与结构化日志
+  - quiesce 等待后台 flush 收敛
 
 ### 9.3 第三阶段：故障注入
 
 任务：
 
-- [ ] 做右侧读失败注入
-- [ ] 做右侧写失败注入
-- [ ] 做 temp 写失败注入
-- [ ] 做 temp 读失败注入
-- [ ] 做 temp 删失败注入
+- [x] 做右侧读失败注入
+- [x] 做右侧写失败注入
+- [x] 做 temp 写失败注入
+- [x] 做 temp 读失败注入
+- [x] 做 temp 删失败注入
+
+当前已完成：
+
+- `cache/src/test_support/faults.rs` 已增加两类测试侧控制器：
+  - `IoFailureController`
+  - `TempFailureController`
+- 故障注入当前已支持：
+  - 指定第 N 次匹配调用失败
+  - 指定某个块失败
+  - 失败一次后恢复
+  - 持续失败直到测试侧主动清除规则
+- `cache/src/test_support/io.rs` 已把右侧故障注入接到：
+  - `MemoryAtIo`
+  - `FileBackedAtIo`
+- `cache/src/temp.rs` 已把 temp 故障注入接到：
+  - `write_block(...)`
+  - `read_block(...)`
+  - `remove_block(...)`
+- `cache/src/cache.rs` 已增加 test-only 构造：
+  - `Cache::new_for_test_with_temp_failures(...)`
+- 当前已补最小验证：
+  - 右侧 `read_at` 第 N 次失败后回滚并可重试
+  - 右侧 `write_at` 持续失败后清规则恢复
+  - dirty eviction 的 temp 写失败不清脏位
+  - spilled rehydrate 的 temp 读失败保留 spilled 状态
+  - worker flush 后 temp 删失败会保留 active snapshot 并重试
 
 ### 9.4 第四阶段：`P0` 契约层补齐
 
 任务：
 
-- [ ] 收齐基础正确性
-- [ ] 收齐配置口径
-- [ ] 收齐 2Q 策略
-- [ ] 收齐 dirty / temp / flush
-- [ ] 收齐背压排队
-- [ ] 收齐优先级时序
+- [x] 收齐基础正确性
+- [x] 收齐配置口径
+- [x] 收齐 2Q 策略
+- [x] 收齐 dirty / temp / flush
+- [x] 收齐背压排队
+- [x] 收齐优先级时序
+
+当前已完成：
+
+- 基础正确性当前已覆盖：
+  - 单块读写
+  - 跨块读写
+  - 尾块读写
+  - partial write 后回读
+  - quiesce 后远端最终一致
+- 配置口径当前已覆盖：
+  - `block_size_bytes = 0` 拒绝
+  - `fifo_capacity_blocks = 0` 拒绝
+  - `lru_capacity_blocks = 0` 拒绝
+  - `temp_max_files = 0` 拒绝
+  - 非 `32` 的 `block_size_bytes` 会改变右侧 `_at` 粒度
+  - `temp_max_files = 2` 时允许第二个 temp snapshot，占满后不再继续创建
+- 2Q 策略当前已覆盖：
+  - 首次进入 FIFO
+  - FIFO 再命中提升到 LRU
+  - LRU 命中移尾
+  - insert 时优先淘汰 FIFO 头
+  - resident 数量按 `fifo + lru` 约束推进
+- dirty / temp / flush 当前已覆盖：
+  - dirty eviction 前必须先有 temp
+  - temp 写成功后才清 dirty bit
+  - spilled dirty 可以 rehydrate
+  - active snapshot flush 成功后删除 temp
+  - active snapshot flush 失败后保留 temp 并重试
+- 背压排队当前已覆盖：
+  - `read hit` / `write hit` 直通
+  - clean victim miss 直通
+  - dirty victim + temp 满时在远端读前阻塞
+  - temp 释放后 waiter 被唤醒
+  - `stop` 时等待 miss 退出
+- 优先级时序当前已覆盖：
+  - 已有 temp flush 优先于 resident dirty 新建 snapshot
+  - 前台 dirty eviction waiter 优先于 worker 新建 resident snapshot
 
 ### 9.5 第五阶段：`P1` 鲁棒层补齐
 
 任务：
 
-- [ ] 收齐多前台并发交错
-- [ ] 收齐 rehydrate / flush temp 争用
-- [ ] 收齐 stop 交错退出
+- [x] 收齐多前台并发交错
+- [x] 收齐 rehydrate / flush temp 争用
+- [x] 收齐 stop 交错退出
+
+当前已完成：
+
+- `cache/src/test_support/hooks.rs` 已给 `ManualGateController` 增加：
+  - `open(...)`
+  - 允许只阻塞目标 hook，其余 hook 全直通
+- `cache/src/cache.rs` 已把 worker flush 的右侧写接入现有：
+  - `BeforeRightWrite`
+  - `AfterRightWrite`
+- 当前已补稳定 gate 测试：
+  - 同块并发 `read miss` 只发起一次远端读
+  - 同块并发 `write miss` 只发起一次远端读
+  - `read miss` 进行中，同块 `write` 等待同一次加载完成
+  - worker flush 占用 temp 时，rehydrate 请求稳定等待
+- `stop` 交错退出当前已由现有测试覆盖：
+  - dirty eviction waiter 在 `stop` 后退出
+  - 不留下 waiter 计数残留
+
+当前口径：
+
+- `P1` 重点不再依赖 `sleep` 去撞关键时序
+- 关键竞争点优先用 gate 稳定摆出
+- 这层目标是确认：
+  - 不死锁
+  - 不重复远端 I/O
+  - 不出现明显状态分叉
 
 ### 9.6 第六阶段：`P2` 压力与随机层
 
