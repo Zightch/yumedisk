@@ -9,12 +9,12 @@ import (
 
 type Opener struct {
 	routes   RouteSource
-	sessions DataPlane
+	sessions RouteSessionProxy
 	grants   GrantRegistry
 	registry *registry
 }
 
-func NewOpener(routes RouteSource, sessions DataPlane, grants GrantRegistry) *Opener {
+func NewOpener(routes RouteSource, sessions RouteSessionProxy, grants GrantRegistry) *Opener {
 	return &Opener{
 		routes:   routes,
 		sessions: sessions,
@@ -65,12 +65,12 @@ func (o *Opener) HandleSessionOpen(state ConnectionState, header proto.Header, b
 	})
 	if consumedDiskID, ok := o.grants.ConsumeDisk(authID); !ok || consumedDiskID != routeEntry.DiskID {
 		o.registry.Close(gatewaySessionID)
-		o.sessions.Close(routeEntry.ConnectionID, upstreamSessionID)
+		o.closeUpstreamSession(routeEntry.ConnectionID, upstreamSessionID)
 		return proto.BuildErrorResponse(header, proto.StatusAuthIDInvalid), nil
 	}
 	if err := state.FinishSessionOpen(); err != nil {
 		o.registry.Close(gatewaySessionID)
-		o.sessions.Close(routeEntry.ConnectionID, upstreamSessionID)
+		o.closeUpstreamSession(routeEntry.ConnectionID, upstreamSessionID)
 		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
 	}
 
@@ -82,29 +82,12 @@ func (o *Opener) HandleDescribe(state ConnectionState, header proto.Header, body
 	if header.SessionID == 0 {
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
-	if len(body) != 0 {
-		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
-	}
 
 	record, ok := o.registry.LookupOwned(header.SessionID, state.ConnectionID())
 	if !ok {
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
-
-	metadata, err := o.sessions.Describe(record.RouteConnectionID, record.UpstreamSessionID)
-	if err != nil {
-		if err == serversession.ErrSessionUnavailable {
-			o.registry.Close(header.SessionID)
-		}
-		return o.mapSessionError(header, err), nil
-	}
-	bodyOut := proto.BuildSessionDescribeResponseBody(
-		metadata.DiskSizeBytes,
-		metadata.MaxIOBytes,
-		metadata.ReadOnly,
-		metadata.BackendID,
-	)
-	return proto.BuildSuccessResponse(header, bodyOut), nil
+	return o.handleProxyRoundTrip(header, body, record), nil
 }
 
 func (o *Opener) HandleConnHeartbeat(state ConnectionState, header proto.Header, body []byte) ([]byte, error) {
@@ -132,7 +115,9 @@ func (o *Opener) HandleSessionCloseNotice(state ConnectionState, header proto.He
 	}
 
 	o.registry.Close(header.SessionID)
-	o.sessions.Close(record.RouteConnectionID, record.UpstreamSessionID)
+	if err := o.sessions.SendNotice(record.RouteConnectionID, record.UpstreamSessionID, header.OpCode, body); err != nil {
+		return nil, fmt.Errorf("session close notice proxy: %w", err)
+	}
 	return nil, nil
 }
 
@@ -141,24 +126,11 @@ func (o *Opener) HandleRead(state ConnectionState, header proto.Header, body []b
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
 
-	offset, length, err := proto.ParseReadBody(body)
-	if err != nil {
-		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
-	}
-
 	record, ok := o.registry.LookupOwned(header.SessionID, state.ConnectionID())
 	if !ok {
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
-
-	data, err := o.sessions.Read(record.RouteConnectionID, record.UpstreamSessionID, offset, length)
-	if err != nil {
-		if err == serversession.ErrSessionUnavailable {
-			o.registry.Close(header.SessionID)
-		}
-		return o.mapSessionError(header, err), nil
-	}
-	return proto.BuildSuccessResponse(header, data), nil
+	return o.handleProxyRoundTrip(header, body, record), nil
 }
 
 func (o *Opener) HandleWrite(state ConnectionState, header proto.Header, body []byte) ([]byte, error) {
@@ -166,28 +138,16 @@ func (o *Opener) HandleWrite(state ConnectionState, header proto.Header, body []
 		return proto.BuildErrorResponse(header, proto.StatusBadHeader), nil
 	}
 
-	offset, _, data, err := proto.ParseReadWriteBody(body)
-	if err != nil {
-		return proto.BuildErrorResponse(header, proto.StatusBadBody), nil
-	}
-
 	record, ok := o.registry.LookupOwned(header.SessionID, state.ConnectionID())
 	if !ok {
 		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable), nil
 	}
-
-	if err := o.sessions.Write(record.RouteConnectionID, record.UpstreamSessionID, offset, data); err != nil {
-		if err == serversession.ErrSessionUnavailable {
-			o.registry.Close(header.SessionID)
-		}
-		return o.mapSessionError(header, err), nil
-	}
-	return proto.BuildSuccessResponse(header, nil), nil
+	return o.handleProxyRoundTrip(header, body, record), nil
 }
 
 func (o *Opener) CloseConnection(connectionID uint64) {
 	for _, record := range o.registry.CloseConnection(connectionID) {
-		o.sessions.Close(record.RouteConnectionID, record.UpstreamSessionID)
+		o.closeUpstreamSession(record.RouteConnectionID, record.UpstreamSessionID)
 	}
 	o.sessions.CloseConnection(connectionID)
 }
@@ -198,6 +158,32 @@ func (o *Opener) CloseRouteConnection(routeConnectionID uint64) []Record {
 
 func (o *Opener) LookupRouteSession(routeConnectionID uint64, upstreamSessionID uint64) (Record, bool) {
 	return o.registry.LookupRouteSession(routeConnectionID, upstreamSessionID)
+}
+
+func (o *Opener) handleProxyRoundTrip(header proto.Header, body []byte, record Record) []byte {
+	status, responseBody, err := o.sessions.RoundTrip(
+		record.RouteConnectionID,
+		record.UpstreamSessionID,
+		header.OpCode,
+		body,
+	)
+	if err != nil {
+		o.registry.Close(header.SessionID)
+		return proto.BuildErrorResponse(header, proto.StatusSessionUnavailable)
+	}
+	if status == proto.StatusSessionUnavailable {
+		o.registry.Close(header.SessionID)
+	}
+	return proto.BuildResponseWithSessionID(header, status, header.SessionID, responseBody)
+}
+
+func (o *Opener) closeUpstreamSession(routeConnectionID uint64, upstreamSessionID uint64) {
+	_ = o.sessions.SendNotice(
+		routeConnectionID,
+		upstreamSessionID,
+		proto.OpSessionCloseNotice,
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+	)
 }
 
 func (o *Opener) mapSessionError(header proto.Header, err error) []byte {

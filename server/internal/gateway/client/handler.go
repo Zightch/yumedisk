@@ -20,12 +20,12 @@ type Handler struct {
 	sessionDataChangedNotifier clientsession.DataChangedNotifier
 }
 
-func NewHandler(routes RouteSource, sessions SessionDataPlane) (*Handler, error) {
+func NewHandler(routes RouteSource, sessions RouteSessionProxy) (*Handler, error) {
 	if routes == nil {
 		return nil, errors.New("gateway handler requires route source")
 	}
 	if sessions == nil {
-		return nil, errors.New("gateway handler requires session data plane")
+		return nil, errors.New("gateway handler requires route session proxy")
 	}
 
 	grants := clientauth.NewRegistry()

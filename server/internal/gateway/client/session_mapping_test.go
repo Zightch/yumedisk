@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"sync"
 	"testing"
 	"time"
@@ -252,10 +253,9 @@ type mappingDataPlane struct {
 	openSessionID         uint64
 	openErr               error
 	describeOut           session.Metadata
-	describeErr           error
 	readOut               []byte
-	readErr               error
-	writeErr              error
+	roundTripErr          error
+	statusByOp            map[uint8]uint16
 	lastDescribeSessionID uint64
 	lastReadSessionID     uint64
 	lastWriteSessionID    uint64
@@ -267,27 +267,43 @@ func (p *mappingDataPlane) Open(uint64, route.Entry) (uint64, error) {
 	return p.openSessionID, p.openErr
 }
 
-func (p *mappingDataPlane) Describe(routeConnectionID uint64, sessionID uint64) (session.Metadata, error) {
-	p.lastDescribeSessionID = sessionID
-	return p.describeOut, p.describeErr
-}
-
-func (p *mappingDataPlane) Close(routeConnectionID uint64, sessionID uint64) {
-	p.lastCloseSessionID = sessionID
-}
-
 func (p *mappingDataPlane) CloseConnection(connectionID uint64) {
 	p.lastCloseConnectionID = connectionID
 }
 
-func (p *mappingDataPlane) Read(routeConnectionID uint64, sessionID uint64, offset uint64, length uint32) ([]byte, error) {
-	p.lastReadSessionID = sessionID
-	return p.readOut, p.readErr
+func (p *mappingDataPlane) RoundTrip(routeConnectionID uint64, sessionID uint64, opCode uint8, body []byte) (uint16, []byte, error) {
+	if p.roundTripErr != nil {
+		return 0, nil, p.roundTripErr
+	}
+	if status, ok := p.statusByOp[opCode]; ok {
+		return status, nil, nil
+	}
+
+	switch opCode {
+	case proto.OpSessionDescribe:
+		p.lastDescribeSessionID = sessionID
+		return proto.StatusOK, proto.BuildSessionDescribeResponseBody(
+			p.describeOut.DiskSizeBytes,
+			p.describeOut.MaxIOBytes,
+			p.describeOut.ReadOnly,
+			p.describeOut.BackendID,
+		), nil
+	case proto.OpReadAt:
+		p.lastReadSessionID = sessionID
+		return proto.StatusOK, bytes.Clone(p.readOut), nil
+	case proto.OpWriteAt:
+		p.lastWriteSessionID = sessionID
+		return proto.StatusOK, nil, nil
+	default:
+		return proto.StatusUnsupportedOp, nil, nil
+	}
 }
 
-func (p *mappingDataPlane) Write(routeConnectionID uint64, sessionID uint64, offset uint64, data []byte) error {
-	p.lastWriteSessionID = sessionID
-	return p.writeErr
+func (p *mappingDataPlane) SendNotice(routeConnectionID uint64, sessionID uint64, opCode uint8, body []byte) error {
+	if opCode == proto.OpSessionCloseNotice {
+		p.lastCloseSessionID = sessionID
+	}
+	return nil
 }
 
 type recordingSessionCloseNotifier struct {

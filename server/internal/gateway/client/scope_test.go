@@ -450,7 +450,63 @@ func (b *scopeTestBackend) Open(connectionID uint64, entry route.Entry) (uint64,
 	return desc.ID, nil
 }
 
-func (b *scopeTestBackend) Close(routeConnectionID uint64, sessionID uint64) {
+func (b *scopeTestBackend) CloseConnection(uint64) {}
+
+func (b *scopeTestBackend) RoundTrip(routeConnectionID uint64, sessionID uint64, opCode uint8, body []byte) (uint16, []byte, error) {
+	service := b.services[routeConnectionID]
+
+	switch opCode {
+	case proto.OpSessionDescribe:
+		if sessionID == 0 {
+			return proto.StatusBadHeader, nil, nil
+		}
+		if len(body) != 0 {
+			return proto.StatusBadBody, nil, nil
+		}
+		metadata, err := service.Describe(sessionID)
+		if err != nil {
+			return mapScopeSessionErrorStatus(err), nil, nil
+		}
+		return proto.StatusOK, proto.BuildSessionDescribeResponseBody(
+			metadata.DiskSizeBytes,
+			metadata.MaxIOBytes,
+			metadata.ReadOnly,
+			metadata.BackendID,
+		), nil
+	case proto.OpReadAt:
+		if sessionID == 0 {
+			return proto.StatusBadHeader, nil, nil
+		}
+		offset, length, err := proto.ParseReadBody(body)
+		if err != nil {
+			return proto.StatusBadBody, nil, nil
+		}
+		data, err := service.Read(sessionID, offset, length)
+		if err != nil {
+			return mapScopeSessionErrorStatus(err), nil, nil
+		}
+		return proto.StatusOK, data, nil
+	case proto.OpWriteAt:
+		if sessionID == 0 {
+			return proto.StatusBadHeader, nil, nil
+		}
+		offset, _, data, err := proto.ParseReadWriteBody(body)
+		if err != nil {
+			return proto.StatusBadBody, nil, nil
+		}
+		if err := service.Write(sessionID, offset, data); err != nil {
+			return mapScopeSessionErrorStatus(err), nil, nil
+		}
+		return proto.StatusOK, nil, nil
+	default:
+		return proto.StatusUnsupportedOp, nil, nil
+	}
+}
+
+func (b *scopeTestBackend) SendNotice(routeConnectionID uint64, sessionID uint64, opCode uint8, body []byte) error {
+	if opCode != proto.OpSessionCloseNotice {
+		return nil
+	}
 	service := b.services[routeConnectionID]
 	b.mu.Lock()
 	b.closeLog = append(b.closeLog, scopeCloseCall{
@@ -459,20 +515,7 @@ func (b *scopeTestBackend) Close(routeConnectionID uint64, sessionID uint64) {
 	})
 	b.mu.Unlock()
 	service.Close(sessionID)
-}
-
-func (b *scopeTestBackend) Describe(routeConnectionID uint64, sessionID uint64) (session.Metadata, error) {
-	return b.services[routeConnectionID].Describe(sessionID)
-}
-
-func (b *scopeTestBackend) CloseConnection(uint64) {}
-
-func (b *scopeTestBackend) Read(routeConnectionID uint64, sessionID uint64, offset uint64, length uint32) ([]byte, error) {
-	return b.services[routeConnectionID].Read(sessionID, offset, length)
-}
-
-func (b *scopeTestBackend) Write(routeConnectionID uint64, sessionID uint64, offset uint64, data []byte) error {
-	return b.services[routeConnectionID].Write(sessionID, offset, data)
+	return nil
 }
 
 func (b *scopeTestBackend) seed(t *testing.T, offset uint64, data []byte) {
@@ -512,6 +555,25 @@ func (b *scopeTestBackend) closeCalls() []scopeCloseCall {
 	out := make([]scopeCloseCall, len(b.closeLog))
 	copy(out, b.closeLog)
 	return out
+}
+
+func mapScopeSessionErrorStatus(err error) uint16 {
+	switch err {
+	case session.ErrSessionUnavailable:
+		return proto.StatusSessionUnavailable
+	case session.ErrSessionOpenRejected:
+		return proto.StatusSessionOpenRejected
+	case session.ErrReadOnly:
+		return proto.StatusIOReadOnly
+	case session.ErrIOLimit:
+		return proto.StatusIOLarge
+	case session.ErrOutOfRange:
+		return proto.StatusIOOutOfRange
+	case session.ErrIOFailed:
+		return proto.StatusIOFailed
+	default:
+		return proto.StatusIOFailed
+	}
 }
 
 func (n *recordingSessionCloseNotifier) snapshot() []sessionCloseRecord {

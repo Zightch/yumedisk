@@ -2,18 +2,15 @@ package client
 
 import (
 	"yumedisk/server/internal/route"
-	"yumedisk/server/internal/session"
 )
 
 type RouteSource interface {
 	LookupRoute(diskID string) (route.Entry, bool)
 }
 
-type SessionDataPlane interface {
+type RouteSessionProxy interface {
 	Open(connectionID uint64, entry route.Entry) (uint64, error)
-	Describe(routeConnectionID uint64, sessionID uint64) (session.Metadata, error)
-	Close(routeConnectionID uint64, sessionID uint64)
+	RoundTrip(routeConnectionID uint64, sessionID uint64, opCode uint8, body []byte) (statusCode uint16, responseBody []byte, err error)
+	SendNotice(routeConnectionID uint64, sessionID uint64, opCode uint8, body []byte) error
 	CloseConnection(connectionID uint64)
-	Read(routeConnectionID uint64, sessionID uint64, offset uint64, length uint32) ([]byte, error)
-	Write(routeConnectionID uint64, sessionID uint64, offset uint64, data []byte) error
 }

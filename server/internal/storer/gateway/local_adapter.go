@@ -3,6 +3,7 @@ package gateway
 import (
 	"fmt"
 
+	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/route"
 	"yumedisk/server/internal/session"
 )
@@ -82,20 +83,79 @@ func (b *LocalAdapter) Open(connectionID uint64, entry route.Entry) (uint64, err
 	return desc.ID, nil
 }
 
-func (b *LocalAdapter) Describe(routeConnectionID uint64, sessionID uint64) (session.Metadata, error) {
+func (b *LocalAdapter) RoundTrip(routeConnectionID uint64, sessionID uint64, opCode uint8, body []byte) (uint16, []byte, error) {
 	export, ok := b.exportsByRoute[routeConnectionID]
 	if !ok {
-		return session.Metadata{}, session.ErrSessionUnavailable
+		return proto.StatusSessionUnavailable, nil, nil
 	}
-	return export.SessionService().Describe(sessionID)
+
+	switch opCode {
+	case proto.OpSessionDescribe:
+		if sessionID == 0 {
+			return proto.StatusBadHeader, nil, nil
+		}
+		if len(body) != 0 {
+			return proto.StatusBadBody, nil, nil
+		}
+		metadata, err := export.SessionService().Describe(sessionID)
+		if err != nil {
+			return mapSessionErrorStatus(err), nil, nil
+		}
+		return proto.StatusOK, proto.BuildSessionDescribeResponseBody(
+			metadata.DiskSizeBytes,
+			metadata.MaxIOBytes,
+			metadata.ReadOnly,
+			metadata.BackendID,
+		), nil
+	case proto.OpReadAt:
+		if sessionID == 0 {
+			return proto.StatusBadHeader, nil, nil
+		}
+		offset, length, err := proto.ParseReadBody(body)
+		if err != nil {
+			return proto.StatusBadBody, nil, nil
+		}
+		data, err := export.SessionService().Read(sessionID, offset, length)
+		if err != nil {
+			return mapSessionErrorStatus(err), nil, nil
+		}
+		return proto.StatusOK, data, nil
+	case proto.OpWriteAt:
+		if sessionID == 0 {
+			return proto.StatusBadHeader, nil, nil
+		}
+		offset, _, data, err := proto.ParseReadWriteBody(body)
+		if err != nil {
+			return proto.StatusBadBody, nil, nil
+		}
+		if err := export.SessionService().Write(sessionID, offset, data); err != nil {
+			return mapSessionErrorStatus(err), nil, nil
+		}
+		return proto.StatusOK, nil, nil
+	default:
+		return proto.StatusUnsupportedOp, nil, nil
+	}
 }
 
-func (b *LocalAdapter) Close(routeConnectionID uint64, sessionID uint64) {
+func (b *LocalAdapter) SendNotice(routeConnectionID uint64, sessionID uint64, opCode uint8, body []byte) error {
 	export, ok := b.exportsByRoute[routeConnectionID]
 	if !ok {
-		return
+		return nil
 	}
-	export.SessionService().Close(sessionID)
+
+	switch opCode {
+	case proto.OpSessionCloseNotice:
+		if sessionID == 0 {
+			return fmt.Errorf("session close notice requires session id")
+		}
+		if _, err := proto.ParseSessionCloseNoticeBody(body); err != nil {
+			return fmt.Errorf("session close notice body: %w", err)
+		}
+		export.SessionService().Close(sessionID)
+		return nil
+	default:
+		return fmt.Errorf("unsupported local adapter notice op: %d", opCode)
+	}
 }
 
 func (b *LocalAdapter) CloseConnection(connectionID uint64) {
@@ -104,18 +164,21 @@ func (b *LocalAdapter) CloseConnection(connectionID uint64) {
 	}
 }
 
-func (b *LocalAdapter) Read(routeConnectionID uint64, sessionID uint64, offset uint64, length uint32) ([]byte, error) {
-	export, ok := b.exportsByRoute[routeConnectionID]
-	if !ok {
-		return nil, session.ErrSessionUnavailable
+func mapSessionErrorStatus(err error) uint16 {
+	switch err {
+	case session.ErrSessionUnavailable:
+		return proto.StatusSessionUnavailable
+	case session.ErrSessionOpenRejected:
+		return proto.StatusSessionOpenRejected
+	case session.ErrReadOnly:
+		return proto.StatusIOReadOnly
+	case session.ErrIOLimit:
+		return proto.StatusIOLarge
+	case session.ErrOutOfRange:
+		return proto.StatusIOOutOfRange
+	case session.ErrIOFailed:
+		return proto.StatusIOFailed
+	default:
+		return proto.StatusIOFailed
 	}
-	return export.SessionService().Read(sessionID, offset, length)
-}
-
-func (b *LocalAdapter) Write(routeConnectionID uint64, sessionID uint64, offset uint64, data []byte) error {
-	export, ok := b.exportsByRoute[routeConnectionID]
-	if !ok {
-		return session.ErrSessionUnavailable
-	}
-	return export.SessionService().Write(sessionID, offset, data)
 }

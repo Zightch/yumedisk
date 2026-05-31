@@ -11,7 +11,7 @@ type dataPlane struct {
 	links *activeLinks
 }
 
-func (r *Registry) DataPlane() gatewayclient.SessionDataPlane {
+func (r *Registry) DataPlane() gatewayclient.RouteSessionProxy {
 	return &dataPlane{links: r.links}
 }
 
@@ -37,6 +37,12 @@ func (p *dataPlane) Open(_ uint64, entry route.Entry) (uint64, error) {
 	if err != nil {
 		return 0, session.ErrSessionUnavailable
 	}
+	if err := proto.ValidateResponseHeader(header); err != nil {
+		return 0, session.ErrSessionUnavailable
+	}
+	if header.OpCode != proto.OpSessionOpen {
+		return 0, session.ErrSessionUnavailable
+	}
 	if header.StatusCode != proto.StatusOK {
 		return 0, mapResponseStatus(header.StatusCode)
 	}
@@ -46,91 +52,44 @@ func (p *dataPlane) Open(_ uint64, entry route.Entry) (uint64, error) {
 	return header.SessionID, nil
 }
 
-func (p *dataPlane) Describe(routeConnectionID uint64, sessionID uint64) (session.Metadata, error) {
+func (p *dataPlane) RoundTrip(routeConnectionID uint64, sessionID uint64, opCode uint8, body []byte) (uint16, []byte, error) {
 	conn, ok := p.links.Lookup(routeConnectionID)
 	if !ok {
-		return session.Metadata{}, session.ErrSessionUnavailable
+		return proto.StatusSessionUnavailable, nil, nil
 	}
 
-	resp, err := p.roundTripData(conn, proto.OpSessionDescribe, sessionID, nil)
+	resp, err := p.roundTripData(conn, opCode, sessionID, body)
 	if err != nil {
-		return session.Metadata{}, session.ErrSessionUnavailable
+		return proto.StatusSessionUnavailable, nil, nil
 	}
 	header, err := proto.ParseHeader(resp)
 	if err != nil {
-		return session.Metadata{}, session.ErrSessionUnavailable
+		return proto.StatusSessionUnavailable, nil, nil
 	}
-	if header.StatusCode != proto.StatusOK {
-		return session.Metadata{}, mapResponseStatus(header.StatusCode)
+	if err := proto.ValidateResponseHeader(header); err != nil {
+		return proto.StatusSessionUnavailable, nil, nil
 	}
-	diskSize, maxIOBytes, readOnly, backendID, err := proto.ParseSessionDescribeResponseBody(resp[proto.HeaderSize:])
-	if err != nil {
-		return session.Metadata{}, session.ErrSessionUnavailable
+	if header.OpCode != opCode {
+		return proto.StatusSessionUnavailable, nil, nil
 	}
-	return session.Metadata{
-		DiskSizeBytes: diskSize,
-		ReadOnly:      readOnly,
-		MaxIOBytes:    maxIOBytes,
-		BackendID:     backendID,
-	}, nil
+	responseBody := make([]byte, len(resp)-proto.HeaderSize)
+	copy(responseBody, resp[proto.HeaderSize:])
+	return header.StatusCode, responseBody, nil
 }
 
-func (p *dataPlane) Close(routeConnectionID uint64, sessionID uint64) {
+func (p *dataPlane) SendNotice(routeConnectionID uint64, sessionID uint64, opCode uint8, body []byte) error {
 	conn, ok := p.links.Lookup(routeConnectionID)
 	if !ok {
-		return
+		return nil
 	}
-	_ = conn.notify(proto.BuildNotice(
-		proto.OpSessionCloseNotice,
+	return conn.notify(proto.BuildNotice(
+		opCode,
 		sessionID,
-		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+		body,
 	))
 }
 
 func (p *dataPlane) CloseConnection(uint64) {}
-
-func (p *dataPlane) Read(routeConnectionID uint64, sessionID uint64, offset uint64, length uint32) ([]byte, error) {
-	conn, ok := p.links.Lookup(routeConnectionID)
-	if !ok {
-		return nil, session.ErrSessionUnavailable
-	}
-
-	resp, err := p.roundTripData(conn, proto.OpReadAt, sessionID, proto.BuildReadBody(offset, length))
-	if err != nil {
-		return nil, session.ErrSessionUnavailable
-	}
-	header, err := proto.ParseHeader(resp)
-	if err != nil {
-		return nil, session.ErrSessionUnavailable
-	}
-	if header.StatusCode != proto.StatusOK {
-		return nil, mapResponseStatus(header.StatusCode)
-	}
-	data := make([]byte, len(resp)-proto.HeaderSize)
-	copy(data, resp[proto.HeaderSize:])
-	return data, nil
-}
-
-func (p *dataPlane) Write(routeConnectionID uint64, sessionID uint64, offset uint64, data []byte) error {
-	conn, ok := p.links.Lookup(routeConnectionID)
-	if !ok {
-		return session.ErrSessionUnavailable
-	}
-
-	body := append(proto.BuildReadWriteBody(offset, uint32(len(data))), data...)
-	resp, err := p.roundTripData(conn, proto.OpWriteAt, sessionID, body)
-	if err != nil {
-		return session.ErrSessionUnavailable
-	}
-	header, err := proto.ParseHeader(resp)
-	if err != nil {
-		return session.ErrSessionUnavailable
-	}
-	if header.StatusCode != proto.StatusOK {
-		return mapResponseStatus(header.StatusCode)
-	}
-	return nil
-}
 
 func (p *dataPlane) roundTripData(conn *connection, opCode uint8, sessionID uint64, body []byte) ([]byte, error) {
 	req := make([]byte, proto.HeaderSize+len(body))

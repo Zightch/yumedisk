@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/route"
 	"yumedisk/server/internal/session"
 	filestorage "yumedisk/server/internal/storage/file"
@@ -68,18 +69,46 @@ func TestLocalAdapterDispatchesByRouteConnection(t *testing.T) {
 		t.Fatalf("open ro session: %v", err)
 	}
 
-	if err := backend.Write(rwEntry.ConnectionID, rwSessionID, 8, []byte("YUME")); err != nil {
-		t.Fatalf("rw write: %v", err)
-	}
-	data, err := backend.Read(roEntry.ConnectionID, roSessionID, 8, 4)
+	writeStatus, _, err := backend.RoundTrip(
+		rwEntry.ConnectionID,
+		rwSessionID,
+		proto.OpWriteAt,
+		append(proto.BuildReadWriteBody(8, 4), []byte("YUME")...),
+	)
 	if err != nil {
-		t.Fatalf("ro read: %v", err)
+		t.Fatalf("rw write round trip: %v", err)
+	}
+	if writeStatus != proto.StatusOK {
+		t.Fatalf("unexpected rw write status: %d", writeStatus)
+	}
+
+	readStatus, data, err := backend.RoundTrip(
+		roEntry.ConnectionID,
+		roSessionID,
+		proto.OpReadAt,
+		proto.BuildReadBody(8, 4),
+	)
+	if err != nil {
+		t.Fatalf("ro read round trip: %v", err)
+	}
+	if readStatus != proto.StatusOK {
+		t.Fatalf("unexpected ro read status: %d", readStatus)
 	}
 	if string(data) != "YUME" {
 		t.Fatalf("unexpected ro read payload: %q", string(data))
 	}
-	if err := backend.Write(roEntry.ConnectionID, roSessionID, 8, []byte("FAIL")); err != session.ErrReadOnly {
-		t.Fatalf("expected ro write to be read only, got %v", err)
+
+	roWriteStatus, _, err := backend.RoundTrip(
+		roEntry.ConnectionID,
+		roSessionID,
+		proto.OpWriteAt,
+		append(proto.BuildReadWriteBody(8, 4), []byte("FAIL")...),
+	)
+	if err != nil {
+		t.Fatalf("ro write round trip: %v", err)
+	}
+	if roWriteStatus != proto.StatusIOReadOnly {
+		t.Fatalf("expected ro write to be read only, got status %d", roWriteStatus)
 	}
 }
 
