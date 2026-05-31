@@ -219,6 +219,7 @@ DiskInitializeAdapter(
         KeInitializeSpinLock(&extension->Disk[index].BufferLock);
         KeInitializeSpinLock(&extension->Disk[index].Queue.ReadQueueLock);
         KeInitializeSpinLock(&extension->Disk[index].Queue.WriteQueueLock);
+        KeInitializeSpinLock(&extension->Disk[index].EventSlot.Lock);
         extension->Disk[index].SectorSize = YUMEDISK_DEFAULT_SECTOR_SIZE;
     }
 

@@ -30,11 +30,21 @@ typedef struct _YUME_DISK_QUEUE_STATE {
     ULONG WriteSlotPayloadBytes;
 } YUME_DISK_QUEUE_STATE, *PYUME_DISK_QUEUE_STATE;
 
+typedef struct _YUME_DISK_EVENT_SLOT_STATE {
+    KSPIN_LOCK Lock;
+    PSTORAGE_REQUEST_BLOCK PendingSrb;
+    UINT64 SlotId;
+    UINT64 KernelVa;
+    UINT32 Capacity;
+    UINT32 Flags;
+} YUME_DISK_EVENT_SLOT_STATE, *PYUME_DISK_EVENT_SLOT_STATE;
+
 typedef struct _YUME_DISK {
     PUCHAR Buffer;
     UINT64 Size;
     KSPIN_LOCK BufferLock;
     YUME_DISK_QUEUE_STATE Queue;
+    YUME_DISK_EVENT_SLOT_STATE EventSlot;
     UINT64 SectorCount;
     UINT32 SectorSize;
     ULONG Generation;

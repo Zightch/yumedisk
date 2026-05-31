@@ -148,6 +148,7 @@ ControlTransportRuntimeResetSlotRequest(
 
     SlotRequest->SessionContext = NULL;
     SlotRequest->Request = NULL;
+    SlotRequest->Command = YumeDiskCommandInvalid;
     SlotRequest->SlotId = 0;
     SlotRequest->TargetId = 0;
     SlotRequest->SlotType = YumeDiskSlotTypeInvalid;
@@ -185,6 +186,32 @@ ControlTransportRuntimeDestroySlotRequest(
     ControlFree(SlotRequest->IoctlBuffer);
     SlotRequest->IoctlBuffer = NULL;
     ControlFree(SlotRequest);
+}
+
+static
+VOID
+ControlTransportRuntimeClearPendingEventSlot(
+    _Inout_ PCTRL_ASYNC_SLOT_REQUEST SlotRequest
+)
+{
+    PCTRL_FILE_CONTEXT sessionContext;
+
+    if (SlotRequest == NULL ||
+        SlotRequest->Command != YumeDiskCommandSubmitEventSlot ||
+        SlotRequest->TargetId > YUMEDISK_MAX_USABLE_TARGET_ID) {
+        return;
+    }
+
+    sessionContext = SlotRequest->SessionContext;
+    if (sessionContext == NULL || sessionContext->PendingEventSlotLock == NULL) {
+        return;
+    }
+
+    WdfSpinLockAcquire(sessionContext->PendingEventSlotLock);
+    if (sessionContext->PendingEventSlots[SlotRequest->TargetId] == SlotRequest) {
+        sessionContext->PendingEventSlots[SlotRequest->TargetId] = NULL;
+    }
+    WdfSpinLockRelease(sessionContext->PendingEventSlotLock);
 }
 
 static
@@ -601,6 +628,7 @@ ControlTransportRuntimeReleaseSlotRequest(
         return;
     }
 
+    ControlTransportRuntimeClearPendingEventSlot(SlotRequest);
     ControlTransportRuntimeResetSlotRequest(SlotRequest);
 
     WdfSpinLockAcquire(runtime->FreeListLock);

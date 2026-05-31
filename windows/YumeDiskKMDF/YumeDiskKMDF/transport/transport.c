@@ -64,7 +64,9 @@ ControlMapSubmitSlotStatus(
     }
 
     message = ControlGetMiniportMessage(IoctlBuffer, IoctlBufferSize);
-    if (message != NULL && message->Header.Command == YumeDiskCommandSubmitSlot) {
+    if (message != NULL &&
+        (message->Header.Command == YumeDiskCommandSubmitSlot ||
+            message->Header.Command == YumeDiskCommandSubmitEventSlot)) {
         return STATUS_CANCELLED;
     }
 
@@ -107,7 +109,14 @@ ControlCompleteAsyncSlotRequest(
 
     status = ControlMapSubmitSlotStatus(status, AsyncRequest->IoctlBuffer, AsyncRequest->IoctlBufferSize);
     if (NT_SUCCESS(status)) {
-        if (AsyncRequest->SlotType == YumeDiskSlotTypeRead) {
+        if (AsyncRequest->Command == YumeDiskCommandSubmitEventSlot) {
+            if (AsyncRequest->DirectBuffer != NULL &&
+                AsyncRequest->DirectBufferSize >= sizeof(YUMEDISK_DISK_EVENT)) {
+                completionInformation = sizeof(YUMEDISK_DISK_EVENT);
+            } else {
+                status = STATUS_DEVICE_PROTOCOL_ERROR;
+            }
+        } else if (AsyncRequest->SlotType == YumeDiskSlotTypeRead) {
             if (AsyncRequest->DirectBuffer != NULL &&
                 AsyncRequest->DirectBufferSize >= sizeof(YUMEDISK_READ_SLOT_EVENT)) {
                 completionInformation = sizeof(YUMEDISK_READ_SLOT_EVENT);
@@ -569,6 +578,35 @@ ControlProxyCommand(
     return status;
 }
 
+static
+NTSTATUS
+ControlTryReservePendingEventSlot(
+    _Inout_ PCTRL_FILE_CONTEXT Context,
+    _In_ UINT32 TargetId,
+    _In_ PCTRL_ASYNC_SLOT_REQUEST SlotRequest
+)
+{
+    NTSTATUS status;
+
+    if (Context == NULL ||
+        SlotRequest == NULL ||
+        Context->PendingEventSlotLock == NULL ||
+        TargetId > YUMEDISK_MAX_USABLE_TARGET_ID) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    status = STATUS_SUCCESS;
+    WdfSpinLockAcquire(Context->PendingEventSlotLock);
+    if (Context->PendingEventSlots[TargetId] != NULL) {
+        status = STATUS_DEVICE_BUSY;
+    } else {
+        Context->PendingEventSlots[TargetId] = SlotRequest;
+    }
+    WdfSpinLockRelease(Context->PendingEventSlotLock);
+
+    return status;
+}
+
 NTSTATUS
 ControlProxySubmitSlotAsync(
     _In_ PCTRL_FILE_CONTEXT Context,
@@ -617,6 +655,7 @@ ControlProxySubmitSlotAsync(
 
     asyncRequest->SessionContext = Context;
     asyncRequest->Request = Request;
+    asyncRequest->Command = YumeDiskCommandSubmitSlot;
     asyncRequest->SlotId = SlotId;
     asyncRequest->TargetId = TargetId;
     asyncRequest->SlotType = SlotType;
@@ -650,6 +689,137 @@ ControlProxySubmitSlotAsync(
     submitSlot->Slot.KernelVa = (UINT64)(ULONG_PTR)DirectBuffer;
     submitSlot->Slot.Capacity = (UINT32)DirectBufferSize;
     submitSlot->Slot.Flags = YumeDiskSlotFlagNone;
+
+    irp = IoAllocateIrp(Context->MiniportDeviceObject->StackSize, FALSE);
+    if (irp == NULL) {
+        ControlTransportRuntimeReleaseSlotRequest(asyncRequest);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    asyncRequest->Irp = irp;
+    asyncRequest->IrpHasBeenSubmitted = TRUE;
+
+    irp->RequestorMode = KernelMode;
+    irp->AssociatedIrp.SystemBuffer = asyncRequest->IoctlBuffer;
+    irp->UserBuffer = asyncRequest->IoctlBuffer;
+    irp->Flags = IRP_BUFFERED_IO;
+    irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    irp->IoStatus.Information = 0;
+
+    stack = IoGetNextIrpStackLocation(irp);
+    stack->MajorFunction = IRP_MJ_DEVICE_CONTROL;
+    stack->FileObject = Context->MiniportFileObject;
+    stack->Parameters.DeviceIoControl.IoControlCode = IOCTL_SCSI_MINIPORT;
+    stack->Parameters.DeviceIoControl.InputBufferLength = ioctlBufferSize;
+    stack->Parameters.DeviceIoControl.OutputBufferLength = ioctlBufferSize;
+    stack->Parameters.DeviceIoControl.Type3InputBuffer = NULL;
+
+    IoSetCompletionRoutine(
+        irp,
+        ControlSubmitSlotCompletionRoutine,
+        asyncRequest,
+        TRUE,
+        TRUE,
+        TRUE);
+
+    status = ControlTransportRuntimeSubmitSlotRequest(asyncRequest);
+    if (!NT_SUCCESS(status)) {
+        ControlTransportRuntimeReleaseSlotRequest(asyncRequest);
+        return status;
+    }
+
+    return STATUS_PENDING;
+}
+
+NTSTATUS
+ControlProxySubmitEventSlotAsync(
+    _In_ PCTRL_FILE_CONTEXT Context,
+    _In_ WDFREQUEST Request,
+    _In_ UINT64 SessionId,
+    _In_ UINT64 SlotId,
+    _In_ UINT32 TargetId,
+    _In_ PUCHAR DirectBuffer,
+    _In_ size_t DirectBufferSize
+)
+{
+    NTSTATUS status;
+    PCTRL_ASYNC_SLOT_REQUEST asyncRequest;
+    ULONG bufferSize;
+    ULONG ioctlBufferSize;
+    PIRP irp;
+    PIO_STACK_LOCATION stack;
+    PSRB_IO_CONTROL srbIoControl;
+    PYUMEDISK_MESSAGE message;
+    PYUMEDISK_SUBMIT_EVENT_SLOT submitEventSlot;
+
+    if (Context == NULL ||
+        Context->MiniportHandle == NULL ||
+        Context->MiniportFileObject == NULL ||
+        Context->MiniportDeviceObject == NULL ||
+        Context->PendingEventSlotLock == NULL ||
+        Request == NULL ||
+        DirectBuffer == NULL ||
+        DirectBufferSize > MAXULONG ||
+        DirectBufferSize < sizeof(YUMEDISK_DISK_EVENT) ||
+        SlotId == 0 ||
+        TargetId > YUMEDISK_MAX_USABLE_TARGET_ID) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    bufferSize = YUMEDISK_MESSAGE_BASE_SIZE + YUMEDISK_SUBMIT_EVENT_SLOT_SIZE();
+    ioctlBufferSize = sizeof(SRB_IO_CONTROL) + bufferSize;
+
+    status = ControlTransportRuntimeAcquireSlotRequest(
+        Context,
+        Context->MiniportDeviceObject->StackSize,
+        ioctlBufferSize,
+        &asyncRequest);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    asyncRequest->SessionContext = Context;
+    asyncRequest->Request = Request;
+    asyncRequest->Command = YumeDiskCommandSubmitEventSlot;
+    asyncRequest->SlotId = SlotId;
+    asyncRequest->TargetId = TargetId;
+    asyncRequest->SlotType = YumeDiskSlotTypeInvalid;
+    asyncRequest->DirectBuffer = DirectBuffer;
+    asyncRequest->DirectBufferSize = DirectBufferSize;
+    asyncRequest->CompletionState = 0;
+    asyncRequest->CompletionStatus = STATUS_UNSUCCESSFUL;
+    asyncRequest->CompletionInformation = 0;
+
+    status = ControlTryReservePendingEventSlot(Context, TargetId, asyncRequest);
+    if (!NT_SUCCESS(status)) {
+        ControlTransportRuntimeReleaseSlotRequest(asyncRequest);
+        return status;
+    }
+
+    RtlZeroMemory(asyncRequest->IoctlBuffer, ioctlBufferSize);
+
+    srbIoControl = (PSRB_IO_CONTROL)asyncRequest->IoctlBuffer;
+    srbIoControl->HeaderLength = sizeof(SRB_IO_CONTROL);
+    srbIoControl->Timeout = YUMEDISK_MINIPORT_TIMEOUT_SEC;
+    srbIoControl->ControlCode = YUMEDISK_MINIPORT_CONTROL_CODE;
+    srbIoControl->Length = bufferSize;
+    RtlCopyMemory(srbIoControl->Signature, YUMEDISK_MINIPORT_SIGNATURE, sizeof(srbIoControl->Signature));
+
+    message = (PYUMEDISK_MESSAGE)(srbIoControl + 1);
+    message->Header.Size = bufferSize;
+    message->Header.Command = YumeDiskCommandSubmitEventSlot;
+    message->Header.SessionId = SessionId;
+    message->Header.TargetId = TargetId;
+    message->Header.PayloadLength = YUMEDISK_SUBMIT_EVENT_SLOT_SIZE();
+
+    submitEventSlot = (PYUMEDISK_SUBMIT_EVENT_SLOT)message->Payload;
+    submitEventSlot->Slot.SessionId = SessionId;
+    submitEventSlot->Slot.SlotId = SlotId;
+    submitEventSlot->Slot.TargetId = TargetId;
+    submitEventSlot->Slot.Reserved0 = 0u;
+    submitEventSlot->Slot.KernelVa = (UINT64)(ULONG_PTR)DirectBuffer;
+    submitEventSlot->Slot.Capacity = (UINT32)DirectBufferSize;
+    submitEventSlot->Slot.Flags = YumeDiskSlotFlagNone;
 
     irp = IoAllocateIrp(Context->MiniportDeviceObject->StackSize, FALSE);
     if (irp == NULL) {

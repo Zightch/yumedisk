@@ -423,6 +423,47 @@ ControlHandlePostWriteSlot(
 }
 
 static
+NTSTATUS
+ControlHandlePostEventSlot(
+    _In_ PCTRL_FILE_CONTEXT Context,
+    _In_ WDFREQUEST Request,
+    _In_ const CTRL_INPUT_MESSAGE* InputMessage,
+    _In_ size_t OutputBufferLength,
+    _In_ UINT64 SessionId
+)
+{
+    NTSTATUS status;
+    PUCHAR outputBuffer;
+    size_t outputSize;
+
+    if (InputMessage->Message->Header.PayloadLength != 0 ||
+        InputMessage->Message->Header.TargetId > YUMEDISK_MAX_USABLE_TARGET_ID) {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    outputBuffer = NULL;
+    outputSize = 0;
+    status = ControlGetOutputBuffer(
+        Request,
+        OutputBufferLength,
+        sizeof(YUMEDISK_DISK_EVENT),
+        &outputBuffer,
+        &outputSize);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+
+    return ControlProxySubmitEventSlotAsync(
+        Context,
+        Request,
+        SessionId,
+        InputMessage->Message->Header.TxId,
+        InputMessage->Message->Header.TargetId,
+        outputBuffer,
+        outputSize);
+}
+
+static
 VOID
 ControlHandleReadAck(
     _In_ PCTRL_FILE_CONTEXT Context,
@@ -552,6 +593,22 @@ ControlEvtIoDeviceControl(
         }
 
         status = ControlHandlePostWriteSlot(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
+        if (!NT_SUCCESS(status) && status != STATUS_PENDING) {
+            ControlSessionReleaseSlot(sessionContext);
+            WdfRequestComplete(Request, status);
+        }
+        return;
+    }
+
+    if (command == YumeDiskCommandPostEventSlot) {
+        sessionContext = NULL;
+        status = ControlSessionAcquireSlot(fileObject, &sessionContext, &sessionId);
+        if (!NT_SUCCESS(status)) {
+            WdfRequestComplete(Request, status);
+            return;
+        }
+
+        status = ControlHandlePostEventSlot(sessionContext, Request, &inputMessage, OutputBufferLength, sessionId);
         if (!NT_SUCCESS(status) && status != STATUS_PENDING) {
             ControlSessionReleaseSlot(sessionContext);
             WdfRequestComplete(Request, status);

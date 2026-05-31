@@ -66,6 +66,13 @@ DiskHandleSubmitSlotIoctl(
 );
 
 NTSTATUS
+DiskHandleSubmitEventSlotIoctl(
+    _In_ PVOID DeviceExtension,
+    _In_ PSTORAGE_REQUEST_BLOCK Srb,
+    _Inout_ PYUMEDISK_MESSAGE Message
+);
+
+NTSTATUS
 DiskHandleReadAckIoctl(
     _In_ PVOID DeviceExtension,
     _Inout_ PYUMEDISK_MESSAGE Message

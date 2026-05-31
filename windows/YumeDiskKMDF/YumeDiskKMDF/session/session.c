@@ -49,10 +49,18 @@ ControlSessionCreateResources(
             return status;
         }
 
+        WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
+        attributes.ParentObject = FileObject;
+        status = WdfSpinLockCreate(&attributes, &FileContext->PendingEventSlotLock);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+
         KeInitializeEvent(&FileContext->InFlightZeroEvent, NotificationEvent, TRUE);
         FileContext->InFlightRequestCount = 0;
         KeInitializeEvent(&FileContext->PendingSlotZeroEvent, NotificationEvent, TRUE);
         FileContext->PendingSlotCount = 0;
+        RtlZeroMemory(FileContext->PendingEventSlots, sizeof(FileContext->PendingEventSlots));
         InterlockedExchange(&FileContext->State, CtrlSessionStateInvalid);
         FileContext->TransportRuntime = NULL;
     }

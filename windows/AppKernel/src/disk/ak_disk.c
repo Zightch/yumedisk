@@ -9,6 +9,7 @@
 #define AK_DISK_WORKER_KIND_READ 1u
 #define AK_DISK_WORKER_KIND_WRITE 2u
 #define AK_DISK_WORKER_KIND_ACK 3u
+#define AK_DISK_WORKER_KIND_EVENT 4u
 
 #define AK_DISK_SLOT_ENGINE_POLL_MS 10u
 #define AK_DISK_RECOVERABLE_RETRY_DELAY_MS 10u
@@ -49,6 +50,15 @@ typedef struct AK_WRITE_SLOT_CONTEXT {
     BOOLEAN Active;
 } AK_WRITE_SLOT_CONTEXT;
 
+typedef struct AK_EVENT_SLOT_CONTEXT {
+    AK_PROTOCOL_ASYNC_IO AsyncIo;
+    AK_PROTOCOL_MESSAGE_BUFFER RequestBuffer;
+    YUMEDISK_DISK_EVENT Event;
+    UINT64 SlotId;
+    DWORD RetryTick;
+    BOOLEAN Active;
+} AK_EVENT_SLOT_CONTEXT;
+
 typedef struct AK_WRITE_ACK_FLUSH_CONTEXT {
     AK_PROTOCOL_ASYNC_IO AsyncIo;
     AK_PROTOCOL_MESSAGE_BUFFER RequestBuffer;
@@ -86,6 +96,10 @@ static void AkDiskRecordFinalWriteCommitted(
 
 static void AkDiskRecordFinalWriteRejected(
     AK_DISK* disk);
+
+static void AkDiskRecordProtocolFailure(
+    AK_DISK* disk,
+    AK_STATUS status);
 
 static DWORD AkDiskGetRetryTick(void)
 {
@@ -135,6 +149,13 @@ static BOOLEAN AkDiskIsRecoverableReadAckStatus(
 }
 
 static BOOLEAN AkDiskIsRecoverableWriteAckStatus(
+    AK_STATUS status)
+{
+    return (BOOLEAN)(AkDiskIsRecoverableSlotStatus(status) ||
+                     (status == AK_STATUS_NOT_FOUND));
+}
+
+static BOOLEAN AkDiskIsRecoverableEventSlotStatus(
     AK_STATUS status)
 {
     return (BOOLEAN)(AkDiskIsRecoverableSlotStatus(status) ||
@@ -630,6 +651,188 @@ static void AkDiskDestroyWriteSlotContext(
     AkProtocolMessageRelease(&slot_context->RequestBuffer);
 }
 
+static AK_STATUS AkDiskInitializeEventSlotContext(
+    AK_EVENT_SLOT_CONTEXT* slot_context)
+{
+    AK_STATUS status;
+
+    (void)memset(slot_context, 0, sizeof(*slot_context));
+
+    status = AkProtocolMessageAllocate(
+        YumeDiskCommandPostEventSlot,
+        0u,
+        0u,
+        &slot_context->RequestBuffer);
+    if (status != AK_STATUS_SUCCESS) {
+        return status;
+    }
+
+    status = AkProtocolAsyncIoInitialize(&slot_context->AsyncIo);
+    if (status != AK_STATUS_SUCCESS) {
+        AkProtocolMessageRelease(&slot_context->RequestBuffer);
+        return status;
+    }
+
+    return AK_STATUS_SUCCESS;
+}
+
+static void AkDiskDestroyEventSlotContext(
+    AK_EVENT_SLOT_CONTEXT* slot_context)
+{
+    if (slot_context == NULL) {
+        return;
+    }
+
+    AkProtocolAsyncIoDestroy(&slot_context->AsyncIo);
+    AkProtocolMessageRelease(&slot_context->RequestBuffer);
+}
+
+static AK_STATUS AkDiskValidateDiskEvent(
+    const YUMEDISK_DISK_EVENT* event_record)
+{
+    if (event_record == NULL || event_record->Reserved0 != 0u) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    switch ((YUMEDISK_DISK_EVENT_KIND)event_record->EventKind) {
+    case YumeDiskDiskEventSystemEjected:
+        return AK_STATUS_SUCCESS;
+    default:
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+}
+
+static AK_STATUS AkDiskDispatchDiskEvent(
+    AK_DISK* disk,
+    const YUMEDISK_DISK_EVENT* event_record)
+{
+    AK_DISK_EVENT dispatch_event;
+
+    if ((disk == NULL) || (event_record == NULL)) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    if (AkDiskIsStopRequested(disk) || !AkSessionIsDiskRegistered(disk->Session, disk)) {
+        return AK_STATUS_SUCCESS;
+    }
+
+    (void)memset(&dispatch_event, 0, sizeof(dispatch_event));
+    switch ((YUMEDISK_DISK_EVENT_KIND)event_record->EventKind) {
+    case YumeDiskDiskEventSystemEjected:
+        dispatch_event.Type = AkDiskEventSystemEjected;
+        break;
+    default:
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    dispatch_event.TargetId = disk->State.TargetId;
+    dispatch_event.DiskRuntimeId = disk->State.DiskRuntimeId;
+    dispatch_event.Flags = event_record->Flags;
+    dispatch_event.Status = event_record->Status;
+    disk->DiskOps.on_event(disk->DiskCtx, &dispatch_event);
+    return AK_STATUS_SUCCESS;
+}
+
+static AK_STATUS AkDiskPostEventSlotAsync(
+    AK_DISK* disk,
+    HANDLE control_file,
+    UINT64 session_id,
+    AK_EVENT_SLOT_CONTEXT* slot_context)
+{
+    AK_STATUS status;
+    UINT64 slot_id;
+
+    slot_id = AkSessionAllocateTxId(disk->Session);
+    if (slot_id == 0ull) {
+        return AK_STATUS_UNSUCCESSFUL;
+    }
+
+    slot_context->SlotId = slot_id;
+    (void)memset(&slot_context->Event, 0, sizeof(slot_context->Event));
+
+    status = AkProtocolPreparePostEventSlot(
+        &slot_context->RequestBuffer,
+        session_id,
+        disk->Params.TargetId,
+        slot_id);
+    if (status != AK_STATUS_SUCCESS) {
+        slot_context->SlotId = 0ull;
+        return status;
+    }
+
+    status = AkProtocolAsyncIoBegin(
+        control_file,
+        slot_context->RequestBuffer.Message,
+        slot_context->RequestBuffer.Size,
+        &slot_context->Event,
+        (DWORD)sizeof(slot_context->Event),
+        &slot_context->AsyncIo);
+    if (status != AK_STATUS_SUCCESS) {
+        slot_context->SlotId = 0ull;
+        if (AkDiskIsRecoverableEventSlotStatus(status)) {
+            slot_context->RetryTick = AkDiskGetRetryTick();
+            return AK_STATUS_SUCCESS;
+        }
+
+        return status;
+    }
+
+    slot_context->Active = TRUE;
+    slot_context->RetryTick = 0u;
+    return AK_STATUS_SUCCESS;
+}
+
+static AK_STATUS AkDiskHandleEventSlotCompletion(
+    AK_DISK* disk,
+    HANDLE control_file,
+    AK_EVENT_SLOT_CONTEXT* slot_context)
+{
+    AK_STATUS status;
+    DWORD bytes_transferred;
+
+    slot_context->Active = FALSE;
+    slot_context->SlotId = 0ull;
+
+    status = AkProtocolAsyncIoFinish(
+        control_file,
+        &slot_context->AsyncIo,
+        &bytes_transferred);
+    if (status != AK_STATUS_SUCCESS) {
+        if (AkDiskIsStopRequested(disk)) {
+            (void)memset(&slot_context->Event, 0, sizeof(slot_context->Event));
+            slot_context->RetryTick = 0u;
+            return AK_STATUS_SUCCESS;
+        }
+
+        if (AkDiskIsRecoverableEventSlotStatus(status)) {
+            slot_context->RetryTick = AkDiskGetRetryTick();
+            return AK_STATUS_SUCCESS;
+        }
+
+        return status;
+    }
+
+    (void)bytes_transferred;
+    if (AkDiskIsStopRequested(disk)) {
+        (void)memset(&slot_context->Event, 0, sizeof(slot_context->Event));
+        slot_context->RetryTick = 0u;
+        return AK_STATUS_SUCCESS;
+    }
+
+    status = AkDiskValidateDiskEvent(&slot_context->Event);
+    if (status != AK_STATUS_SUCCESS) {
+        AkDiskRecordProtocolFailure(disk, status);
+        (void)memset(&slot_context->Event, 0, sizeof(slot_context->Event));
+        slot_context->RetryTick = 0u;
+        return AK_STATUS_SUCCESS;
+    }
+
+    status = AkDiskDispatchDiskEvent(disk, &slot_context->Event);
+    (void)memset(&slot_context->Event, 0, sizeof(slot_context->Event));
+    slot_context->RetryTick = 0u;
+    return status;
+}
+
 static AK_STATUS AkDiskInitializeWriteAckFlushContext(
     AK_WRITE_ACK_FLUSH_CONTEXT* ack_context,
     UINT32 max_ranges)
@@ -839,7 +1042,9 @@ static AK_STATUS AkDiskValidateParams(
         return AK_STATUS_INVALID_PARAMETER;
     }
 
-    if ((disk_ops->read_bytes == NULL) || (disk_ops->stage_write == NULL)) {
+    if ((disk_ops->read_bytes == NULL) ||
+        (disk_ops->stage_write == NULL) ||
+        (disk_ops->on_event == NULL)) {
         return AK_STATUS_INVALID_PARAMETER;
     }
 
@@ -2481,6 +2686,99 @@ static DWORD WINAPI AkDiskReadWorkerThreadProc(
     return 0u;
 }
 
+static DWORD WINAPI AkDiskEventWorkerThreadProc(
+    LPVOID context)
+{
+    AK_DISK_WORKER_CONTEXT* worker;
+    AK_DISK* disk;
+    HANDLE control_file;
+    UINT64 session_id;
+    AK_STATUS status;
+    AK_EVENT_SLOT_CONTEXT slot_context;
+    BOOLEAN shutting_down;
+    DWORD wait_status;
+
+    worker = (AK_DISK_WORKER_CONTEXT*)context;
+    if ((worker == NULL) || (worker->Disk == NULL)) {
+        return 0u;
+    }
+
+    disk = worker->Disk;
+    (void)memset(&slot_context, 0, sizeof(slot_context));
+    shutting_down = FALSE;
+
+    status = AkSessionAcquireTransport(disk->Session, &control_file, &session_id);
+    if (status != AK_STATUS_SUCCESS) {
+        AkDiskRecordCommandFailure(disk, status);
+        AkDiskSetBroken(disk, status);
+        return 0u;
+    }
+
+    status = AkDiskInitializeEventSlotContext(&slot_context);
+    if (status != AK_STATUS_SUCCESS) {
+        AkDiskRecordCommandFailure(disk, status);
+        AkDiskSetBroken(disk, status);
+        return 0u;
+    }
+
+    for (;;) {
+        if (!shutting_down && !AkDiskIsStopRequested(disk)) {
+            if (!slot_context.Active && AkDiskIsRetryReady(slot_context.RetryTick)) {
+                status = AkDiskPostEventSlotAsync(
+                    disk,
+                    control_file,
+                    session_id,
+                    &slot_context);
+                if (status != AK_STATUS_SUCCESS) {
+                    AkDiskRecordCommandFailure(disk, status);
+                    AkDiskSetBroken(disk, status);
+                    shutting_down = TRUE;
+                }
+            }
+        } else {
+            shutting_down = TRUE;
+        }
+
+        if (slot_context.Active &&
+            (WaitForSingleObject(slot_context.AsyncIo.Overlapped.hEvent, 0u) == WAIT_OBJECT_0)) {
+            status = AkDiskHandleEventSlotCompletion(disk, control_file, &slot_context);
+            if (status != AK_STATUS_SUCCESS) {
+                AkDiskRecordCommandFailure(disk, status);
+                AkDiskSetBroken(disk, status);
+                shutting_down = TRUE;
+            }
+        }
+
+        if (shutting_down && !slot_context.Active) {
+            break;
+        }
+
+        if (!slot_context.Active) {
+            Sleep(AK_DISK_SLOT_ENGINE_POLL_MS);
+            continue;
+        }
+
+        wait_status = WaitForSingleObject(
+            slot_context.AsyncIo.Overlapped.hEvent,
+            AK_DISK_SLOT_ENGINE_POLL_MS);
+        if ((wait_status == WAIT_TIMEOUT) || (wait_status == WAIT_OBJECT_0)) {
+            continue;
+        }
+
+        if (wait_status == WAIT_FAILED) {
+            status = AkFromWin32Error(GetLastError());
+            if (!shutting_down) {
+                AkDiskRecordCommandFailure(disk, status);
+                AkDiskSetBroken(disk, status);
+                shutting_down = TRUE;
+            }
+        }
+    }
+
+    AkDiskDestroyEventSlotContext(&slot_context);
+    return 0u;
+}
+
 static DWORD WINAPI AkDiskIdleWorkerThreadProc(
     LPVOID context)
 {
@@ -2546,6 +2844,31 @@ static AK_STATUS AkDiskStartWorkerArray(
         if (threads[index] == NULL) {
             return AkFromWin32Error(GetLastError());
         }
+    }
+
+    return AK_STATUS_SUCCESS;
+}
+
+static AK_STATUS AkDiskStartEventWorker(
+    AK_DISK* disk)
+{
+    if (disk == NULL) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    disk->EventWorkerContext.Disk = disk;
+    disk->EventWorkerContext.WorkerIndex = 0u;
+    disk->EventWorkerContext.WorkerKind = AK_DISK_WORKER_KIND_EVENT;
+    disk->EventWorkerContext.SlotCount = 1u;
+    disk->EventWorkerThread = CreateThread(
+        NULL,
+        0u,
+        AkDiskEventWorkerThreadProc,
+        &disk->EventWorkerContext,
+        0u,
+        NULL);
+    if (disk->EventWorkerThread == NULL) {
+        return AkFromWin32Error(GetLastError());
     }
 
     return AK_STATUS_SUCCESS;
@@ -2635,15 +2958,25 @@ static AK_STATUS AkDiskStartWorkers(
     return AK_STATUS_SUCCESS;
 }
 
-static void AkDiskStopWorkers(
+static void AkDiskSignalWorkerStop(
     AK_DISK* disk)
 {
+    if (disk == NULL) {
+        return;
+    }
+
     if (disk->StopEvent != NULL) {
         SetEvent(disk->StopEvent);
     }
     if (disk->WriteAckWakeEvent != NULL) {
         SetEvent(disk->WriteAckWakeEvent);
     }
+}
+
+static void AkDiskStopWorkers(
+    AK_DISK* disk)
+{
+    AkDiskSignalWorkerStop(disk);
 
     AkDiskJoinWorkerArray(disk->ReadWorkerThreads, disk->Params.ReadWorkerCount);
     AkDiskJoinWorkerArray(disk->WriteWorkerThreads, disk->Params.WriteWorkerCount);
@@ -2652,6 +2985,12 @@ static void AkDiskStopWorkers(
         (void)WaitForSingleObject(disk->AckFlusherThread, INFINITE);
         CloseHandle(disk->AckFlusherThread);
         disk->AckFlusherThread = NULL;
+    }
+
+    if (disk->EventWorkerThread != NULL) {
+        (void)WaitForSingleObject(disk->EventWorkerThread, INFINITE);
+        CloseHandle(disk->EventWorkerThread);
+        disk->EventWorkerThread = NULL;
     }
 
     if (disk->WriteAckWakeEvent != NULL) {
@@ -2829,6 +3168,17 @@ AK_STATUS AkDiskCreate(
         return status;
     }
 
+    status = AkDiskStartEventWorker(disk);
+    if (status != AK_STATUS_SUCCESS) {
+        AkDiskSetLastError(disk, status);
+        AkDiskSignalWorkerStop(disk);
+        (void)AkProtocolRemoveDisk(control_file, session_id, disk->Params.TargetId, 0u);
+        AkDiskStopWorkers(disk);
+        AkSessionUnregisterDisk(session, disk);
+        AkDiskDestroy(disk);
+        return status;
+    }
+
     AcquireSRWLockExclusive(&disk->Lock);
     disk->State.Lifecycle = AkStateRunning;
     disk->State.LastError = AK_STATUS_SUCCESS;
@@ -2840,8 +3190,9 @@ AK_STATUS AkDiskCreate(
         AcquireSRWLockExclusive(&disk->Lock);
         disk->State.Lifecycle = AkStateBroken;
         ReleaseSRWLockExclusive(&disk->Lock);
-        AkDiskStopWorkers(disk);
+        AkDiskSignalWorkerStop(disk);
         (void)AkProtocolRemoveDisk(control_file, session_id, disk->Params.TargetId, 0u);
+        AkDiskStopWorkers(disk);
         AkSessionUnregisterDisk(session, disk);
         AkDiskDestroy(disk);
         return status;
@@ -2883,12 +3234,14 @@ AK_STATUS AkDiskRemove(AK_DISK* disk)
         session_id = 0ull;
     }
 
-    AkDiskStopWorkers(disk);
+    AkDiskSignalWorkerStop(disk);
 
     remove_status = AK_STATUS_SUCCESS;
     if ((control_file != NULL) && (control_file != INVALID_HANDLE_VALUE) && (session_id != 0ull)) {
         remove_status = AkProtocolRemoveDisk(control_file, session_id, disk->Params.TargetId, 0u);
     }
+
+    AkDiskStopWorkers(disk);
 
     if (remove_status != AK_STATUS_SUCCESS) {
         AkDiskSetLastError(disk, remove_status);

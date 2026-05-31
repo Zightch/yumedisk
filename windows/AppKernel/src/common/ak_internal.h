@@ -68,6 +68,8 @@ struct AK_DISK {
     AK_DISK_WORKER_CONTEXT* WriteWorkerContexts;
     HANDLE AckFlusherThread;
     AK_DISK_WORKER_CONTEXT AckFlusherContext;
+    HANDLE EventWorkerThread;
+    AK_DISK_WORKER_CONTEXT EventWorkerContext;
     HANDLE WriteAckWakeEvent;
     SRWLOCK WriteAckLock;
     AK_WRITE_ACK_NODE* WriteAckHead;

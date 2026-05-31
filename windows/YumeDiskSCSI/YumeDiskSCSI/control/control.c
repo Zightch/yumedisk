@@ -311,6 +311,14 @@ DiskHandleIoControlSrb(
         }
         DiskInitMessageStatus(message, message->Header.Command, status, 0);
         break;
+    case YumeDiskCommandSubmitEventSlot:
+        Srb->SrbStatus = SRB_STATUS_PENDING;
+        status = DiskHandleSubmitEventSlotIoctl(DeviceExtension, Srb, message);
+        if (status == STATUS_PENDING) {
+            return TRUE;
+        }
+        DiskInitMessageStatus(message, message->Header.Command, status, 0);
+        break;
     case YumeDiskCommandReadAck:
         status = DiskHandleReadAckIoctl(DeviceExtension, message);
         if (!NT_SUCCESS(status)) {

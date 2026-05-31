@@ -46,6 +46,12 @@ AK_STATUS AkProtocolPreparePostWriteSlot(
     UINT32 target_id,
     UINT64 tx_id);
 
+AK_STATUS AkProtocolPreparePostEventSlot(
+    AK_PROTOCOL_MESSAGE_BUFFER* request,
+    UINT64 session_id,
+    UINT32 target_id,
+    UINT64 tx_id);
+
 AK_STATUS AkProtocolPrepareReadAck(
     AK_PROTOCOL_MESSAGE_BUFFER* request,
     UINT64 session_id,

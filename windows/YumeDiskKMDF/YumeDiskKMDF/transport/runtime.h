@@ -10,6 +10,7 @@ typedef struct _CTRL_ASYNC_SLOT_REQUEST {
     WDFREQUEST Request;
     PIRP Irp;
     PIO_WORKITEM WorkItem;
+    UINT32 Command;
     UINT64 SlotId;
     UINT32 TargetId;
     UINT32 SlotType;

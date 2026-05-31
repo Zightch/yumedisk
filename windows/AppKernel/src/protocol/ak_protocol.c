@@ -151,6 +151,22 @@ AK_STATUS AkProtocolPreparePostWriteSlot(
         0u);
 }
 
+AK_STATUS AkProtocolPreparePostEventSlot(
+    AK_PROTOCOL_MESSAGE_BUFFER* request,
+    UINT64 session_id,
+    UINT32 target_id,
+    UINT64 tx_id)
+{
+    return AkProtocolMessageReset(
+        request,
+        YumeDiskCommandPostEventSlot,
+        0u,
+        session_id,
+        tx_id,
+        target_id,
+        0u);
+}
+
 AK_STATUS AkProtocolPrepareReadAck(
     AK_PROTOCOL_MESSAGE_BUFFER* request,
     UINT64 session_id,
