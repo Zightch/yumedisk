@@ -85,6 +85,21 @@
 
 `ReadAt / WriteAt` 的请求与响应 body 细节见 [data-plane](data-plane.md)。
 
+在这条边上，gateway 的正式角色固定为混合模型：
+
+- 控制面
+  - `AuthStart / AuthFinish / SessionOpen / ConnHeartbeat`
+- 共享数据面桥上的代理端点
+  - `SessionDescribe / ReadAt / WriteAt`
+- 生命周期 notice 桥接端点
+  - `SessionDataChangedNotice / SessionCloseNotice`
+
+因此固定口径为：
+
+- gateway 可以校验通用 header、connection 状态与 session ownership
+- gateway 可以改写 `request_id / session_id`
+- gateway 不在这条边上重新定义第二套 `SessionDescribe / ReadAt / WriteAt` 业务 body 形状
+
 ## 操作码
 
 | 码值 | 名称 | 方向 |
@@ -253,6 +268,11 @@
 - client 只能做等值比较，不能解释其内部结构
 - 不承诺跨 storer 重启稳定
 
+补充口径：
+
+- 这条边上的 `SessionDescribe` body 语义与 `gateway-storer` 边上的 route-facing `SessionDescribe` 一致
+- gateway 不应在这条边上再生一份不同形状的 metadata body
+
 ## ConnHeartbeat
 
 边界固定如下：
@@ -286,6 +306,7 @@
 - 它不表示 session 已失效
 - 它不表示 metadata 已变化
 - 它不等待回复
+- 它可以经 gateway 桥接到 client，但桥接不会改变 notice body 语义
 
 ## SessionCloseNotice
 
@@ -325,3 +346,8 @@
 - notice 一旦发出，发送方不等待回复
 - notice 一旦送达，就表示目标 session 已经失效
 - 若目标 session 已不存在，接收方按幂等忽略
+- `gateway -> client` 的 close 可以来自：
+  - 上游 session close 的桥接
+  - gateway 本地故障收束时的合成 close
+- `client -> gateway` 的 close 用于请求关闭当前 session；当 gateway 继续把它转到上游时，应保留原始 notice body 语义
+- `reason_code` 只说明 close 事实来源，不区分该 notice 是直接产生、经中间层桥接，还是由中间层合成

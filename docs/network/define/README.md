@@ -44,6 +44,21 @@
 client <-> gateway <-> storer
 ```
 
+在这条主链上，gateway 的协议角色固定为混合模型：
+
+- 控制面
+  - `AuthStart / AuthFinish / SessionOpen / ConnHeartbeat`
+- 共享数据面代理
+  - `SessionDescribe / ReadAt / WriteAt`
+- 生命周期 notice 桥接
+  - `SessionDataChangedNotice / SessionCloseNotice`
+
+这三个面共存，但边界必须清楚：
+
+- 控制面职责继续留在 gateway
+- `SessionDescribe / ReadAt / WriteAt` 不在 gateway 上再生第二套业务 body 语义
+- `SessionDataChangedNotice / SessionCloseNotice` 允许经中间层桥接，必要时也允许由中间层在故障路径中合成
+
 协议层只承认三类业务对象：
 
 - `connection`
@@ -94,6 +109,15 @@ TCP
 - 已打开 session 上的 `SessionDescribe / ReadAt / WriteAt` 允许并发
 - 已打开 session 的并发存在，不阻止该 connection 后续再次串行发起 auth/open
 
+补充口径：
+
+- `SessionDescribe / ReadAt / WriteAt` 的业务 `status_code` 与 body 语义在两条协议边上保持一致
+- 当它们经过 gateway 时，gateway 只负责：
+  - `request_id` 映射
+  - `session_id` 映射
+  - ownership 校验
+- gateway 不重新定义第二套共享数据面 body 形状
+
 ## 元数据边界
 
 协议层固定收口如下：
@@ -132,6 +156,11 @@ TCP
 - `SessionCloseNotice` 是唯一正式 close 语义
 - `SessionCloseNotice` 可由某条协议边的任意一端主动发出
 - `SessionCloseNotice` 一旦到达，目标 session 已经失效
+
+补充口径：
+
+- `SessionCloseNotice.reason_code` 只说明关闭事实来源
+- 它不区分该 close 是对端直接产生、经中间层桥接，还是由中间层在故障路径中合成
 
 至于：
 

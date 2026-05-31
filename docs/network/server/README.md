@@ -40,7 +40,7 @@
 - 对 client 提供 `Hello -> transport -> auth -> session -> data plane`
 - 接收外部 storer 的 `StorerRegister`
 - 持有 route / auth grant / session 三张真源表
-- 负责 route 选择、认证、会话建立、`SessionDescribe` 转发、notice 转发与故障传播
+- 负责 route 选择、认证、会话建立、共享数据面代理、notice bridge 与故障传播
 
 ### storer 程序 `role=storer`
 
@@ -85,6 +85,27 @@
 - 当前本地导出固定为：
   - 一个 `rw` 导出
   - 可选一个 `ro` 导出
+
+## gateway 当前角色模型
+
+当前 gateway 的正式角色固定为混合模型：
+
+- 控制面
+  - `AuthStart / AuthFinish / SessionOpen / ConnHeartbeat`
+- 共享数据面代理
+  - `SessionDescribe / ReadAt / WriteAt`
+- 生命周期 notice bridge
+  - `SessionDataChangedNotice / SessionCloseNotice`
+
+固定口径：
+
+- gateway 保留控制面职责
+- gateway 不再为 `SessionDescribe / ReadAt / WriteAt` 发明第二套本地业务 body 语义
+- gateway 对共享数据面只做：
+  - session 映射
+  - request 映射
+  - route 发送与接收
+- gateway 对 notice 既可以桥接，也可以在本地故障路径中合成 close
 
 ## 当前第一版非目标
 
@@ -165,7 +186,7 @@ metadata 与 `data changed` 决策真源固定在 storer/backend 侧：
 ```text
 client SessionDescribe(gateway_session_id)
   -> gateway 查 session_registry
-  -> gateway 转发 SessionDescribe(storer_session_id)
+  -> gateway 代理 SessionDescribe(storer_session_id)
   -> storer 直接返回 metadata
   -> gateway 原样回给 client
 ```
@@ -260,7 +281,7 @@ gateway 当前实现策略为：
 - gateway 验证 `gateway_token`
 - 注册成功后，把这条连接视为 route connection
 - `gateway -> storer` 的 `SessionOpen` 不再带 `disk_id` 或 `auth_id`
-- `gateway -> storer` 的 `SessionDescribe` 只按 `storer_session_id` 转发
+- `gateway -> storer` 的 `SessionDescribe / ReadAt / WriteAt` 只按 `storer_session_id` 与 `request_id` 做 route proxy
 
 当前 `role=whole` 的固定路由口径为：
 
@@ -278,18 +299,22 @@ gateway 当前实现策略为：
 4. 改写上游 `request_id / session_id`
 5. 把结果或 notice 回传给 client
 
-当前这条职责同时覆盖：
+其中共享数据面代理固定覆盖：
 
 - `SessionDescribe`
 - `ReadAt`
 - `WriteAt`
+
+其中 lifecycle notice bridge 固定覆盖：
+
 - `SessionDataChangedNotice`
 - `SessionCloseNotice`
 
 当前明确不做：
 
 - 缓存盘数据
-- 改写成功/失败业务语义
+- 为共享数据面改写第二套成功/失败业务语义
+- 为共享数据面重建第二套 body 形状
 - 替 client 做跨请求重组
 - 缓存 metadata snapshot
 - 按 backend 做 fanout 决策
@@ -312,7 +337,7 @@ rw client WriteAt
 固定约束：
 
 - `data changed` 决策只在 storer/backend 侧发生
-- gateway 只做 session 映射与 notice 转发
+- gateway 只做 session 映射与 notice bridge
 - gateway 不按 `backend_id` 维护 fanout 表
 - 若目标 client 已离线或 session 已失效，gateway 按幂等忽略
 - `SessionDataChangedNotice` 不触发 server 侧 session 清理
@@ -326,7 +351,7 @@ rw client WriteAt
 - `client -> gateway : ConnHeartbeat`
 
 gateway 返回普通 response，不再派生其他 client 心跳分支。
-当前实现还会在 `ConnHeartbeat` 超时后主动断开 client 连接，并按 connection 级清理其名下已打开 session，向各自所属 storer 发 `SessionCloseNotice`。
+当前实现还会在 `ConnHeartbeat` 超时后主动断开 client 连接，并按 connection 级清理其名下已打开 session，向各自所属 storer 发 `SessionCloseNotice`。这类 close 属于 gateway 在本地故障路径中的合成 close。
 
 ### gateway-storer
 

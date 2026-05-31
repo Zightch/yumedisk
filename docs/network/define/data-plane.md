@@ -22,6 +22,25 @@ client 进入数据面前必须已经完成：
 - `SessionOpen` 是进入数据面的唯一入口
 - metadata 不从 `SessionOpen` 直接取得
 
+## 共享数据面复用模型
+
+`SessionDescribe / ReadAt / WriteAt` 的 body 与业务 `status_code` 语义，固定作为一套共享数据面定义复用。
+
+这意味着：
+
+- `client-gateway`
+- `gateway-storer`
+
+两条边上的这三类 op 使用同一份业务 body 模型。
+
+若某条链路存在中间层，例如 gateway，则固定口径为：
+
+- 中间层可以改写 `request_id`
+- 中间层可以改写 `session_id`
+- 中间层可以做 session ownership 与路由校验
+- 中间层不应再生第二套共享数据面 body 形状
+- 中间层不应重新定义第二套共享数据面 `status_code` 语义
+
 ## SessionDescribe
 
 `SessionDescribe` 返回当前 session 绑定 metadata。
@@ -41,6 +60,10 @@ client 进入数据面前必须已经完成：
 - 只用于等值比较
 - 不承诺跨 storer 重启稳定
 
+补充口径：
+
+- `SessionDescribe` 的成功响应 body 在复用该共享数据面的协议边之间保持一致
+
 ## ReadAt
 
 ### 请求 body
@@ -55,6 +78,10 @@ client 进入数据面前必须已经完成：
 ### 成功响应 body
 
 - 返回完整数据段
+
+补充口径：
+
+- 若这条数据面经过中间层桥接，`ReadAt` 的成功响应 body 语义保持不变
 
 ## WriteAt
 
@@ -74,6 +101,10 @@ client 进入数据面前必须已经完成：
 
 - 当前不要求固定负载
 
+补充口径：
+
+- 若这条数据面经过中间层桥接，`WriteAt` 的请求 body 与响应 `status_code` 语义保持不变
+
 ## SessionDataChangedNotice
 
 ### notice
@@ -90,6 +121,7 @@ client 进入数据面前必须已经完成：
 - 它不直接等于容量变化或其他 media 事件
 - 它是单向 notice，不等待回复
 - 具体在哪条边上允许哪个方向，由各边界文档定义
+- 若 notice 经中间层桥接，变化的只是目标 `session_id` 视角，不是 notice body 语义
 
 ## SessionCloseNotice
 
@@ -112,6 +144,8 @@ client 进入数据面前必须已经完成：
 - 当前最小闭环实现允许：
   - 已经进入同步处理链路的请求自然执行完成
   - 若 session 已关闭，后续回复可以直接丢弃
+- 若某条链路存在中间层，它既可以桥接 close，也可以在本地故障路径中合成 close
+- `reason_code` 只说明关闭事实来源，不区分该 close 是直接产生、经中间层桥接，还是由中间层合成
 
 ## 大块 I/O
 

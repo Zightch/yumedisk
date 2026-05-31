@@ -22,6 +22,15 @@ storer ----主动连接----> gateway
 
 一次成功注册后，该 route connection 绑定一次声明的 `disk_id`。
 
+在这条边上，gateway 的正式角色也固定为混合模型：
+
+- 控制面
+  - `StorerRegister / SessionOpen / LinkHeartbeat`
+- 共享数据面代理
+  - `SessionDescribe / ReadAt / WriteAt`
+- 生命周期 notice 桥接
+  - `SessionCloseNotice / SessionDataChangedNotice`
+
 ## 通用业务头
 
 `gateway-storer` 与 `client-gateway` 共用同一套 `24` 字节业务头与大端整数规则，见 [client-gateway](client-gateway.md)。
@@ -109,6 +118,11 @@ storer ----主动连接----> gateway
 
 metadata 真源固定在 `storer`，gateway 只负责按 session 映射转发。
 
+补充口径：
+
+- gateway 在这条边上不应再生第二套 route-facing metadata body
+- `SessionDescribe` 的业务 body 与 `status_code` 语义，应在 `client-gateway` 与 `gateway-storer` 两条边上保持一致
+
 ## 共享数据面
 
 注册成功后，这条边承载：
@@ -123,6 +137,14 @@ metadata 真源固定在 `storer`，gateway 只负责按 session 映射转发。
 
 此处的 `session_id` 是 storer 自己的会话标识，不等于 client 看到的 `session_id`。
 
+补充口径：
+
+- 对 `SessionDescribe / ReadAt / WriteAt`，gateway 在这条边上只做：
+  - `request_id` 映射
+  - `session_id` 映射
+  - route 发送与接收
+- gateway 不在这条边上重新解释这些 op 的业务 body 或 `status_code`
+
 ## SessionCloseNotice
 
 在这条边上，协议层允许：
@@ -132,11 +154,15 @@ metadata 真源固定在 `storer`，gateway 只负责按 session 映射转发。
 
 主动发出 `SessionCloseNotice`。
 
-当前项目的最小闭环实现只要求：
-
-- `gateway -> storer`
-
 notice body 与 `reason_code` 定义见 [data-plane](data-plane.md)。
+
+补充口径：
+
+- `gateway -> storer` 的 close 可以来自：
+  - client close 的桥接
+  - gateway 本地故障收束时的合成 close
+- `storer -> gateway` 的 close 可以表示上游 session 主动关闭事实
+- `reason_code` 只说明关闭事实来源，不区分该 close 是直接产生、经中间层桥接，还是由中间层合成
 
 ## SessionDataChangedNotice
 
@@ -157,6 +183,7 @@ notice body 与 `reason_code` 定义见 [data-plane](data-plane.md)。
 - 它只表达目标 session 对应 backend 的数据内容已经变化
 - 它不表示 session 已失效
 - 它不等待回复
+- gateway 在这条边上只做 session 映射桥接，不改变 notice body 语义
 
 ## LinkHeartbeat
 

@@ -1,570 +1,639 @@
-# AppKernel 与驱动事件语义重建执行清单
+# gateway / 网络协议重构执行清单
 
 ## 0. 当前范围
 
-本清单只处理一件事：在正式做“系统单盘弹出”之前，先把 `AppKernel <-> KMDF <-> SCSI` 这一段的语义拆干净。
+本清单只处理一件事：
 
-本轮目标不是直接做弹出功能，而是先把当前混杂的 `AkEvent` 与驱动上行事件面重建为清晰的三条链：
+- 在正式做 `ReadAt / WriteAt` 压缩之前，先把 `client <-> gateway <-> storer` 的会话与数据面职责重构干净
 
-- `AkResponse`
-- `AkSessionNotice`
-- 盘级 `event slot`
+这里讨论的重点包括：
 
-本清单完成后，`todo-eject.md` 再基于新的盘级 `event slot` 去实现真正的系统单盘弹出。
+- gateway 职责收口
+- `SessionDescribe / ReadAt / WriteAt` 代理化
+- `SessionCloseNotice / SessionDataChangedNotice` 桥接化
+- `whole` 本地导出与远端 `storer` 统一到同一套 route proxy 抽象
 
-## 1. 版本目标
+这里明确不做：
 
-本轮重建完成后，统一版本号收口为 `0.1.1.0`：
+- 传输压缩本身
+- transport framing 重写
+- auth 算法变化
+- 旧版本兼容
+- TLS 或 bootstrap 扩展
+- route 选择策略重写
 
-- `shared/yumedisk_proto.h`
-- `YumeDiskKMDF`
-- `YumeDiskSCSI`
-- `AppKernel`
+本清单完成后，`docs/tmp/todo-network-compression.md` 才进入正式实施阶段。
 
-固定要求：
+## 1. 当前总目标
 
-- 不做旧版本兼容
-- 不保留 `AkEvent` 旧接口别名
-- 不保留“旧 event 语义 + 新 event 语义”双轨并存
+按最小核心闭环，把 gateway 与网络协议先收成下面这几个结论：
 
-## 2. 为什么要先重建
+1. gateway 不是纯控制面，也不是纯透明代理，而是混合模型
+2. 控制面职责继续保留在 gateway
+3. `SessionDescribe / ReadAt / WriteAt` 改成 opaque data proxy
+4. `SessionCloseNotice / SessionDataChangedNotice` 改成 lifecycle notice bridge
+5. 数据面 body 演进不再要求 gateway 跟着解析和重组
+6. 后续压缩能力只落在 client 与 storer，不再把 gateway 变成压缩参与方
 
-当前 `AkEvent` 把三类完全不同的东西混在了一起：
+## 2. 为什么要先重构
 
-- app 发起任务后的完成回应
-- `AppKernel` 自己观察到的 session 故障
-- 后续计划引入的驱动主动盘级事件
+### 2.1 当前 gateway 仍在解释数据面
 
-这会直接造成边界模糊：
+当前 gateway 在 client-facing 入口会先解析：
 
-- `AkEvent` 看起来像“驱动事件”，但当前其实主要是 `AppKernel` 自产自销
-- `SessionBroken` 不是任务回应，却和 `DiskOnline / DiskRemoved / WriteFinal*` 放在同一个队列
-- 后续如果再把 `DiskSystemEjected` 塞进 `AkEvent`，会让“任务回应”和“驱动主动上报”继续混在一起
+- `SessionDescribe`
+- `ReadAt`
+- `WriteAt`
 
-按当前开发原则，正确做法不是继续往旧 `AkEvent` 上打补丁，而是先拆语义，再接新功能。
+然后转成内部语义方法调用，再在 storer-facing 一侧重组新请求。
 
-## 3. 重建后的正式模型
+这带来的直接问题是：
 
-### 3.1 三条公开语义链
+- `ReadAt / WriteAt` body 只要一变，gateway 就必须同步改解析器
+- `SessionDescribe` response body 只要一变，gateway 也必须同步改解析器
+- 压缩字段无法只由 client / storer 自己处理
 
-#### A. `AkResponse`
+### 2.2 当前 gateway 还在翻译上游状态
 
-职责：
+当前 route 侧返回的 `status_code` 会被先映射成内部错误，再映射回 client-facing `status_code`。
 
-- 承接 app 主动发起的 session/disk 任务回应
+这会造成：
 
-当前只允许包含：
+- 上游状态语义被压扁
+- 新状态码扩展需要 gateway 继续改映射表
+- 数据面协议演进被 gateway 卡住
 
-- `AkResponseDiskOnline`
-- `AkResponseDiskRemoved`
-- `AkResponseWriteFinalCommitted`
-- `AkResponseWriteFinalRejected`
+### 2.3 当前 close notice body 也没有真正透传
+
+当前 client 发来的 `SessionCloseNotice` body 只被拿来做校验，gateway 转给 storer 时并不保留原始 `reason_code`。
+
+这说明问题不只在 `ReadAt / WriteAt`：
+
+- 连 notice body 语义也被 gateway 吞掉了
+
+### 2.4 当前抽象天然鼓励 gateway 做语义层
+
+现在 `gateway` 依赖的是一套语义接口：
+
+- `Open`
+- `Describe`
+- `Read`
+- `Write`
+- `Close`
+
+这套接口本身就要求 gateway 在上层先把协议 body 解释出来。
+
+因此如果不先改抽象，后面继续做压缩或 body 扩展，gateway 迟早还会被拉回解释层。
+
+## 3. 重构后的正式模型
+
+### 3.1 控制面保留在 gateway
+
+下面这些职责继续明确属于 gateway：
+
+- `AuthStart / AuthFinish`
+- `SessionOpen`
+- client connection ownership 校验
+- gateway session id 分配
+- gateway session id 与 upstream session id 映射
+- route 可用性判断
+- client-facing `ConnHeartbeat`
+- gateway-storer `LinkHeartbeat`
+- route 断开后的本地收束
+- client 断开后的本地收束
 
 固定口径：
 
-- 它是“任务回应面”，不是“驱动主动事件面”
-- 它仍然是 session 级消费入口
-- 它允许带 `TargetId / DiskRuntimeId / EventId / Status`
+- 这些能力不是透传能解决的问题
+- 它们就是 gateway 的正式职责
 
-#### B. `AkSessionNotice`
+### 3.2 数据面改为 opaque proxy
 
-职责：
+下面这些操作改成 opaque data proxy：
 
-- 承接 session 级异步通知
+- `SessionDescribe`
+- `ReadAt`
+- `WriteAt`
 
-当前只允许包含：
+“opaque” 的固定含义是：
 
-- `AkSessionNoticeBroken`
+- gateway 仍然校验通用 header 合法性
+- gateway 仍然校验 session ownership
+- gateway 仍然把 gateway session id 映射到 upstream session id
+- gateway 仍然改写 request id 以适配 route connection
+
+但除此之外：
+
+- gateway 不再解析这些 op 的 body
+- gateway 不再重建这些 op 的业务 body
+- gateway 不再翻译这些 op 的 `status_code`
+- gateway 不再决定这些 op 的 payload 形状
+
+### 3.3 notice 作为独立桥接面
+
+下面这些 notice 不归到纯控制或纯数据任一侧，而单独定义为 lifecycle notice bridge：
+
+- `SessionCloseNotice`
+- `SessionDataChangedNotice`
 
 固定口径：
 
-- 它不是任务回应
-- 它不归属任何单盘
-- 它和 `AkResponse` 分开维护、分开消费
+- 它们不是普通 request/response 数据面
+- 也不只是 auth/open 这类控制流程
+- 它们负责在 session 生命周期边界上传递事实
 
-#### C. 盘级 `event slot`
+### 3.4 gateway 是混合模型
 
-职责：
+因此本轮重构后的正式表述应当是：
 
-- 承接 `driver -> AppKernel` 的单盘主动事件上报
+- gateway 保留控制面
+- gateway 代理共享数据面
+- gateway 桥接生命周期 notice
 
-当前只允许包含：
+不再把 gateway 简化归类为单一角色。
 
-- `AkDiskEventSystemEjected`
+## 4. 固定边界
 
-固定口径：
+### 4.1 数据面代理的最小职责
 
-- 它是盘级主动上报面，不走 `AkResponse`
-- 它不走 `AkSessionNotice`
-- 它不与读写 slot、ACK、heartbeat 混用
+对 `SessionDescribe / ReadAt / WriteAt`，gateway 只允许做下面这些事：
 
-### 3.2 三类盘级通道
+1. 解析并校验通用 header
+2. 校验当前 gateway session 是否属于该 client connection
+3. 查表得到：
+   - `route_connection_id`
+   - `upstream_session_id`
+4. 改写发往上游的：
+   - `request_id`
+   - `session_id`
+5. 等待 route 响应
+6. 把 route 返回的：
+   - `status_code`
+   - `body`
+   原样带回 client-facing response
+7. 把 client-facing response 的：
+   - `request_id`
+   - `session_id`
+   改回 client 视角
 
-对单盘固定收成三类通道：
+### 4.2 数据面代理明确不做
 
-- `read slot`
-- `write slot`
-- `event slot`
+对 `SessionDescribe / ReadAt / WriteAt`，gateway 明确不再做：
 
-语义说明：
+- `ParseSessionDescribeResponseBody`
+- `ParseReadBody`
+- `ParseReadWriteBody`
+- 读取 `ReadAt` response body 内部结构
+- 重建 `WriteAt` request body
+- 重建 `ReadAt` response body
+- route `status_code -> internal error -> client status_code` 双重映射
+- 压缩决策
+- 解压后再压
 
-- `read slot`：驱动向上取读任务
-- `write slot`：驱动向上投递写任务
-- `event slot`：驱动向上报告该盘生命周期事件
+### 4.3 close notice 的双来源
 
-当前最小闭环固定为：
+`SessionCloseNotice` 固定允许两类来源：
 
-- 每盘 `event slot` 始终只保持 `1` 个在途
-- `event slot` 只承接一个事件记录，不做批处理
-- 当前盘级事件类型只有 `SystemEjected`
+#### A. 转发来源
 
-## 4. 公开 API 重建
+例如：
 
-### 4.1 `AkEvent` 整体删除
+- client 主动关闭 session
+- storer 主动关闭 session
 
-本轮直接删除旧公开语义：
+此时 gateway 的职责是：
 
-- `AK_EVENT_TYPE`
-- `AK_EVENT`
-- `AkWaitEvent`
-- `AkPollEvent`
+- 校验 session 所属关系
+- 改写 session id
+- 原样转发 notice body
 
-不做：
+#### B. gateway 合成来源
 
-- `AkWaitEvent` 保留为兼容壳
-- 旧 `AK_EVENT_TYPE` 继续承载新旧两种语义
+例如：
 
-### 4.2 新的 `AkResponse`
+- route lost
+- gateway 本地协议错误
+- client connection 死亡
+- gateway 主动替换 client connection
 
-建议公开面：
+此时 gateway 的职责是：
 
-```c
-typedef enum AK_RESPONSE_TYPE {
-    AkResponseDiskOnline = 0,
-    AkResponseDiskRemoved = 1,
-    AkResponseWriteFinalCommitted = 2,
-    AkResponseWriteFinalRejected = 3
-} AK_RESPONSE_TYPE;
+- 本地关闭映射
+- 生成合适的 `reason_code`
+- 向对侧补发 `SessionCloseNotice` 或向本地宿主投递 close 事实
 
-typedef struct AK_RESPONSE {
-    AK_RESPONSE_TYPE Type;
-    UINT32 TargetId;
-    UINT64 DiskRuntimeId;
-    UINT64 EventId;
-    UINT32 TotalSeq;
-    UINT32 Flags;
-    AK_STATUS Status;
-} AK_RESPONSE;
+### 4.4 `SessionDataChangedNotice` 的固定口径
 
-AK_STATUS AK_CALL AkWaitResponse(
-    AK_SESSION* session,
-    DWORD timeout_ms,
-    AK_RESPONSE* out_response);
+`SessionDataChangedNotice` 当前固定做桥接：
 
-AK_STATUS AK_CALL AkPollResponse(
-    AK_SESSION* session,
-    AK_RESPONSE* out_response);
-```
+- `storer -> gateway -> client`
 
-固定要求：
+gateway 在这条链上只做：
 
-- `AkResponse` 队列只承接任务回应
-- `SessionBroken` 不再进入 `AkResponse`
+- upstream session id 到 gateway session id 的映射
+- 目标 client connection 定位
 
-### 4.3 新的 `AkSessionNotice`
+当前不做：
 
-建议公开面：
+- body 解释
+- 聚合多个 notice
+- 变成普通 response
 
-```c
-typedef enum AK_SESSION_NOTICE_TYPE {
-    AkSessionNoticeBroken = 0
-} AK_SESSION_NOTICE_TYPE;
+### 4.5 本轮不做旧版兼容
 
-typedef struct AK_SESSION_NOTICE {
-    AK_SESSION_NOTICE_TYPE Type;
-    UINT32 Flags;
-    AK_STATUS Status;
-} AK_SESSION_NOTICE;
+固定前提：
 
-AK_STATUS AK_CALL AkWaitSessionNotice(
-    AK_SESSION* session,
-    DWORD timeout_ms,
-    AK_SESSION_NOTICE* out_notice);
+- `client`
+- `gateway`
+- `storer`
+- `whole`
 
-AK_STATUS AK_CALL AkPollSessionNotice(
-    AK_SESSION* session,
-    AK_SESSION_NOTICE* out_notice);
-```
+一起升级。
 
-固定要求：
+因此本轮不做：
 
-- 当前 notice 只有 `Broken`
-- `Broken` 只入一次队
-- session 状态依旧以 `AK_SESSION_STATE` 为真，不在外面再维护一份镜像
+- 新旧双栈并存
+- 按 peer 版本动态切换 gateway 行为
+- 旧语义接口兼容壳
 
-### 4.4 `AK_MEDIA_OPS` 重命名为 `AK_DISK_OPS`
+## 5. 新的接口模型
 
-本轮直接重命名：
+### 5.1 删除现有语义数据面抽象
 
-- `AK_MEDIA_OPS` -> `AK_DISK_OPS`
-- `media_ctx` -> `disk_ctx`
+当前这类语义接口应该退出 gateway 数据面主线：
 
-建议公开面：
-
-```c
-typedef enum AK_DISK_EVENT_TYPE {
-    AkDiskEventSystemEjected = 0
-} AK_DISK_EVENT_TYPE;
-
-typedef struct AK_DISK_EVENT {
-    AK_DISK_EVENT_TYPE Type;
-    UINT32 TargetId;
-    UINT64 DiskRuntimeId;
-    UINT32 Flags;
-    AK_STATUS Status;
-} AK_DISK_EVENT;
-
-typedef struct AK_DISK_OPS {
-    AK_STATUS(AK_CALL* read_bytes)(
-        void* disk_ctx,
-        const AK_READ_OP* op,
-        void* out_buffer,
-        UINT32* out_data_length);
-
-    AK_STATUS(AK_CALL* stage_write)(
-        void* disk_ctx,
-        const AK_WRITE_OP* op,
-        const void* data_buffer,
-        UINT32 data_length);
-
-    VOID(AK_CALL* on_event)(
-        void* disk_ctx,
-        const AK_DISK_EVENT* event_record);
-} AK_DISK_OPS;
-```
-
-固定要求：
-
-- `on_event` 是盘级主动事件入口
-- `on_event` 不返回状态，不向驱动回 ACK
-- `on_event` 不承接长阻塞行为，宿主需要自行转异步
-
-## 5. 协议与缓冲区重建
-
-### 5.1 当前口径
-
-本轮只新增盘级 `event slot` 通道，不重写现有读写 slot 主线。
-
-也就是说：
-
-- 现有 `PostReadSlot / PostWriteSlot` 保持
-- 现有读写 ACK 保持
-- 新增一条独立的 `PostEventSlot / SubmitEventSlot`
-
-这样收的原因：
-
-- 当前重建重点是语义拆分与驱动主动上行
-- 不在本轮同时重写整条读写 slot 协议
-- 保持改动聚焦，避免重建范围失控
-
-### 5.2 新增协议命令
-
-建议新增：
-
-- `YumeDiskCommandPostEventSlot`
-- `YumeDiskCommandSubmitEventSlot`
-
-固定要求：
-
-- 不把 `event slot` 塞进现有 `YumeDiskCommandSubmitSlot`
-- 不新增 `YumeDiskSlotTypeEvent` 去糊现有读写数据面
-- `event slot` 独立成 dedicated 命令对
-
-### 5.3 新增驱动事件负载
-
-建议新增 transport 负载：
-
-```c
-typedef enum _YUMEDISK_DISK_EVENT_KIND {
-    YumeDiskDiskEventSystemEjected = 0
-} YUMEDISK_DISK_EVENT_KIND;
-
-typedef struct _YUMEDISK_DISK_EVENT {
-    UINT32 EventKind;
-    UINT32 Flags;
-    LONG Status;
-    UINT32 Reserved0;
-} YUMEDISK_DISK_EVENT, *PYUMEDISK_DISK_EVENT;
-```
-
-### 5.4 缓冲区大小
-
-固定为：
-
-- `sizeof(YUMEDISK_DISK_EVENT) == 16`
-
-固定要求：
-
-- 当前 `event slot` 直接回填一个固定 16 字节事件记录
-- 不做变长 payload
-- 不做批量事件数组
-- 不在 transport payload 中重复携带 `TargetId / DiskRuntimeId`
+- `Describe(...)`
+- `Read(...)`
+- `Write(...)`
 
 原因：
 
-- `event slot` 本身已经绑定到单盘
-- `TargetId / DiskRuntimeId` 应由 `AppKernel` 在本地 runtime 上下文中补齐
-- 当前只有 `SystemEjected` 一种事件，不需要更大缓冲区
+- 它们要求 gateway 先解释协议 body
+- 它们让远端 storer 和本地 whole 都被迫暴露“语义读写接口”
+- 它们会持续阻碍协议 body 演进
 
-### 5.5 在途数量
+### 5.2 新的 route proxy 抽象
 
-固定为：
+gateway 数据面对上游 route 的正式抽象，建议收成：
 
-- 每盘 `1` 个在途 `event slot`
+```go
+type RouteSessionProxy interface {
+    Open(connectionID uint64, entry route.Entry) (uint64, error)
 
-不做：
+    RoundTrip(
+        routeConnectionID uint64,
+        upstreamSessionID uint64,
+        opCode uint8,
+        requestBody []byte,
+    ) (statusCode uint16, responseBody []byte, err error)
 
-- 每盘多个并行 `event slot`
-- session 级全局 `event slot`
-- `event slot` cancel 语义
+    SendNotice(
+        routeConnectionID uint64,
+        upstreamSessionID uint64,
+        opCode uint8,
+        noticeBody []byte,
+    ) error
 
-## 6. 驱动侧需要做的重建
+    CloseConnection(connectionID uint64)
+}
+```
 
-### 6.1 `shared proto`
+固定口径：
+
+- `RoundTrip` 是 route-facing raw proxy 能力
+- `requestBody / responseBody` 都是 opaque bytes
+- `statusCode` 直接来自上游 route response
+- gateway 不通过这个接口暴露 `Read / Write / Describe`
+
+### 5.3 `whole` 本地导出的定位
+
+`whole` 本地导出不是网络 peer，但也应当实现同一套 `RouteSessionProxy` 抽象。
+
+固定口径：
+
+- gateway 上层只看到统一的 route proxy 接口
+- 本地导出可以在接口实现内部继续直连 `session.Service`
+- 但这种语义解释必须留在 adapter 内部，而不是暴露给 gateway 主流程
+
+这意味着：
+
+- `LocalAdapter` 可以继续内部调用 `Open / Describe / Read / Write`
+- 但 gateway 不能再依赖 `LocalAdapter` 暴露这些语义方法
+
+## 6. 协议处理口径
+
+### 6.1 `SessionOpen`
+
+`SessionOpen` 继续属于控制面。
+
+gateway 需要继续负责：
+
+- `auth_id -> disk_id`
+- `disk_id -> route`
+- 向 route 打开 upstream session
+- 建立 gateway session 映射
+
+本轮不把 `SessionOpen` 改成透传。
+
+### 6.2 `SessionDescribe`
+
+`SessionDescribe` 改成 route proxy：
+
+- gateway 不再解析 response body
+- gateway 不再重建 metadata body
+- 上游返回什么 body，就带什么 body 回 client
+
+### 6.3 `ReadAt`
+
+`ReadAt` 改成 route proxy：
+
+- gateway 不再解析 request body
+- gateway 不再解析 response body
+- 上游返回的 `status_code + body` 原样传给 client
+
+这样后续即使 `ReadAt response` 变成：
+
+- `compress:u8 + payload`
+
+gateway 也无需改动。
+
+### 6.4 `WriteAt`
+
+`WriteAt` 改成 route proxy：
+
+- gateway 不再解析 request body
+- gateway 不再重建下游 write body
+- 上游返回的 `status_code` 原样传给 client
+
+这样后续即使 `WriteAt request` 变成：
+
+- `offset + length + compress + payload`
+
+gateway 也无需改动。
+
+### 6.5 `SessionCloseNotice`
+
+固定规则如下：
+
+- client 主动发 close：gateway 校验 ownership 后，原样保留 body，转发给 storer
+- storer 主动发 close：gateway 改写 session id 后，原样保留 body，转发给 client
+- route 直接断开没发 close：gateway 本地合成 close
+- client connection 直接死亡：gateway 本地收束 upstream session，并按策略决定是否补发 close
+
+### 6.6 `SessionDataChangedNotice`
+
+固定规则如下：
+
+- notice body 保持 opaque
+- 当前 body 为空，但 gateway 不把它硬编码为“必须由语义层构造”
+- gateway 只做 session id 映射和目标连接定位
+
+## 7. 失败路径模型
+
+### 7.1 route lost
+
+发生 route lost 时：
+
+- gateway 关闭该 route 下全部 gateway session 映射
+- 向对应 client 发 `SessionCloseNotice(route lost)`
+
+这仍然属于 gateway 的正式职责，不属于数据面透传。
+
+### 7.2 client disconnect
+
+发生 client disconnect 时：
+
+- gateway 清理该 client connection 拥有的全部 gateway session
+- 尝试向上游发 close 或直接本地收束
+
+固定要求：
+
+- 不把“client 已死”这类事实交给 storer 侧自己猜
+
+### 7.3 协议错误
+
+若某个 client-facing request：
+
+- header 非法
+- flags 非法
+- session ownership 非法
+
+则 gateway 仍可在本地拒绝，不进入 route proxy。
+
+但一旦进入 route proxy：
+
+- 对于上游返回的业务 `status_code`
+- gateway 不再做语义翻译
+
+### 7.4 上游 session 不可用
+
+若 route 返回：
+
+- `SessionUnavailable`
+- `IOOutOfRange`
+- `IOLarge`
+- `IOReadOnly`
+- `IOFailed`
+
+则 gateway 直接把相同 `status_code` 返回给 client。
+
+不再经过中间错误映射层。
+
+## 8. 代码侧需要做的重构
+
+### 8.1 `server/internal/gateway/client`
 
 需要修改：
 
-- `YUMEDISK_COMPONENT_VERSION_BE` -> `0.1.1.0`
-- 新增 `PostEventSlot / SubmitEventSlot`
-- 新增 `YUMEDISK_DISK_EVENT_KIND`
-- 新增 `YUMEDISK_DISK_EVENT`
-
-需要删除或避免的做法：
-
-- 不给旧 `AkEvent` 留协议兼容桥
-- 不给 `event slot` 做“也能走 SubmitSlot”的双入口
-
-### 6.2 `YumeDiskKMDF`
-
-需要新增：
-
-- 每盘 pending `event slot` request 状态
-- `PostEventSlot` 的 request 校验、入挂与关闭清理
-- `SubmitEventSlot` 的 miniport 异步提交通道
-- file/session 关闭时对 pending `event slot` 做一致清理
+- `SessionDataPlane` 语义接口退出数据面主线
+- `HandleDescribe / HandleRead / HandleWrite` 改成统一的 proxy helper
+- `HandleSessionCloseNotice` 改成保留 notice body 的桥接逻辑
 
 固定要求：
 
-- `event slot` 按盘绑定，不做 session 级混合队列
-- 同一盘同时最多挂一个 pending `event slot`
-- 如果重复投递，边界入口直接拒绝
+- `Describe / Read / Write` 不再调用语义化 `sessions.Describe / Read / Write`
+- 这三类 op 的 body 在 gateway 主流程中保持 opaque bytes
 
-### 6.3 `YumeDiskSCSI`
-
-本轮只做“盘级 `event slot` 基础设施”，不在本任务内实现真正的系统弹出源。
-
-需要新增：
-
-- 单盘 pending `event slot` 记录
-- `SubmitEventSlot` 的接收、挂起、完成
-- 盘删除 / session close / 驱动故障时的 pending `event slot` 清理
-
-当前明确不做：
-
-- 真正的 Windows 系统弹出接入
-- `SCSIOP_START_STOP_UNIT` 的完整弹出语义
-- 设备可弹出能力注册
-
-这些都属于后续 `todo-eject.md`。
-
-## 7. AppKernel 需要做的重建
-
-### 7.1 session 公开面拆分
-
-需要新增：
-
-- response queue
-- session notice queue
-
-需要删除：
-
-- 旧统一 `event queue` 公开语义
-
-固定要求：
-
-- `DiskOnline / DiskRemoved / WriteFinal*` 走 response queue
-- `SessionBroken` 走 notice queue
-- 不允许一个类型同时进两条队列
-
-### 7.2 disk runtime 结构重建
+### 8.2 `server/internal/gateway/storer`
 
 需要修改：
 
-- `AK_MEDIA_OPS` -> `AK_DISK_OPS`
-- `media_ctx` -> `disk_ctx`
-- `AkCreateDisk(...)` 签名及其内部引用
-
-需要新增：
-
-- 每盘 event worker
-- 每盘固定 `1` 个 posted `event slot`
-- `event slot` 完成后调用 `AK_DISK_OPS.on_event`
+- `DataPlane()` 改成提供 route proxy 能力，而不是语义数据面
+- `roundTripData(...)` 升级成 raw `RoundTrip(...)`
+- `Close(...)` 升级成 raw `SendNotice(...)`
 
 固定要求：
 
-- event worker 属于 disk runtime，而不是 session 全局 worker
-- 盘关闭时必须先停 event worker，再做 disk destroy
-- `on_event` 只在盘仍然存活时调用
+- route 返回的 `status_code` 不再映射成内部错误
+- route 返回的 response body 不再在 gateway-storer 层解析
 
-### 7.3 response 生产端调整
+### 8.3 `server/internal/storer/gateway/local_adapter.go`
 
-需要重命名并重接：
+需要修改：
 
-- 原 `AkEventDiskOnline` -> `AkResponseDiskOnline`
-- 原 `AkEventDiskRemoved` -> `AkResponseDiskRemoved`
-- 原 `AkEventWriteFinalCommitted` -> `AkResponseWriteFinalCommitted`
-- 原 `AkEventWriteFinalRejected` -> `AkResponseWriteFinalRejected`
-
-### 7.4 session broken 生产端调整
-
-需要重命名并重接：
-
-- 原 `AkEventSessionBroken` -> `AkSessionNoticeBroken`
+- `LocalAdapter` 实现 route proxy 抽象
+- gateway 不再直接依赖它的 `Describe / Read / Write`
 
 固定要求：
 
-- 只允许由 session 失效路径注入
-- 不允许 disk runtime 伪造 session notice
+- 允许 `LocalAdapter` 在内部解释语义
+- 但这只是 adapter 的实现细节，不再暴露给 gateway 主流程
 
-### 7.5 本轮不做的 AppKernel 行为
+### 8.4 session registry
 
-本轮重建阶段不做：
+当前 session registry 基本模型可保留：
 
-- 任何真实 `AkDiskEventSystemEjected` 生产
-- 任何系统弹出后的宿主策略
-- 任何 `tauri-client` UI 变化
+- gateway session id
+- client connection id
+- route connection id
+- upstream session id
 
-本轮只把语义、接口、线程模型、transport 链路搭好。
+需要继续承接的职责：
 
-## 8. BackendRust / rust-cli 需要同步的最小改动
+- ownership 校验
+- route session 到 gateway session 的反查
+- route lost / client disconnect 时批量清理
 
-虽然本清单聚焦 `AppKernel + driver`，但公开 API 改名后，消费端必须同步收口。
+本轮不要求重写整个 registry。
 
-### 8.1 BackendRust
+### 8.5 runtime notice 发射
 
-需要同步：
+`gateway/runtime.go` 里的：
 
-- FFI 绑定从 `AkEvent` 切到 `AkResponse`
-- 新增 `AkSessionNotice` FFI 绑定
-- `DiskRuntime` 创建时把 `AK_DISK_OPS.on_event` 接上
-- 当前先把 `AkDiskEventSystemEjected` 作为空实现入口收好，不在本轮做完整 eject 行为
+- `NotifySessionClosed`
+- `NotifySessionDataChanged`
 
-### 8.2 rust-cli
+整体方向可保留。
 
-需要同步：
+需要确认的只是：
 
-- 原 host event 消费口改为 response + notice 两条消费口
-- 编译通过当前命令集
-- 不在本轮加入最终 eject 交互逻辑
+- 上游主动 notice 与 gateway 合成 notice 的边界更清楚
+- close body 不再在中途被重写成固定 `normal close`
 
-## 9. 与 `todo-eject.md` 的关系
+## 9. 与压缩工作的关系
 
-本清单是 `todo-eject.md` 的前置重建任务。
+本清单是 `todo-network-compression.md` 的前置任务。
 
 顺序固定为：
 
 1. 先完成本清单
-2. 确认 `AkResponse / AkSessionNotice / event slot` 三条链都已经收口
-3. 再进入 `todo-eject.md`
+2. 确认 `SessionDescribe / ReadAt / WriteAt` 已经 opaque proxy 化
+3. 确认 `SessionCloseNotice / SessionDataChangedNotice` 已经 bridge 化
+4. 再进入压缩面工作
 
-进入 `todo-eject.md` 后，才开始补：
+这样做的直接收益是：
 
-- `YumeDiskSCSI` 接受 Windows 系统弹出
-- 单盘清理
-- 完成 app 预投的 `event slot`
-- `AK_DISK_OPS.on_event` 收到 `AkDiskEventSystemEjected`
+- `ReadAt response = compress:u8 + payload` 时，gateway 不需要改
+- `WriteAt request = offset + length + compress + payload` 时，gateway 不需要改
+- client 与 storer 可以独立决定数据面 body 形状
 
 ## 10. 分阶段执行建议
 
-### Phase A. 文档与协议口径重建
+### Phase A. 文档与口径冻结
 
-- 更新 `docs/tmp/todo-reconstruction.md`
-- 更新 `shared proto` 命名与版本口径
-- 更新 `AppKernel` 头文件与 SDK 命名草案
+需要完成：
 
-完成标准：
-
-- 公开命名全部切到 `Response / SessionNotice / DiskEvent`
-- 版本号全部收口到 `0.1.1.0`
-
-### Phase B. AppKernel 内部语义拆分
-
-- 拆 response queue
-- 拆 session notice queue
-- 重命名现有生产端
-- `AK_MEDIA_OPS` 重命名为 `AK_DISK_OPS`
+- 重写 `docs/tmp/todo-reconstruction.md`
+- 在网络协议文档里明确 gateway 的混合模型表述
+- 明确压缩工作依赖本清单先完成
 
 完成标准：
 
-- `AkWaitResponse / AkPollResponse`
-- `AkWaitSessionNotice / AkPollSessionNotice`
-- 无 `AkWaitEvent / AkPollEvent` 留存
+- gateway 职责边界已经书面定案
+- 不再把 gateway 误表述为纯控制面或纯透明代理
 
-### Phase C. 驱动盘级 `event slot` 骨架
+### Phase B. route proxy 抽象落地
 
-- `KMDF` 接 `PostEventSlot`
-- `SCSI` 接 `SubmitEventSlot`
-- 每盘 `1` 个 pending `event slot`
-- 关闭 / 删盘 / session close 清理路径补齐
+需要完成：
 
-完成标准：
-
-- 整条 `event slot` 链能建立、能关闭、能编译
-- 当前允许“无事件长期挂起”
-
-### Phase D. AppKernel 每盘 event worker
-
-- disk runtime 启动 event worker
-- 常驻投递 `event slot`
-- 完成后调用 `AK_DISK_OPS.on_event`
+- 新增 `RouteSessionProxy` 或等价抽象
+- 退掉 gateway 主流程上的语义 `Describe / Read / Write` 依赖
+- `whole/local adapter` 与 remote storer 都挂到这套抽象下
 
 完成标准：
 
-- 每盘具备独立 `event slot` 生命周期
-- 不影响现有读写主线
+- gateway 主流程不再依赖语义数据面接口
 
-### Phase E. 消费端编译收口
+### Phase C. client-facing 数据面代理化
 
-- BackendRust 适配新 FFI
-- rust-cli 适配 response + notice
-- 编译通过
+需要完成：
+
+- `HandleDescribe`
+- `HandleRead`
+- `HandleWrite`
+
+三者改成统一 proxy helper。
 
 完成标准：
 
-- `cargo test`
-- `go test` 不受影响
-- Windows 相关编译可过
+- gateway 不再解析这三类 op 的 body
+- gateway 不再重建这三类 op 的业务 body
 
-### Phase F. 进入 `todo-eject.md`
+### Phase D. storer-facing route proxy 化
 
-- 在已经存在的盘级 `event slot` 之上实现真正的系统单盘弹出
+需要完成：
 
-## 11. 验证要求
+- route raw request 发送
+- route raw response 返回
+- `status_code` 直通
+- `SendNotice` 实现
 
-本清单完成时至少要验证：
+完成标准：
 
-- 公开 API 中已不存在 `AkEvent` 旧语义
-- `DiskOnline / DiskRemoved / WriteFinal*` 仍能正常返回到 response 面
-- `SessionBroken` 能正常从 notice 面取到
-- 每盘 `event slot` 能成功建立并在关闭路径被正确取消/清理
-- 不做真实 eject 时，整条 `event slot` 骨架长期空闲不应破坏读写
+- route 业务响应不再经过 gateway 状态映射层
 
-## 12. 明确禁止项
+### Phase E. notice bridge 收口
 
-- 不保留 `AkEvent` 兼容别名
-- 不让 `SessionBroken` 继续塞在 response 里
-- 不把 `DiskSystemEjected` 继续塞回 response 或 notice
-- 不把 `event slot` 做成 session 级全局事件口
-- 不给 `event slot` 做批处理和复杂 payload
-- 不在本轮顺手实现系统弹出行为
-- 不在本轮同时重写全部读写 slot 协议
+需要完成：
+
+- client -> storer close notice 原样保留 body
+- storer -> client close notice 原样保留 body
+- route lost / client disconnect / protocol error 的合成 close 逻辑收清
+- `SessionDataChangedNotice` 保持 session 映射桥接
+
+完成标准：
+
+- close notice 的“转发来源”和“gateway 合成来源”边界清楚
+
+### Phase F. `whole` 兼容路径收口
+
+需要完成：
+
+- `LocalAdapter` 挂接 route proxy 抽象
+- `whole` 运行模式在 proxy 化后仍然通过现有集成测试
+
+完成标准：
+
+- 本地 whole 路径与远端 storer 路径对 gateway 呈现相同的代理模型
+
+### Phase G. 测试补齐
+
+至少补下面这些测试：
+
+- `SessionDescribe` response body 透传
+- `ReadAt` response body 透传
+- `WriteAt` request body 透传
+- 上游未知或扩展 `status_code` 的直通行为
+- client close reason 原样保留
+- route lost 时 gateway 合成 close
+- `SessionDataChangedNotice` 的 session 映射桥接
+- `whole` 本地导出路径在 proxy 模型下继续成立
+
+完成标准：
+
+- 压缩工作需要的“gateway 不碰数据面 body”前提已被测试锁住
+
+## 11. 当前建议结论
+
+本清单当前建议固定为：
+
+- gateway 正式模型定义为：
+  - 控制面保留
+  - 数据面代理
+  - notice 桥接
+- `SessionDescribe / ReadAt / WriteAt` 从 gateway 语义层退出，改为 opaque proxy
+- `SessionCloseNotice / SessionDataChangedNotice` 单列为 lifecycle notice bridge
+- `whole/local adapter` 与 remote storer 统一收口到 route proxy 抽象
+- 压缩工作必须以后置方式依赖本清单
+
+这样收完后，后续真正做压缩时，gateway 才不会继续成为协议演进阻塞点。
