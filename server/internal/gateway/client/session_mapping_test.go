@@ -99,7 +99,7 @@ func TestGatewaySessionMappingHidesUpstreamSessionIDAndForwardsDescribe(t *testi
 	closeResp, err := handler.HandlePayload(state, buildNotice(
 		proto.OpSessionCloseNotice,
 		openHeader.SessionID,
-		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonGatewayShutdown),
 	))
 	if err != nil {
 		t.Fatalf("close notice: %v", err)
@@ -109,6 +109,9 @@ func TestGatewaySessionMappingHidesUpstreamSessionIDAndForwardsDescribe(t *testi
 	}
 	if dataPlane.lastCloseSessionID != dataPlane.openSessionID {
 		t.Fatalf("close used wrong upstream session id: %d", dataPlane.lastCloseSessionID)
+	}
+	if reason, err := proto.ParseSessionCloseNoticeBody(dataPlane.lastCloseBody); err != nil || reason != proto.SessionCloseReasonGatewayShutdown {
+		t.Fatalf("unexpected bridged close body: reason=%d err=%v", reason, err)
 	}
 }
 
@@ -151,6 +154,9 @@ func TestGatewaySessionMappingIsReleasedOnConnectionClose(t *testing.T) {
 	}
 	if dataPlane.lastCloseConnectionID != state.ConnectionID() {
 		t.Fatalf("close connection used wrong id: %d", dataPlane.lastCloseConnectionID)
+	}
+	if reason, err := proto.ParseSessionCloseNoticeBody(dataPlane.lastCloseBody); err != nil || reason != proto.SessionCloseReasonNormalClose {
+		t.Fatalf("unexpected synthesized close body on disconnect: reason=%d err=%v", reason, err)
 	}
 
 	readResp, err := handler.HandlePayload(state, buildRequest(proto.OpReadAt, 11, openHeader.SessionID, proto.BuildReadBody(0, 1)))
@@ -347,6 +353,45 @@ func TestGatewayRoundTripPassesThroughUnknownStatusCode(t *testing.T) {
 	}
 }
 
+func TestGatewayCloseConnectionWithReasonPassesThroughProtocolError(t *testing.T) {
+	t.Parallel()
+
+	const diskID = "DISK000000000001"
+	routes := &mappingRouteSource{
+		entry: route.Entry{
+			DiskID:       diskID,
+			RouteTarget:  "storer://conn-41",
+			ConnectionID: 41,
+			Connected:    true,
+		},
+	}
+	dataPlane := &mappingDataPlane{openSessionID: 155}
+
+	handler, err := NewHandler(routes, dataPlane)
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	state := handler.NewConnectionState(92)
+	authID := handler.grants.Issue(state.ConnectionID(), diskID, time.Now().Add(time.Minute))
+
+	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, proto.BuildSessionOpenRequestBody(authID)))
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	openHeader := mustParseGatewayHeader(t, openResp)
+	if openHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected open status: %d", openHeader.StatusCode)
+	}
+
+	handler.CloseConnectionWithReason(state.ConnectionID(), proto.SessionCloseReasonProtocolError)
+	if dataPlane.lastCloseSessionID != dataPlane.openSessionID {
+		t.Fatalf("close connection did not release upstream session: %d", dataPlane.lastCloseSessionID)
+	}
+	if reason, err := proto.ParseSessionCloseNoticeBody(dataPlane.lastCloseBody); err != nil || reason != proto.SessionCloseReasonProtocolError {
+		t.Fatalf("unexpected synthesized close body on protocol error: reason=%d err=%v", reason, err)
+	}
+}
+
 type mappingRouteSource struct {
 	entry route.Entry
 }
@@ -369,6 +414,7 @@ type mappingDataPlane struct {
 	lastReadSessionID     uint64
 	lastWriteSessionID    uint64
 	lastCloseSessionID    uint64
+	lastCloseBody         []byte
 	lastCloseConnectionID uint64
 }
 
@@ -411,6 +457,7 @@ func (p *mappingDataPlane) RoundTrip(routeConnectionID uint64, sessionID uint64,
 func (p *mappingDataPlane) SendNotice(routeConnectionID uint64, sessionID uint64, opCode uint8, body []byte) error {
 	if opCode == proto.OpSessionCloseNotice {
 		p.lastCloseSessionID = sessionID
+		p.lastCloseBody = bytes.Clone(body)
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 
+	connectionpkg "yumedisk/server/internal/gateway/client/connection"
 	"yumedisk/server/internal/proto"
 	serversession "yumedisk/server/internal/session"
 )
@@ -65,12 +66,12 @@ func (o *Opener) HandleSessionOpen(state ConnectionState, header proto.Header, b
 	})
 	if consumedDiskID, ok := o.grants.ConsumeDisk(authID); !ok || consumedDiskID != routeEntry.DiskID {
 		o.registry.Close(gatewaySessionID)
-		o.closeUpstreamSession(routeEntry.ConnectionID, upstreamSessionID)
+		o.closeUpstreamSession(routeEntry.ConnectionID, upstreamSessionID, proto.SessionCloseReasonNormalClose)
 		return proto.BuildErrorResponse(header, proto.StatusAuthIDInvalid), nil
 	}
 	if err := state.FinishSessionOpen(); err != nil {
 		o.registry.Close(gatewaySessionID)
-		o.closeUpstreamSession(routeEntry.ConnectionID, upstreamSessionID)
+		o.closeUpstreamSession(routeEntry.ConnectionID, upstreamSessionID, proto.SessionCloseReasonNormalClose)
 		return proto.BuildErrorResponse(header, proto.StatusInvalidRequest), nil
 	}
 
@@ -103,10 +104,10 @@ func (o *Opener) HandleConnHeartbeat(state ConnectionState, header proto.Header,
 
 func (o *Opener) HandleSessionCloseNotice(state ConnectionState, header proto.Header, body []byte) ([]byte, error) {
 	if header.SessionID == 0 {
-		return nil, fmt.Errorf("session close notice requires session id")
+		return nil, fmt.Errorf("%w: session close notice requires session id", connectionpkg.ErrProtocolViolation)
 	}
 	if _, err := proto.ParseSessionCloseNoticeBody(body); err != nil {
-		return nil, fmt.Errorf("session close notice body: %w", err)
+		return nil, fmt.Errorf("%w: session close notice body: %v", connectionpkg.ErrProtocolViolation, err)
 	}
 
 	record, ok := o.registry.LookupOwned(header.SessionID, state.ConnectionID())
@@ -146,8 +147,12 @@ func (o *Opener) HandleWrite(state ConnectionState, header proto.Header, body []
 }
 
 func (o *Opener) CloseConnection(connectionID uint64) {
+	o.CloseConnectionWithReason(connectionID, proto.SessionCloseReasonNormalClose)
+}
+
+func (o *Opener) CloseConnectionWithReason(connectionID uint64, reason uint16) {
 	for _, record := range o.registry.CloseConnection(connectionID) {
-		o.closeUpstreamSession(record.RouteConnectionID, record.UpstreamSessionID)
+		o.closeUpstreamSession(record.RouteConnectionID, record.UpstreamSessionID, reason)
 	}
 	o.sessions.CloseConnection(connectionID)
 }
@@ -181,12 +186,12 @@ func (o *Opener) handleProxyRoundTrip(header proto.Header, body []byte, record R
 	return proto.BuildResponseWithSessionID(header, status, header.SessionID, responseBody)
 }
 
-func (o *Opener) closeUpstreamSession(routeConnectionID uint64, upstreamSessionID uint64) {
+func (o *Opener) closeUpstreamSession(routeConnectionID uint64, upstreamSessionID uint64, reason uint16) {
 	_ = o.sessions.SendNotice(
 		routeConnectionID,
 		upstreamSessionID,
 		proto.OpSessionCloseNotice,
-		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonNormalClose),
+		proto.BuildSessionCloseNoticeBody(reason),
 	)
 }
 

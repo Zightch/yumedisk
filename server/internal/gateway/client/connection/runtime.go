@@ -8,12 +8,15 @@ import (
 	"net"
 
 	"yumedisk/server/internal/bootstrap"
+	"yumedisk/server/internal/proto"
 	"yumedisk/server/internal/transport"
 )
 
+var ErrProtocolViolation = errors.New("protocol violation")
+
 type Parent interface {
 	HandlePayload(state *State, payload []byte) ([]byte, error)
-	CloseConnection(connectionID uint64)
+	CloseConnectionWithReason(connectionID uint64, reason uint16)
 }
 
 type Watchdog interface {
@@ -80,7 +83,10 @@ func ServeAcceptedConnection(
 		defer watchdog.Stop()
 	}
 
-	defer handler.CloseConnection(state.ID)
+	closeReason := proto.SessionCloseReasonNormalClose
+	defer func() {
+		handler.CloseConnectionWithReason(state.ID, closeReason)
+	}()
 	if hooks.OnClosed != nil {
 		defer hooks.OnClosed(state)
 	}
@@ -95,6 +101,7 @@ func ServeAcceptedConnection(
 
 	select {
 	case <-ctx.Done():
+		closeReason = proto.SessionCloseReasonGatewayShutdown
 		_ = runtime.Close()
 		<-done
 	case err := <-watchdogErr:
@@ -104,8 +111,17 @@ func ServeAcceptedConnection(
 			log.Printf("%s connection %d heartbeat timeout: %v", logPrefix, state.ID, err)
 		}
 	case err := <-done:
+		if isProtocolViolation(err) {
+			closeReason = proto.SessionCloseReasonProtocolError
+		}
 		if err != nil && !errors.Is(err, net.ErrClosed) {
 			log.Printf("%s connection %d runtime: %v", logPrefix, state.ID, err)
 		}
 	}
+}
+
+func isProtocolViolation(err error) bool {
+	return errors.Is(err, ErrProtocolViolation) ||
+		errors.Is(err, transport.ErrPayloadOutOfRange) ||
+		errors.Is(err, transport.ErrBufferTooSmall)
 }

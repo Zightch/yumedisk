@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	clientauth "yumedisk/server/internal/gateway/client/auth"
+	connectionpkg "yumedisk/server/internal/gateway/client/connection"
 	clientsession "yumedisk/server/internal/gateway/client/session"
 	"yumedisk/server/internal/proto"
 )
@@ -51,20 +52,20 @@ func (h *Handler) Bind(state *ConnectionState) *ConnectionHandler {
 func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte, error) {
 	header, err := proto.ParseHeader(payload)
 	if err != nil {
-		return nil, fmt.Errorf("connection %d parse header: %w", state.ID, err)
+		return nil, fmt.Errorf("%w: connection %d parse header: %v", connectionpkg.ErrProtocolViolation, state.ID, err)
 	}
 	body := payload[proto.HeaderSize:]
 
 	if header.Flags == proto.FlagNotice {
 		if err := proto.ValidateNoticeHeader(header); err != nil {
-			return nil, fmt.Errorf("connection %d validate notice: %w", state.ID, err)
+			return nil, fmt.Errorf("%w: connection %d validate notice: %v", connectionpkg.ErrProtocolViolation, state.ID, err)
 		}
 
 		switch header.OpCode {
 		case proto.OpSessionCloseNotice:
 			return h.sessionOpener.HandleSessionCloseNotice(state, header, body)
 		default:
-			return nil, fmt.Errorf("connection %d unsupported notice op: %d", state.ID, header.OpCode)
+			return nil, fmt.Errorf("%w: connection %d unsupported notice op: %d", connectionpkg.ErrProtocolViolation, state.ID, header.OpCode)
 		}
 	}
 
@@ -93,8 +94,12 @@ func (h *Handler) HandlePayload(state *ConnectionState, payload []byte) ([]byte,
 }
 
 func (h *Handler) CloseConnection(connectionID uint64) {
+	h.CloseConnectionWithReason(connectionID, proto.SessionCloseReasonNormalClose)
+}
+
+func (h *Handler) CloseConnectionWithReason(connectionID uint64, reason uint16) {
 	h.grants.CloseConnection(connectionID)
-	h.sessionOpener.CloseConnection(connectionID)
+	h.sessionOpener.CloseConnectionWithReason(connectionID, reason)
 }
 
 func (h *Handler) CloseRouteConnection(routeConnectionID uint64, diskIDs []string) {
