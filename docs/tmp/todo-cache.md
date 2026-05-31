@@ -1,4 +1,4 @@
-# `cache` 组件实现与虚拟测试执行清单
+# `cache` 组件实现执行清单
 
 ## 0. 当前范围
 
@@ -7,9 +7,9 @@
 本轮总目标只有两个：
 
 - 把 `cache` 组件本身实现完整
-- 用本地虚拟测试座子把核心行为测通
+- 为后续接回 `NetworkMedia` 保留最薄适配面
 
-本轮不直接改 `NetworkMedia` 正式接线，不处理真实网络联调，不把 `DiskSession` 和网络错误类型带进 `cache`。
+本清单不承接虚拟测试座子、测试矩阵和 testhook 设计；这些内容已经独立收口到 [todo-test-socket.md](./todo-test-socket.md)。
 
 ## 1. 当前总目标
 
@@ -21,7 +21,6 @@
 4. `cache` 右侧始终只发块大小对齐、固定长度的 I/O
 5. resident 按 `2Q = FIFO + LRU` 管理
 6. dirty block 能经过 temp、flush、spilled、rehydrate 完成完整闭环
-7. 本地虚拟测试能覆盖命中、miss、提升、淘汰、temp、阻塞、重试等关键场景
 
 如果这个组件本身跑通，后续接回 `NetworkMedia` 只保留一层很薄的 `mux` 和接口适配。
 
@@ -47,8 +46,8 @@
 - 不让 `cache` 直接依赖 `BackendRust`
 - 不让 `cache` 直接依赖 `DiskSession`
 - 不让 `cache` 直接依赖网络错误类型
-- 不先做 `NetworkMedia` 接线
-- 不先做真实网络测试
+- 不先做 `NetworkMedia` 接线之外的上层业务拼装
+- 不先做真实网络联调
 
 ### 2.3 temp 目录口径
 
@@ -64,7 +63,7 @@
 
 ## 3. 实现原则
 
-本清单按 [开发原则](./docs/development/development-principles.md) 执行，重点如下：
+本清单按 [开发原则](../development/development-principles.md) 执行，重点如下：
 
 - 极简核心原则
   - 先跑通一条最小闭环：`read/write -> resident -> right-side aligned io`
@@ -73,8 +72,6 @@
   - resident / spilled / temp / active snapshot 各自只有一份真状态
 - 边界闸口原则
   - 右侧对齐和固定长度约束，只允许在 `cache` 右侧出口统一收口
-- 测试覆盖原则
-  - 每补一个关键状态流转，就同步补本地虚拟测试
 
 ## 4. 数据结构固定口径
 
@@ -243,7 +240,7 @@ resident block 主表固定按：
   - 统一断言右侧 `_at` I/O 必须块对齐、固定长度
 - [x] 定义基础错误类型
 
-验收标准：
+固定实现要求：
 
 - 同一套块计算同时服务读路径和写路径
 - 不在多个地方重复做块映射逻辑
@@ -276,9 +273,9 @@ resident block 主表固定按：
   - LRU 命中移到尾部
 - [x] 实现 victim 选择骨架
 
-验收标准：
+固定实现要求：
 
-- 不接磁盘 I/O，也能单测 2Q 行为
+- 不接磁盘 I/O，也能独立验证 2Q 行为
 - FIFO/LRU 状态不会分叉
 - FIFO -> LRU 提升不发生块数据内存拷贝
 - 不保存可以由唯一真状态直接推导出的派生字段
@@ -300,14 +297,6 @@ resident block 主表固定按：
 - [x] 读命中时更新 2Q
 - [x] 同块并发 read miss 不重复发右侧读
 
-测试重点：
-
-- [x] 单块命中
-- [x] 跨块读取
-- [x] 尾块读取
-- [x] 同块重复读取只触发一次右侧装载
-- [x] 所有右侧 `read_at` 都是块对齐、固定长度
-
 当前这一步已经完成。
 
 ## 5.5 第五阶段：最小写闭环
@@ -324,13 +313,6 @@ resident block 主表固定按：
 - [x] 写命中更新 2Q
 - [x] 同块 loading 期间的后续写不重复补块
 - [x] 先建立 pending patch 骨架
-
-测试重点：
-
-- [x] resident hit 写入
-- [x] write miss 补整块再 patch
-- [x] partial write 不会把右侧写成非整块
-- [x] 多次 patch 后 resident 数据正确
 
 当前这一步已经完成。
 
@@ -349,11 +331,7 @@ resident block 主表固定按：
 - [x] 实现“先写 temp，再清对应 dirty bit”的流程骨架
 - [x] 实现 dirty eviction 的 temp 前置规则
 
-测试重点：
-
-- [x] dirty eviction 前必须先存在 temp
-- [x] temp 写成功后才允许清对应 dirty bit
-- [x] spilled dirty 可重新读回 resident
+当前这一步已经完成。
 
 ## 5.7 第七阶段：flush worker 和周期策略
 
@@ -371,12 +349,6 @@ resident block 主表固定按：
 - [x] 固定处理优先级
   - 已有 temp
   - resident dirty 周期扫描
-
-测试重点：
-
-- [x] snapshot 成功后删除 temp
-- [x] snapshot 失败后保留 temp 并重试
-- [x] spilled dirty 发送成功后消失
 
 当前这一步已经完成。
 
@@ -397,46 +369,9 @@ resident block 主表固定按：
 - [x] terminal / stopping 时正确退出等待
 - [x] 等待 dirty eviction 的前台 miss 优先于 resident dirty 周期扫描
 
-测试重点：
+当前这一步已经完成。
 
-- [x] clean victim 不会被无谓阻塞
-- [x] dirty victim + temp 满时会阻塞
-- [x] temp 释放后等待 miss 能继续
-- [x] 周期扫描和前台 miss 的优先级正确
-
-## 5.9 第九阶段：虚拟测试座子
-
-目标：
-
-- 不走真实网络，先把 cache 组件本身彻底测透
-
-固定结构：
-
-- 左侧模拟 `BackendRust`
-- 右侧模拟 `DiskSession`
-- 数据后端可以是内存，也可以是本地测试文件
-
-任务：
-
-- [ ] 做一个右侧内存假设备
-- [ ] 做一个右侧文件假设备
-- [ ] 记录所有 `_at` 调用日志
-  - offset
-  - len
-  - read / write
-- [ ] 建立测试专用 temp 目录夹具
-- [ ] 建立左侧并发请求驱动工具
-- [ ] 建立故障注入点
-  - 右侧读失败
-  - 右侧写失败
-  - temp 写失败
-
-验收标准：
-
-- 每个关键策略都能在本地独立重现
-- 不需要真实网络也能复现核心状态流转
-
-## 5.10 第十阶段：接回 `NetworkMedia`
+## 5.9 第九阶段：接回 `NetworkMedia`
 
 目标：
 
@@ -458,23 +393,17 @@ resident block 主表固定按：
 2. 第三阶段：2Q 基础容器
 3. 第四阶段：最小读闭环
 4. 第五阶段：最小写闭环
-5. 第九阶段：先补第一轮虚拟测试
-6. 第六阶段：temp 文件和 dirty 基础状态
-7. 第七阶段：flush worker 和周期策略
-8. 第八阶段：淘汰、阻塞和排队
-9. 第九阶段：补完整虚拟测试矩阵
-10. 第十阶段：接回 `NetworkMedia`
+5. 第六阶段：temp 文件和 dirty 基础状态
+6. 第七阶段：flush worker 和周期策略
+7. 第八阶段：淘汰、阻塞和排队
+8. 独立推进 [todo-test-socket.md](./todo-test-socket.md)
+9. 第九阶段：接回 `NetworkMedia`
 
 ## 7. 当前建议
 
-当前最先开工的具体点，不是 flush，也不是 worker，而是下面 3 个：
+当前 `cache` 主线实现已经推进到第八阶段。
 
-1. 触达块计算
-2. 2Q 容器骨架
-3. 最小 read-only 闭环
+下一步建议是：
 
-原因很简单：
-
-- 这是最短可运行主路径
-- 这三步一旦跑通，后面写路径、dirty、temp 都有稳定落点
-- 如果这三步没稳，后面所有策略都会挂在空中
+1. 按 [todo-test-socket.md](./todo-test-socket.md) 把虚拟测试座子和 testhook 收稳
+2. 等 `cache` 自身行为测透后，再推进第九阶段接线
