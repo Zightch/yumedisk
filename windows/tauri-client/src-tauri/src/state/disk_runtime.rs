@@ -112,6 +112,12 @@ impl DiskRuntimeStore {
             .find(|runtime| runtime.local_disk_id() == local_disk_id)
     }
 
+    pub fn find_runtime_mut_by_target_id(&mut self, target_id: u32) -> Option<&mut DiskRuntime> {
+        self.runtimes
+            .iter_mut()
+            .find(|runtime| runtime.mounted_target_id() == Some(target_id))
+    }
+
     pub fn runtimes_mut(&mut self) -> std::slice::IterMut<'_, DiskRuntime> {
         self.runtimes.iter_mut()
     }
@@ -341,6 +347,11 @@ impl DiskRuntime {
 
     pub fn set_unmounted(&mut self) {
         self.state = DiskRuntimeStatus::Unmounted;
+    }
+
+    pub fn set_memory_invalid(&mut self, reason: String) {
+        self.state = DiskRuntimeStatus::Invalid { reason };
+        self.media = None;
     }
 
     pub fn set_file_unmounted(&mut self, capacity_bytes: u64, source_read_only: bool) {

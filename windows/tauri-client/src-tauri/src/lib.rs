@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use crate::backend::persistence_service;
 use crate::state::client_state::ClientState;
+use crate::workflow::backend_runtime;
 use crate::workflow::network_runtime;
 use crate::workflow::runtime_rescan;
 use tauri::image::Image;
@@ -82,41 +83,60 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-fn spawn_network_event_watcher(app: AppHandle) {
-    thread::spawn(move || loop {
-        thread::sleep(NETWORK_EVENT_POLL_INTERVAL);
+fn spawn_runtime_event_watcher(app: AppHandle) {
+    thread::spawn(move || {
+        loop {
+            thread::sleep(NETWORK_EVENT_POLL_INTERVAL);
 
-        let Some(state) = app.try_state::<ClientState>() else {
-            continue;
-        };
-        if state.is_exiting() {
-            break;
-        }
-        if state.is_runtime_rescan_running() {
-            continue;
-        }
+            let Some(state) = app.try_state::<ClientState>() else {
+                continue;
+            };
+            if state.is_exiting() {
+                break;
+            }
+            if state.is_runtime_rescan_running() {
+                continue;
+            }
 
-        let changed = {
-            let mut disk_catalog = state
-                .disk_catalog
-                .lock()
-                .expect("disk catalog mutex should not be poisoned");
-            let changed = network_runtime::sync_runtime_state(
-                &state.backend,
-                disk_catalog.runtime_store_mut(),
-                &state.network_client,
-            );
-            if changed {
-                let _ = persistence_service::save_client_state(
+            let (changed, app_session_event) = {
+                let mut disk_catalog = state
+                    .disk_catalog
+                    .lock()
+                    .expect("disk catalog mutex should not be poisoned");
+                let backend_result = backend_runtime::sync_runtime_state(
                     &state.backend,
-                    disk_catalog.runtime_store(),
+                    disk_catalog.runtime_store_mut(),
+                );
+                let network_changed = network_runtime::sync_runtime_state(
+                    &state.backend,
+                    disk_catalog.runtime_store_mut(),
+                    &state.network_client,
+                );
+                let changed = backend_result.runtime_changed || network_changed;
+                if changed {
+                    let _ = persistence_service::save_client_state(
+                        &state.backend,
+                        disk_catalog.runtime_store(),
+                    );
+                }
+                let app_session_event = backend_result.app_session_failed.map(|status_text| {
+                    backend_runtime::AppSessionRuntimeEvent {
+                        phase: "failed".to_string(),
+                        status_text,
+                    }
+                });
+                (changed, app_session_event)
+            };
+
+            if changed {
+                let _ = app.emit(runtime_rescan::RUNTIME_DISKS_CHANGED_EVENT, ());
+            }
+            if let Some(app_session_event) = app_session_event {
+                let _ = app.emit(
+                    backend_runtime::APP_SESSION_RUNTIME_CHANGED_EVENT,
+                    app_session_event,
                 );
             }
-            changed
-        };
-
-        if changed {
-            let _ = app.emit(runtime_rescan::RUNTIME_DISKS_CHANGED_EVENT, ());
         }
     });
 }
@@ -140,7 +160,7 @@ pub fn run() {
                 &single_instance_guard,
                 show_main_window,
             );
-            spawn_network_event_watcher(app.handle().clone());
+            spawn_runtime_event_watcher(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {

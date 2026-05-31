@@ -5,7 +5,11 @@ import type {
   HomeDiskListSnapshot,
   RuntimeRescanLifecycleEvent,
 } from "../../entities/disk/model";
-import type { AppSessionPhase, AppSessionSnapshot } from "../../entities/appSession/model";
+import type {
+  AppSessionPhase,
+  AppSessionRuntimeEvent,
+  AppSessionSnapshot,
+} from "../../entities/appSession/model";
 import {
   mountDisk,
   queryRuntimeRescanState,
@@ -45,6 +49,7 @@ export function useHomeBootstrap() {
   const initialAutoMountCompleted = ref(false);
   const actionLoadingDiskId = ref<string | null>(null);
   let stopNetworkRuntimeListener: (() => void) | null = null;
+  let stopAppSessionRuntimeListener: (() => void) | null = null;
   let stopRuntimeRescanListener: (() => void) | null = null;
   let rescanStatePollTimer: number | null = null;
   let rescanStateSyncInFlight = false;
@@ -250,6 +255,13 @@ export function useHomeBootstrap() {
     settleRescanWaiters();
   }
 
+  function handleAppSessionRuntimeEvent(payload: AppSessionRuntimeEvent) {
+    appSessionSnapshot.value = null;
+    appSessionPhase.value = payload.phase;
+    appSessionStatusText.value = payload.statusText;
+    diskDisplayPhase.value = "startup";
+  }
+
   function waitForActiveRescan(): Promise<void> {
     if (!rescanLoading.value) {
       return Promise.resolve();
@@ -340,6 +352,12 @@ export function useHomeBootstrap() {
           preserveSnapshotOnError: true,
         });
       });
+      stopAppSessionRuntimeListener = await listen<AppSessionRuntimeEvent>(
+        "app-session-runtime-changed",
+        (event) => {
+          handleAppSessionRuntimeEvent(event.payload);
+        },
+      );
       stopRuntimeRescanListener = await listen<RuntimeRescanLifecycleEvent>(
         "runtime-rescan-state-changed",
         (event) => {
@@ -356,6 +374,8 @@ export function useHomeBootstrap() {
   onUnmounted(() => {
     stopNetworkRuntimeListener?.();
     stopNetworkRuntimeListener = null;
+    stopAppSessionRuntimeListener?.();
+    stopAppSessionRuntimeListener = null;
     stopRuntimeRescanListener?.();
     stopRuntimeRescanListener = null;
     clearRescanStatePolling();
