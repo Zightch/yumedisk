@@ -46,6 +46,8 @@ export function useHomeBootstrap() {
   const actionLoadingDiskId = ref<string | null>(null);
   let stopNetworkRuntimeListener: (() => void) | null = null;
   let stopRuntimeRescanListener: (() => void) | null = null;
+  let rescanStatePollTimer: number | null = null;
+  let rescanStateSyncInFlight = false;
   let rescanWaiters: Array<{
     resolve: () => void;
     reject: (error: Error) => void;
@@ -100,6 +102,7 @@ export function useHomeBootstrap() {
     try {
       const result = await rescanRuntimeDisks();
       rescanLoading.value = result.running;
+      ensureRescanStatePolling();
 
       if (options.awaitCompletion !== false && result.running) {
         await waitForActiveRescan();
@@ -167,7 +170,18 @@ export function useHomeBootstrap() {
     return errorTextValue ?? "重扫磁盘运行态失败";
   }
 
+  function clearRescanStatePolling(): void {
+    if (rescanStatePollTimer === null) {
+      return;
+    }
+
+    window.clearInterval(rescanStatePollTimer);
+    rescanStatePollTimer = null;
+  }
+
   function settleRescanWaiters(errorTextValue: string | null = null) {
+    clearRescanStatePolling();
+
     const waiters = rescanWaiters;
     rescanWaiters = [];
 
@@ -179,9 +193,49 @@ export function useHomeBootstrap() {
     waiters.forEach((waiter) => waiter.reject(new Error(errorTextValue)));
   }
 
+  function scheduleRescanWaiterFallbackResolve(): void {
+    window.setTimeout(() => {
+      if (rescanLoading.value) {
+        return;
+      }
+
+      settleRescanWaiters();
+    }, 200);
+  }
+
+  async function syncRuntimeRescanState(): Promise<void> {
+    if (rescanStateSyncInFlight) {
+      return;
+    }
+
+    rescanStateSyncInFlight = true;
+
+    try {
+      const snapshot = await queryRuntimeRescanState();
+      rescanLoading.value = snapshot.running;
+      if (!snapshot.running) {
+        clearRescanStatePolling();
+        scheduleRescanWaiterFallbackResolve();
+      }
+    } finally {
+      rescanStateSyncInFlight = false;
+    }
+  }
+
+  function ensureRescanStatePolling(): void {
+    if (!rescanLoading.value || rescanStatePollTimer !== null) {
+      return;
+    }
+
+    rescanStatePollTimer = window.setInterval(() => {
+      void syncRuntimeRescanState();
+    }, 500);
+  }
+
   function handleRuntimeRescanLifecycleEvent(payload: RuntimeRescanLifecycleEvent) {
     if (payload.phase === "started") {
       rescanLoading.value = true;
+      ensureRescanStatePolling();
       return;
     }
 
@@ -294,6 +348,7 @@ export function useHomeBootstrap() {
       );
       const snapshot = await queryRuntimeRescanState();
       rescanLoading.value = snapshot.running;
+      ensureRescanStatePolling();
       await bootstrapHomePage();
     })();
   });
@@ -303,6 +358,7 @@ export function useHomeBootstrap() {
     stopNetworkRuntimeListener = null;
     stopRuntimeRescanListener?.();
     stopRuntimeRescanListener = null;
+    clearRescanStatePolling();
     settleRescanWaiters("页面已关闭");
   });
 

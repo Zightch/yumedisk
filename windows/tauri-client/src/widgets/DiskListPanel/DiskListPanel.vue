@@ -43,7 +43,7 @@ const diskCount = computed(() => props.disks.length);
             :disabled="interactionDisabled"
             @click="emit('rescan')"
           >
-            <el-icon>
+            <el-icon v-if="!rescanLoading">
               <RefreshRight />
             </el-icon>
           </el-button>

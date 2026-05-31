@@ -1,39 +1,75 @@
-# `ReadAt / WriteAt` 数据压缩草案
+# `ReadAt / WriteAt` 压缩实施清单
 
-## 0. 当前范围
+## 0. 定位
 
-本草案只讨论网络数据面里的 `ReadAt / WriteAt` 数据压缩。
+这份清单不再讨论“要不要压缩”，而只讨论按当前已定口径如何分阶段落地。
 
-这里的“数据压缩”固定只指：
+当前前置条件已经成立：
+
+- `docs/tmp/todo-reconstruction.md` 已完成
+- gateway 已收口为：
+  - 控制面保留
+  - 数据面 opaque proxy
+  - notice bridge
+
+因此后续压缩工作固定建立在下面这个前提上：
+
+- client 构造的 `WriteAt` body 可以经 gateway 原样代理到 storer
+- storer 返回的 `ReadAt` body 可以经 gateway 原样代理到 client
+- gateway 不参与压缩编解码
+
+## 1. 已定口径
+
+### 1.1 transport 与 `60KiB` 语义
+
+固定事实：
+
+- transport 单帧 `payload` 上限仍然是 `65536` 字节
+- `60KiB` 指的是共享数据面的“逻辑数据负载上限”
+- 这个“逻辑数据负载”只计算解码后的真实数据字节数
+- 它不计算：
+  - `offset`
+  - `length`
+  - `compress`
+  - 协议业务头
+  - transport 帧头
+
+也就是说：
+
+- `ReadAt.length <= 60KiB`
+- `WriteAt.length <= 60KiB`
+
+其中 `length` 的语义固定为：
+
+- 表示解码后的真实数据长度
+
+剩余约 `4KiB` 明确留给下面这些东西承载：
+
+- 业务固定头
+- 压缩封装字段
+- 压缩后 payload 的波动余量
+- 后续必要扩展
+
+这部分余量不进入 `max_io_bytes` 语义。
+
+### 1.2 压缩范围
+
+本轮固定只压下面两处数据负载：
 
 - `WriteAt` 请求里的数据负载
 - `ReadAt` 成功响应里的数据负载
 
-这里明确不做：
+明确不做：
 
 - transport 整帧压缩
-- 通用业务头压缩
+- 通用协议头压缩
 - `Auth / SessionOpen / SessionDescribe / Notice` 压缩
-- 旧版本兼容
 - 多帧重组
-- 字典压缩
+- 旧版本兼容
 
-## 1. 当前总目标
+### 1.3 明文边界
 
-按最小核心闭环，把压缩方案先收成下面几件事：
-
-1. 只在真正有数据负载的 `ReadAt / WriteAt` 上引入压缩
-2. 除 `payload` 外，其余字段继续保持明文固定格式
-3. 不兼容旧版本，直接切到新协议形状
-4. 首版只引入一套主压缩器，不同时维护多套通用压缩算法
-5. 压缩编解码职责只落在 client 与 storer
-6. gateway 只依赖前置的 opaque data proxy 重构结果，不再参与压缩解码或重编码
-
-## 2. 固定边界
-
-### 2.1 明文边界
-
-下列字段不进入压缩：
+下面这些字段全部继续保持明文：
 
 - `session_id`
 - `request_id`
@@ -42,179 +78,16 @@
 - `length`
 - `compress`
 
-换句话说，只有最终数据字节会被压缩，协议控制字段全部继续走正常明文。
+只有最终数据负载允许进入压缩。
 
-### 2.2 不做旧版兼容
+### 1.4 gateway 职责边界
 
-本轮固定前提：
+压缩职责固定只落在：
 
-- `docs/tmp/todo-reconstruction.md` 已完成
-- `client`
-- `gateway`
-- `storer`
+- client
+- storer
 
-协议版本仍按三边一起升级处理。
-
-但压缩职责固定收口为：
-
-- `client` 负责 client-facing 压缩编解码
-- `storer` 负责 storer-facing 压缩编解码
-- `gateway` 只负责共享数据面的 opaque proxy，不参与压缩编解码
-
-因此本轮不做：
-
-- 能力协商
-- 新旧协议双栈并存
-- 按 peer 版本动态切换 body 形状
-
-### 2.3 首版不做复杂压缩矩阵
-
-首版不引入：
-
-- 哈夫曼单独编码
-- 纯 LZ 自定义实现
-- `gzip / deflate`
-- `brotli`
-- `lz4`
-
-首版只保留：
-
-- `raw`
-- `zstd`
-
-原因很直接：
-
-- `512B ~ 60KiB` 的范围里，单独哈夫曼很容易被码表成本吃掉
-- 纯 LZ 或 `deflate` 的工程复杂度并不比 `zstd` 更低
-- `zstd` 已经覆盖了“LZ + 熵编码”的主流收益区间
-- 先把一套压缩器走通，更符合当前项目的极简核心原则
-
-### 2.4 依赖 gateway 数据面先代理化
-
-本草案固定依赖 `todo-reconstruction.md` 先完成。
-
-也就是说在进入压缩实现前，gateway 已经满足：
-
-- `SessionDescribe / ReadAt / WriteAt` 走 opaque data proxy
-- `SessionCloseNotice / SessionDataChangedNotice` 走 notice bridge
-- gateway 不再解析 `ReadAt / WriteAt` 业务 body
-- gateway 不再重建 `ReadAt / WriteAt` 业务 body
-
-因此本草案的正式前提不是“gateway 解压后再压”，而是：
-
-- client 构造的 `WriteAt` 压缩 body 可以经 gateway 原样代理到 storer
-- storer 返回的 `ReadAt` 压缩 body 可以经 gateway 原样代理到 client
-
-## 3. 压缩码表
-
-`compress` 固定为 `u8`，当前定义如下：
-
-| 码值 | 含义 |
-| --- | --- |
-| `0` | `raw` |
-| `1` | `zstd-1` |
-| `2` | `zstd-3` |
-| `255` | `solid-byte block` |
-
-当前固定事实：
-
-- `3..254` 暂不使用
-- `compress=255` 时，`payload` 固定长度为 `1`
-- `compress=255` 时，`payload[0]` 表示“当前块所有字节都等于这个值”
-- `compress=255` 时，解码结果长度固定由 `length` 决定，而不是由 `payload` 自带
-
-## 4. 协议形状
-
-### 4.1 `ReadAt` 请求 body
-
-`ReadAt` 请求不带压缩字段，仍然保持固定 `12` 字节：
-
-| 偏移 | 长度 | 字段 | 类型 |
-| --- | --- | --- | --- |
-| `0` | 8 | `offset` | `u64` |
-| `8` | 4 | `length` | `u32` |
-
-### 4.2 `ReadAt` 成功响应 body
-
-`ReadAt` 成功响应改为：
-
-| 偏移 | 长度 | 字段 | 类型 |
-| --- | --- | --- | --- |
-| `0` | 1 | `compress` | `u8` |
-| `1` | `N` | `payload` | `bytes[N]` |
-
-语义固定为：
-
-- `compress=0` 时，`payload` 就是原始数据
-- `compress=1/2` 时，`payload` 是对应等级的 `zstd` 压缩结果
-- `compress=255` 时，`payload` 必须正好是 `1` 字节，且解码结果为重复该字节值的整块数据
-- 解码后的真实长度必须等于请求里的 `length`
-
-### 4.3 `WriteAt` 请求 body
-
-`WriteAt` 请求改为：
-
-| 偏移 | 长度 | 字段 | 类型 |
-| --- | --- | --- | --- |
-| `0` | 8 | `offset` | `u64` |
-| `8` | 4 | `length` | `u32` |
-| `12` | 1 | `compress` | `u8` |
-| `13` | `N` | `payload` | `bytes[N]` |
-
-语义固定为：
-
-- `length` 表示解码后的真实数据长度
-- `compress=0` 时，`payload` 必须就是原始数据，且 `N == length`
-- `compress=1/2` 时，`payload` 是压缩结果，解压后长度必须等于 `length`
-- `compress=255` 时，`payload` 必须正好是 `1` 字节，且解码结果为重复该字节值的整块数据
-
-### 4.4 `WriteAt` 成功响应 body
-
-保持为空，不引入压缩字段。
-
-## 5. 编解码规则
-
-### 5.1 `WriteAt`
-
-发送端流程固定为：
-
-1. 先拿到原始数据
-2. 按长度分档决定是否尝试压缩，以及尝试哪个等级
-3. 若压缩收益不成立，则改发 `raw`
-4. 正常情况下直接把最终 `compress + payload` 放进请求 body
-5. 若发现当前块所有字节都相同，则可直接改发 `compress=255 + payload[0]`
-
-接收端流程固定为：
-
-1. 先解析 `offset + length + compress`
-2. 若 `compress=255`，则要求 `payload` 长度必须为 `1`
-3. 若 `compress=255`，则把 `payload[0]` 重复 `length` 次得到原始数据
-4. 其他码值按各自压缩算法解码
-5. 校验解码后长度必须等于 `length`
-6. 再进入真正的 `write_at(offset, data)`
-
-### 5.2 `ReadAt`
-
-服务端流程固定为：
-
-1. 先按请求里的 `offset + length` 读出原始数据
-2. 按原始数据长度决定是否尝试压缩，以及尝试哪个等级
-3. 若压缩收益不成立，则改发 `raw`
-4. 正常情况下直接把最终 `compress + payload` 放进成功响应 body
-5. 若发现当前块所有字节都相同，则可直接改发 `compress=255 + payload[0]`
-
-客户端流程固定为：
-
-1. 先解析响应里的 `compress`
-2. 若 `compress=255`，则要求 `payload` 长度必须为 `1`
-3. 若 `compress=255`，则把 `payload[0]` 重复请求 `length` 次得到原始数据
-4. 其他码值按各自压缩算法解码
-5. 校验解码后长度必须等于请求里的 `length`
-6. 再把结果拷入目标 buffer
-
-### 5.3 gateway 路径固定口径
-
-在本草案成立的前提下，gateway 对压缩数据面的参与固定收口为：
+gateway 固定只做：
 
 1. 校验共享数据面 request 的通用 header 与 session ownership
 2. 改写 `request_id / session_id`
@@ -226,83 +99,78 @@
 - 解析 `compress`
 - 解压 `payload`
 - 重压 `payload`
-- 按压缩结果改写上游或下游 body
+- 因压缩形态不同而改写 body
 
-## 6. 分档策略
+### 1.5 压缩码表目标口径
 
-### 6.1 当前推荐方案
+`compress` 固定为 `u8`，目标定义如下：
 
-当前推荐只保留一条简单分界线，不再切 `16KiB`：
+| 码值 | 含义 |
+| --- | --- |
+| `0` | `raw` |
+| `1` | `zstd-1` |
+| `2` | `zstd-3` |
+| `255` | `solid-byte block` |
 
-- `< 1024`：直接 `raw`
-- `1024..4095`：尝试 `zstd-1`
-- `4096..61440`：尝试 `zstd-3`
+补充口径：
 
-这里的 `61440` 即 `60KiB`。
+- `3..254` 暂未分配
+- `compress=255` 表示“当前块所有字节都相同”
+- `compress=255` 时，`payload` 固定长度必须为 `1`
+- `compress=255` 时，`payload[0]` 就是这个重复字节值
+- `compress=255` 的解码结果长度由 `length` 决定
 
-### 6.2 为什么不再切 `16KiB`
+### 1.6 目标协议形状
 
-当前范围只有 `512B ~ 60KiB`。
+#### `ReadAt` 请求 body
 
-在这个区间里，如果继续切：
+保持不变，固定 `12` 字节：
 
-- `4KiB`
-- `16KiB`
-- `32KiB`
+| 偏移 | 长度 | 字段 | 类型 |
+| --- | --- | --- | --- |
+| `0` | 8 | `offset` | `u64` |
+| `8` | 4 | `length` | `u32` |
 
-之类的更多档位，收益未必显著，但会明显增加：
+#### `ReadAt` 成功响应 body
 
-- 规则复杂度
-- 调参与测试成本
-- 线上问题定位难度
+改为：
 
-首版先保留 `1KiB` 和 `4KiB` 两个关键分界，更符合当前项目节奏。
+| 偏移 | 长度 | 字段 | 类型 |
+| --- | --- | --- | --- |
+| `0` | 1 | `compress` | `u8` |
+| `1` | `N` | `payload` | `bytes[N]` |
 
-### 6.3 压缩收益回退
+约束：
 
-本轮不建议“按档位必压”，而建议“按档位尝试压缩”。
+- `length` 取自请求
+- `compress=0` 时，`payload` 就是原始数据
+- `compress=1/2` 时，`payload` 是对应压缩结果
+- `compress=255` 时，`payload` 必须正好是 `1` 字节
+- 无论哪种形态，解码后的真实长度都必须等于请求里的 `length`
 
-固定规则建议如下：
+#### `WriteAt` 请求 body
 
-- 若压缩后长度 `>=` 原始长度，则回退 `raw`
-- 若压缩后会让最终业务 payload 超出 transport 单帧上限，则回退 `raw`
+改为：
 
-这样可以自动避免下面这些坏情况：
+| 偏移 | 长度 | 字段 | 类型 |
+| --- | --- | --- | --- |
+| `0` | 8 | `offset` | `u64` |
+| `8` | 4 | `length` | `u32` |
+| `12` | 1 | `compress` | `u8` |
+| `13` | `N` | `payload` | `bytes[N]` |
 
-- 随机数据
-- 已压缩图片
-- 已压缩归档
-- 本来就几乎不可压缩的数据块
+约束：
 
-## 7. transport 上限与 `max_io_bytes`
+- `length` 表示解码后的真实数据长度
+- `compress=0` 时，`payload` 必须就是原始数据，且 `N == length`
+- `compress=1/2` 时，`payload` 解压后长度必须等于 `length`
+- `compress=255` 时，`payload` 必须正好是 `1` 字节
 
-transport 单帧 payload 上限固定为 `65536` 字节。
+#### `WriteAt` 成功响应 body
 
-本轮要特别注意一个事实：
+保持为空。
 
-- 旧 `WriteAt` 固定头是 `12` 字节
-- 新 `WriteAt` 固定头会变成 `13` 字节
-
-这意味着如果仍然保留理论上的绝对 `65500` 字节写入上限，那么：
-
-- `24` 字节业务头
-- `13` 字节 `WriteAt` body 固定头
-- `65500` 字节原始 payload
-
-三者相加会变成 `65537`，超过单帧上限 `1` 字节。
-
-因此本轮有两种收口方式：
-
-1. 明确把全链路 `max_io_bytes` 收成 `<= 60KiB`
-2. 或者把理论绝对上限从 `65500` 下调到 `65499`
-
-结合当前业务目标，本草案推荐第一种：
-
-- 直接以 `60KiB` 作为当前正式目标上限
-
-这样无论 `raw` 还是压缩形态，都有足够余量。
-
-## 8. 错误处理
+### 1.7 错误口径目标
 
 以下情况统一按 `BadBody` 或等价协议错误处理：
 
@@ -313,116 +181,220 @@ transport 单帧 payload 上限固定为 `65536` 字节。
 - `ReadAt` 解压后长度不等于请求 `length`
 - `compress=0` 但 `payload` 长度不等于 `length`
 
-下面这些语义保持不变：
+下面这些业务语义保持不变：
 
 - 越界仍是 `IOOutOfRange`
 - 超过 `max_io_bytes` 仍是 `IOLarge`
 - 只读写入仍是 `IOReadOnly`
 - 存储后端真实失败仍是 `IOFailed`
 
-## 9. 为什么首版不选别的压缩算法
+## 2. 实施总原则
 
-### 9.1 哈夫曼
+这轮落地按下面四阶段推进：
 
-不建议单独引入哈夫曼。
+1. 先同步 network 正式文档，明确 `60KiB` 与新 body 语义
+2. 再改 `network-core` 和 `server` 的协议面，只把 `compress` 字段接入 `ReadAt / WriteAt` body
+3. 第三阶段才进入真实压缩编解码、收益判定与回退
+4. 第四阶段做首尾收口
 
-原因：
+这四阶段的关键要求是：
 
-- 小块下码表成本很显著
-- 单独哈夫曼对重复块、零块并不一定优于 `zstd`
-- 需要再维护一套独立编码器和测试矩阵
+- 第二阶段不提前引入真实压缩算法
+- 第二阶段不提前接 `zstd`
+- 第二阶段不提前做压缩收益判定
+- 第二阶段先把 wire 形状一次改对
 
-### 9.2 纯 LZ
+## 3. Phase 1: 同步正式网络文档
 
-不建议单独引入自定义纯 LZ。
+### 3.1 目标
 
-原因：
+先把正式协议文档的口径收死。
 
-- 工程复杂度并不会更低
-- 压缩率通常不如 `zstd`
-- 没有明显理由在首版维护一套自研压缩协议
+### 3.2 本阶段需要完成
 
-### 9.3 `lz4`
+- 改 `docs/network/define/data-plane.md`
+- 如有必要，补 `docs/network/server/README.md` 里的实现口径说明
+- 明确 `60KiB` 只计算逻辑数据负载
+- 明确 `ReadAt / WriteAt` 新 body 形状
+- 明确 `compress=255` 的 `solid-byte block` 语义
 
-`lz4` 是唯一值得后续再看的备选。
+### 3.3 本阶段完成标准
 
-它的优势是：
+- 正式协议文档已经明确：
+  - transport 上限仍是 `65536`
+  - `max_io_bytes` 约束的是解码后的真实数据长度
+  - `ReadAt response = compress:u8 + payload`
+  - `WriteAt request = offset:u64 + length:u32 + compress:u8 + payload`
+  - `compress=255` 表示整块同字节值
 
-- 编解码速度通常更快
+## 4. Phase 2: 协议面重构
 
-但当前先不引入，原因也很直接：
+### 4.1 目标
 
-- 首版优先减少协议和依赖复杂度
-- 当前数据块上限只有 `60KiB`
-- 先观察 `zstd-1 / zstd-3` 的 CPU 与压缩率表现，再决定是否需要 `lz4`
+只改协议面，不做真实压缩实现。
 
-## 10. 当前代码改动落点
+这里的“协议面”固定指：
 
-如果按本草案实现，至少会改到下面这些位置：
+- body 编码
+- body 解析
+- 长度校验
+- 错误分支
+- 测试
+
+### 4.2 本阶段需要完成
+
+- 改 `network-core`
+- 改 `server`
+- 在 `ReadAt` 成功响应里加 `compress`
+- 在 `WriteAt` 请求里加 `compress`
+- 把 `length` 统一解释成“解码后的真实长度”
+- 先把 raw 路径按新 body 形状走通
+
+### 4.3 本阶段明确不做
+
+- 不接真实 `zstd`
+- 不实现 `compress=255` 的真实解码逻辑
+- 不实现 `1/2/255` 的完整算法分支
+- 不做压缩收益判定
+- 不做“尝试压缩，不合适回退 raw”
+
+### 4.4 推荐临时行为
+
+为了避免半成品协议状态，本阶段建议固定为：
+
+- 编码端只发送 `compress=0`
+- 解码端先按新 body 形状解析
+- 非 `0` 码值先保留给后续阶段
+
+也就是说第二阶段的目的不是“先做半套压缩”，而是：
+
+- 先把 `ReadAt / WriteAt` 的 wire 形状切到新协议
+
+### 4.5 本阶段完成标准
+
+- `network-core` 与 `server` 已全部使用新 body 形状
+- raw 路径在新协议形状下通过测试
+- gateway 主流程仍然不重新解析 `ReadAt / WriteAt` 业务 body
+
+## 5. Phase 3: 正式进入压缩编解码
+
+### 5.1 目标
+
+在协议面已经稳定后，再把真实压缩能力接进来。
+
+### 5.2 本阶段需要完成
+
+- 补统一 `compress` 码表定义
+- 实现 `compress=255` 的 `solid-byte block`
+- 接入 `zstd-1`
+- 接入 `zstd-3`
+- 实现分档压缩策略
+- 实现收益判定
+- 实现回退 raw
+
+### 5.3 当前推荐压缩选择
+
+当前建议保留下面四类发送形态：
+
+- `0 = raw`
+- `1 = zstd-1`
+- `2 = zstd-3`
+- `255 = solid-byte block`
+
+其中：
+
+- `solid-byte block` 可以独立于 `zstd` 优先判断
+- 若整块同字节，则可直接使用 `255`
+
+### 5.4 当前推荐分档
+
+- `< 1024`：默认 `raw`
+- `1024..4095`：尝试 `zstd-1`
+- `4096..61440`：尝试 `zstd-3`
+
+### 5.5 当前推荐收益判定
+
+压缩只有在满足下面条件时才成立：
+
+- 节省字节数 `>= max(64, ceil(raw_len * 5%))`
+
+否则统一回退 `raw`。
+
+### 5.6 本阶段完成标准
+
+- `solid-byte block` 编解码成立
+- `zstd-1 / zstd-3` 编解码成立
+- 收益判定成立
+- 不可压缩数据会自动回退 raw
+- 解码长度校验与单帧上限校验都已补齐
+
+## 6. Phase 4: 首尾收口
+
+### 6.1 目标
+
+把前面三阶段的实现收成可交付状态。
+
+### 6.2 本阶段需要完成
+
+- client / gateway / storer 端到端集成测试
+- whole 路径集成测试
+- bad code / bad length / 解压失败测试
+- 文档回填
+- 常量与错误码统一
+- 清理临时兼容逻辑
+
+### 6.3 本阶段完成标准
+
+- 三条路径都已验证：
+  - client -> gateway -> storer
+  - storer -> gateway -> client
+  - whole
+- 压缩与非压缩路径都通过端到端验证
+- 当前临时文档可被正式实现文档替代
+
+## 7. 建议改动落点
+
+按这份清单推进，至少会碰到：
 
 - 协议文档
   - `docs/network/define/data-plane.md`
-- Go 协议解析
+- Rust 协议面
+  - `windows/network-core/src/protocol_client.rs`
+  - `windows/network-core/src/disk_session.rs`
+- Go 协议面
   - `server/internal/proto/session.go`
 - Go storer 数据面
   - `server/internal/storer/gateway/link/data_plane_handler.go`
-- Rust client 协议解析
-  - `windows/network-core/src/protocol_client.rs`
-  - `windows/network-core/src/disk_session.rs`
 
-此外还需要补：
+若进入真实压缩编解码阶段，还会继续改：
 
-- Go 侧单测
-- Rust 侧单测
-- gateway / storer 集成测试
+- client 侧压缩发送与解码逻辑
+- storer 侧压缩发送与解码逻辑
+- 对应 Go / Rust 单测
 
-固定要求：
+## 8. 当前建议结论
 
-- gateway 主流程代码不应因为本草案重新引入 `ReadAt / WriteAt` body 解析
-- gateway 主流程代码不应因为本草案重新引入压缩编解码逻辑
+这份清单当前建议固定为：
 
-## 11. 首版实施顺序
-
-建议按下面顺序落地：
-
-1. 先完成 `todo-reconstruction.md` 里的 gateway 数据面代理化
-2. 把协议文档改成新 body 形状
-3. 在 Go / Rust 两侧补统一的 `compress` 码表定义
-4. 改 `ReadAt / WriteAt` 的 body 解析与编码
-5. 接入 `zstd` 编解码
-6. 实现“尝试压缩，不合适则回退 raw”
-7. 补齐 raw / compressed / bad code / bad length / 不可压缩回退 测试
-8. 补齐 `compress=255` escape 码路径测试
-
-## 12. 当前建议结论
-
-本草案当前建议固定为：
-
-- 只压 `ReadAt` 响应与 `WriteAt` 请求里的数据负载
+- transport 单帧 `payload` 上限保持 `65536`
+- `60KiB` 指逻辑数据负载上限，只计算解码后的真实数据字节数
 - `ReadAt request` 不带 `compress`
 - `ReadAt response` 形状为 `compress:u8 | payload`
 - `WriteAt request` 形状为 `offset:u64 | length:u32 | compress:u8 | payload`
 - `WriteAt response` 仍为空
-- 压缩码表先保留：
-  - `0 = raw`
-  - `1 = zstd-1`
-  - `2 = zstd-3`
-  - `255 = solid-byte block`
-- `compress=255` 时：
-  - `payload` 固定为 1 字节
-  - `payload[0] = 当前块重复字节值`
-  - 解码结果 = `length` 个 `payload[0]`
-- 分档先只保留：
-  - `< 1024 => raw`
-  - `1024..4095 => 尝试 zstd-1`
-  - `4096..61440 => 尝试 zstd-3`
-- 若压缩无收益，则自动回退 `raw`
-- gateway 不参与压缩编解码，只依赖共享数据面 opaque proxy
+- `compress=255` 固定表示整块同字节值：
+  - `payload` 固定为 `1` 字节
+  - `payload[0]` 是当前块重复字节值
+  - 解码结果为 `length` 个该字节值
+- 落地顺序固定为：
+  - 先收正式协议文档
+  - 再改协议面
+  - 再上真实压缩编解码
+  - 最后做首尾收口
 
-这版方案的核心特征是：
+这样推进的好处很直接：
 
-- 协议简单
-- 实现面清晰
-- gateway 不再成为压缩协议演进阻塞点
-- 不为了少量潜在收益引入多套压缩器
-- 先解决主要流量问题，再决定是否要做更深的优化
+- 协议语义先被写死
+- wire 形状先被一次改对
+- 不把 `zstd`、收益判定和故障路径混到同一阶段
+- gateway 继续保持为数据面 opaque proxy，不成为压缩演进阻塞点
