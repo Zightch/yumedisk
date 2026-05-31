@@ -1,5 +1,7 @@
 mod block;
 mod cache;
+#[cfg(test)]
+mod cache_p2_tests;
 mod config;
 mod deps;
 mod error;

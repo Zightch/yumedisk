@@ -515,7 +515,27 @@ hook 点要少，但要卡在稳定边界上。
 
 任务：
 
-- [ ] 建立随机操作驱动
-- [ ] 建立参考字节模型
-- [ ] 长时间压力回归
-- [ ] 统一全局不变量检查
+- [x] 建立随机操作驱动
+- [x] 建立参考字节模型
+- [x] 长时间压力回归
+- [x] 统一全局不变量检查
+
+当前已完成：
+
+- `cache/src/test_support/stress.rs` 已增加测试专用压力工具层：
+  - `DeterministicRng`
+  - `ReferenceModel`
+  - `assert_runtime_invariants(...)`
+  - `assert_quiesced_invariants(...)`
+  - `collect_temp_artifacts(...)`
+  - `assert_temp_artifacts_cleared(...)`
+- `cache/src/cache_p2_tests.rs` 已单独建立 `P2` 测试模块，不再继续膨胀 `cache.rs`
+- 当前已补两类稳定回归：
+  - 小容量、高冲突、非 `32KiB` 块尺寸下的随机读写压力回归
+  - 叠加 `right io` / `temp` 瞬时故障后的随机恢复回归
+- 当前统一复用的不变量检查至少包括：
+  - 所有右侧 `_at` I/O 块对齐、固定长度
+  - resident 块数与 FIFO/LRU 容量一致
+  - logical temp 文件数不超过 `temp_max_files`
+  - `active_temp_blocks` 只对应真实 temp 使用者
+  - quiesce 后无残留 temp 文件
