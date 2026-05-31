@@ -86,14 +86,71 @@ resident block 主表固定按：
 
 这里的 `BlockEntry` 持有：
 
-- resident 数据
-- 当前在 FIFO / LRU 的位置
-- 命中状态
-- dirty 状态
-- active snapshot 状态
-- pending patch / loading 状态
+- resident 数据本体
+- 缓存块 tag 信息
 
-### 4.2 `LRU`
+### 4.2 缓存块 tag 信息
+
+缓存块的 `tag/state` 和块数据本体要明确分开。
+
+原因很直接：
+
+- tag 负责描述块当前处于什么状态
+- data 负责承载真实块内容
+- 后续队列移动、提升、淘汰时，应尽量只动 tag，不动 data
+
+这里必须严格按“单一真实来源”收口：
+
+- 一些派生信息不能再额外存一份
+- resident 内不保存 `Missing`
+- resident 内不保存 `spilled`
+- 不单独保存“是否 dirty”“是否有 snapshot”“是否有 pending patch”这类可由真实字段直接推导出的布尔态
+
+当前建议 resident block 只保留最小核心状态：
+
+- `queue_ref`
+  - 当前块在哪个队列，以及它的节点句柄
+  - 例如 `Fifo(node)` / `Lru(node)`
+- `load_state`
+  - 只保留 resident 内真实需要推进的状态
+  - 例如 `LoadingRemote / Rehydrating / Ready`
+- `dirty_ranges`
+  - 这是 dirty 真状态
+- `active_snapshot`
+  - `Option<ActiveSnapshot>`
+  - snapshot 是否存在由 `Option` 本身表达
+- `pending_patches`
+  - patch 是否存在由集合是否为空表达
+- `valid_len`
+  - 仅当当前实现没有别的唯一真来源可推导尾块长度时才保留
+
+下面这些字段不再单独保存：
+
+- `block_index`
+  - resident 主表 key 已经是 `block_index`
+- `queue_kind`
+  - 由 `queue_ref` 直接表达
+- `access_state`
+  - 当前 2Q 里是否已提升，可由当前在 `FIFO/LRU` 直接表达
+- `Missing`
+  - 不在 resident 主表里就是 `Missing`
+- `spill_state`
+  - spilled 真状态只存在于 `spilled_dirty` 表
+- `dirty bool`
+  - 由 `dirty_ranges` 是否为空直接表达
+- `active_snapshot_state bool`
+  - 由 `active_snapshot.is_some()` 直接表达
+- `pending_patch_state bool`
+  - 由 `pending_patches` 是否为空直接表达
+
+这里再固定一条实现口径：
+
+- resident data 和 resident state 同属 `BlockEntry`
+- resident 主表是块数据和块状态的唯一真来源
+- 队列层只持有块索引或块句柄，不直接持有块数据副本
+- 队列永远不是数据所有者，只是调度顺序视图
+
+### 4.3 `LRU`
 
 `LRU` 不用标准库 `LinkedList`，也不引第三方容器。
 
@@ -109,7 +166,7 @@ resident block 主表固定按：
 
 标准 `LinkedList` 不适合做这件事，因为它不提供适合这里的稳定节点句柄。
 
-### 4.3 `FIFO`
+### 4.4 `FIFO`
 
 语义上 `FIFO` 仍然只是普通队列：
 
@@ -123,6 +180,30 @@ resident block 主表固定按：
 - FIFO block 命中后要提升到 LRU
 - 提升时需要从 FIFO 中 O(1) 按块删除
 - 复用同一套链表骨架，代码会更少，边界也更统一
+
+### 4.5 队列移动不复制块数据
+
+这条规则单独固定下来：
+
+- `FIFO -> LRU` 提升时，不允许复制块数据
+- `LRU` 命中移尾时，不允许复制块数据
+- queue 之间的移动，本质上只能是 tag / 节点重挂接
+
+推荐实现口径：
+
+- resident 主表持有唯一块数据
+- FIFO / LRU 只保存 `block_index` 或 `BlockEntry` 句柄
+- 提升时只做：
+  - 从 FIFO 摘节点
+  - 挂到 LRU 尾部
+  - 更新 `queue_ref`
+  - 更新节点句柄
+
+不允许做的事：
+
+- 把整块 `Vec<u8>` 从 FIFO 复制一份到 LRU
+- 因为队列提升而新分配第二份 resident 数据
+- 用“两个容器各存一份块对象”的方式实现 2Q
 
 ## 5. 工作任务拆分
 
@@ -183,9 +264,10 @@ resident block 主表固定按：
 - [ ] 实现 `FIFO`
 - [ ] 实现 `LRU`
 - [ ] 实现 resident block 表
-- [ ] 定义 `QueueKind`
-  - `FIFO`
-  - `LRU`
+- [ ] 定义 resident 最小状态结构
+- [ ] 定义 `QueueRef`
+  - `Fifo(node)`
+  - `Lru(node)`
 - [ ] 实现 2Q 基础策略
   - 新块首次进入 FIFO
   - FIFO 再命中提升到 LRU
@@ -196,6 +278,8 @@ resident block 主表固定按：
 
 - 不接磁盘 I/O，也能单测 2Q 行为
 - FIFO/LRU 状态不会分叉
+- FIFO -> LRU 提升不发生块数据内存拷贝
+- 不保存可以由唯一真状态直接推导出的派生字段
 
 ## 5.4 第四阶段：最小读闭环
 
