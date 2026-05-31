@@ -4,6 +4,15 @@
 
 本文档只定义 bootstrap 与 framed transport 的协议边界，不定义认证、路由、会话和宿主策略。
 
+固定分层口径：
+
+- transport 层只定义包边界与当前帧的实际长度
+- transport 属于连接级能力，建立在 TCP 字节流之上
+- business connection 复用、request 并发和 notice 交错，都建立在 transport 已经提供稳定帧边界这件事上
+- 业务层自己定义 `ReadAt / WriteAt`、`auth`、`notice` 等消息语义
+- transport 不参与解释业务层的长度限制、状态码或 metadata 语义
+- 以后讨论业务协议时，不应再把 transport 细节混进业务 body 语义里
+
 两条网络边共用同一套 transport：
 
 - `client <-> gateway`
@@ -102,6 +111,7 @@ frame = u16be payload_size_m1 + payload[payload_size_m1 + 1]
 约束：
 
 - 长度头 `2` 字节，大端
+- `payload_size_m1 + 1` 就是当前业务帧的实际 payload 长度
 - payload 实际长度范围为 `1..65536`
 - 不存在空 payload
 
@@ -118,6 +128,7 @@ transport 只负责：
 
 - 请求响应配对
 - `auth_id / session_id` 解释
+- 业务层 I/O 长度约束
 - 心跳决策
 - metadata 语义
 - 多帧业务重组

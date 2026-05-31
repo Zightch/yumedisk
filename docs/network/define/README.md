@@ -9,6 +9,13 @@
 - 消息方向、时序与失效事实
 - `connection / request_id / auth_id / session_id / disk_id` 的协议含义
 
+固定分层口径：
+
+- `TCP` 提供字节流
+- `transport` 在连接级把字节流切成有边界的小帧
+- `connection` 建立在 bootstrap 完成后的 transport 之上，承载并发 request/response/notice
+- 业务协议只讨论业务 header/body 与状态语义，不再混入 transport 细节
+
 这里不定义：
 
 - rust-cli 的对象结构和清理策略

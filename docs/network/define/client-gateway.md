@@ -148,7 +148,7 @@
 | --- | --- |
 | `0x1201` | session 不存在、已关闭或 route 已失效 |
 | `0x1301` | 读写越界 |
-| `0x1302` | 超过 `max_io_bytes` |
+| `0x1302` | 超过单次 `60KiB` raw 数据上限 |
 | `0x1303` | 只读盘写入 |
 | `0x1304` | 远端 I/O 失败 |
 
@@ -272,6 +272,8 @@
 
 - 这条边上的 `SessionDescribe` body 语义与 `gateway-storer` 边上的 route-facing `SessionDescribe` 一致
 - gateway 不应在这条边上再生一份不同形状的 metadata body
+- 当前 `max_io_bytes` 字段固定写 `60KiB`
+- 共享数据面的单次 `60KiB raw 数据` 语义统一见 [data-plane](data-plane.md)
 
 ## ConnHeartbeat
 

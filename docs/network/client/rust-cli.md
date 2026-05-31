@@ -189,9 +189,10 @@ acquire/reuse GatewayConnection
 
 大块 I/O 的当前策略为：
 
-- `NetworkMedia` 在 client 本地按 `max_io_bytes` 主动拆片
+- `NetworkMedia` 在 client 本地按 `60KiB` 主动拆片
 - 每片都走一次独立 `ReadAt / WriteAt`
 - server 不负责替 client 做跨请求重组
+- 共享数据面的单次 `60KiB raw 数据` 语义统一见 [data-plane](../define/data-plane.md)
 
 ### 后续接入 `cache` 的固定风险提示
 

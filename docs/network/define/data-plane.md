@@ -4,6 +4,11 @@
 
 本文档只定义会话打开后的 metadata 查询与共享数据面，不定义 client 盘对象或 server 内部转发表。
 
+固定边界：
+
+- 本文档只讨论业务层的 `SessionDescribe / ReadAt / WriteAt / Notice` 语义
+- transport 分帧、实际帧长和连接级收发规则不在这里重复定义
+
 ## 进入数据面的前置条件
 
 client 进入数据面前必须已经完成：
@@ -62,6 +67,26 @@ client 进入数据面前必须已经完成：
 - `compress=255` 的解码结果长度由 `length` 决定
 - 协议层只定义码表与 wire 形状，不定义发送端何时选择哪种压缩等级
 
+## Raw Data
+
+本文中的 `raw 数据` 固定指一次 `ReadAt / WriteAt` 真正读写的逻辑数据 payload。
+
+固定口径：
+
+- 它只包含这次 I/O 的实际数据字节串
+- 它不包含通用业务头
+- 它不包含 `ReadAt / WriteAt` 的固定 body 头，如 `offset / length / compress`
+- 对发送端来说，看编码前的输入数据
+- 对接收端来说，看解码后的输出数据
+- 单个 `ReadAt / WriteAt` 的 raw 数据最大长度固定为 `60KiB`
+
+进一步约束：
+
+- `ReadAt.length` 表示本次希望读取的 raw 数据长度
+- `WriteAt.length` 表示本次希望写入的 raw 数据长度
+- `payload` 字段只承载这段 raw 数据的编码结果
+- 发送端完成压缩判优后，最终放进 `payload` 的字节串无论是 raw 还是压缩结果，都必须 `<= 60KiB`
+
 ## SessionDescribe
 
 `SessionDescribe` 返回当前 session 绑定 metadata。
@@ -72,6 +97,13 @@ client 进入数据面前必须已经完成：
 - `max_io_bytes`
 - `read_only`
 - `backend_id`
+
+当前 `SessionDescribe` body 仍保留 `max_io_bytes` 字段。
+
+固定口径：
+
+- 该字段当前固定写 `60KiB`
+- 它不再单独承载另一套长度语义；共享数据面的正式定义统一以上文 `60KiB raw 数据` 为准
 
 它描述的是这个 session 的可见视图，不额外承诺动态 metadata 刷新模型。
 
@@ -105,11 +137,14 @@ client 进入数据面前必须已经完成：
 
 约束：
 
-- 请求里的 `length` 表示解码后的真实数据长度
-- `compress=0` 时，`payload` 就是原始数据
-- `compress=1/2` 时，`payload` 是对应压缩结果
+- 请求里的 `length` 表示本次希望读取的 raw 数据长度
+- 这个 `raw` 只包含实际数据字节串，不包含通用业务头，也不包含 `ReadAt` 固定 body 头
+- `length` 必须在 `1..60KiB`
+- `payload` 字段承载对应 raw 数据的编码结果
+- `compress=0` 时，`payload` 就是原始数据，且 `N == length`
+- `compress=1/2` 时，`payload` 是对应压缩结果，且 `N <= 60KiB`
 - `compress=255` 时，`payload` 必须正好是 `1` 字节，且解码结果为重复该字节值的整块数据
-- 无论哪种形态，解码后的真实长度都必须等于请求里的 `length`
+- 无论哪种形态，接收端解码后的真实长度都必须等于请求里的 `length`
 
 补充口径：
 
@@ -128,9 +163,12 @@ client 进入数据面前必须已经完成：
 
 约束：
 
-- `length` 表示解码后的真实数据长度
+- `length` 表示本次希望写入的 raw 数据长度
+- 这个 `raw` 只包含实际数据字节串，不包含通用业务头，也不包含 `WriteAt` 固定 body 头
+- `length` 必须在 `1..60KiB`
+- `payload` 字段承载对应 raw 数据的编码结果
 - `compress=0` 时，`payload` 必须就是原始数据，且 `N == length`
-- `compress=1/2` 时，`payload` 是对应压缩结果，解压后长度必须等于 `length`
+- `compress=1/2` 时，`payload` 是对应压缩结果，且 `N <= 60KiB`，解压后长度必须等于 `length`
 - `compress=255` 时，`payload` 必须正好是 `1` 字节，且解码结果为重复该字节值的整块数据
 
 ### 成功响应 body
@@ -185,14 +223,18 @@ client 进入数据面前必须已经完成：
 
 ## 大块 I/O
 
-transport 单帧 payload 上限为 `65536` 字节。
+共享数据面固定约束：
 
-因此协议层固定约束：
-
-- 单次 `ReadAt / WriteAt` 必须服从 `max_io_bytes`
-- `max_io_bytes` 约束的是解码后的真实数据长度
+- 单个 `ReadAt / WriteAt` 的 raw 数据最大长度为 `60KiB`
+- 这个长度只计算实际数据字节串，不计算通用业务头，也不计算 `ReadAt / WriteAt` 固定 body 头
+- `ReadAt / WriteAt` 之外的消息不承载额外 `60KiB` 语义
 - 需要大块 I/O 时，由 client 在协议外主动拆片
-- 对端只处理单个 request，不承担跨 request 业务重组
+- 对端只处理单个 request，不承担跨 request 的业务重组
+
+补充口径：
+
+- `payload` 字段只承载单次 I/O 的一份编码结果，可能是 raw，也可能是压缩结果
+- 单次 I/O 不做多段 `payload` 拆分或拼装
 
 ## 并发模型
 

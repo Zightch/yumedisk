@@ -25,8 +25,10 @@
 固定事实：
 
 - transport 单帧 `payload` 上限仍然是 `65536` 字节
-- `60KiB` 指的是共享数据面的“逻辑数据负载上限”
-- 这个“逻辑数据负载”只计算解码后的真实数据字节数
+- transport 的两字节长度头只表示“当前业务帧的实际 payload 长度减一”
+- `60KiB` 只属于共享数据面里 `ReadAt / WriteAt` 的 raw 数据上限
+- 这个 raw 上限对发送端看编码前 / 压缩前的真实数据字节数
+- 对接收端看解码后 / 解压后的真实数据字节数
 - 它不计算：
   - `offset`
   - `length`
@@ -41,16 +43,24 @@
 
 其中 `length` 的语义固定为：
 
-- 表示解码后的真实数据长度
+- 表示业务 raw 数据长度
+- 对发送端来说，就是编码前 / 压缩前的真实数据长度
+- 对接收端来说，就是解码后 / 解压后的真实数据长度
 
 剩余约 `4KiB` 明确留给下面这些东西承载：
 
 - 业务固定头
 - 压缩封装字段
-- 压缩后 payload 的波动余量
+- 压缩后 payload 的实际线上长度余量
 - 后续必要扩展
 
 这部分余量不进入 `max_io_bytes` 语义。
+
+补充口径：
+
+- `ReadAt / WriteAt` 之外的消息不承载额外 `60KiB` 语义
+- 所有消息统一只服从 transport 的单帧实际长度约束
+- 当前项目不做跨包拼接、多帧重组或跨帧压缩负载拼装
 
 ### 1.2 压缩范围
 
@@ -146,7 +156,7 @@ gateway 固定只做：
 - `compress=0` 时，`payload` 就是原始数据
 - `compress=1/2` 时，`payload` 是对应压缩结果
 - `compress=255` 时，`payload` 必须正好是 `1` 字节
-- 无论哪种形态，解码后的真实长度都必须等于请求里的 `length`
+- 无论哪种形态，接收端解码后的真实长度都必须等于请求里的 `length`
 
 #### `WriteAt` 请求 body
 
@@ -161,10 +171,12 @@ gateway 固定只做：
 
 约束：
 
-- `length` 表示解码后的真实数据长度
+- `length` 表示业务 raw 数据长度
+- 对发送端来说，就是编码前 / 压缩前的真实数据长度
 - `compress=0` 时，`payload` 必须就是原始数据，且 `N == length`
 - `compress=1/2` 时，`payload` 解压后长度必须等于 `length`
 - `compress=255` 时，`payload` 必须正好是 `1` 字节
+- 无论哪种形态，最终实际请求包仍必须能装进单个 transport frame
 
 #### `WriteAt` 成功响应 body
 
@@ -222,7 +234,7 @@ gateway 固定只做：
 
 - 正式协议文档已经明确：
   - transport 上限仍是 `65536`
-  - `max_io_bytes` 约束的是解码后的真实数据长度
+  - `max_io_bytes` 约束的是业务 raw 数据长度
   - `ReadAt response = compress:u8 + payload`
   - `WriteAt request = offset:u64 + length:u32 + compress:u8 + payload`
   - `compress=255` 表示整块同字节值
@@ -275,6 +287,7 @@ gateway 固定只做：
 - `network-core` 与 `server` 已全部使用新 body 形状
 - raw 路径在新协议形状下通过测试
 - gateway 主流程仍然不重新解析 `ReadAt / WriteAt` 业务 body
+- 没有引入任何跨包拼接或多帧重组逻辑
 
 ## 5. Phase 3: 正式进入压缩编解码
 
@@ -377,7 +390,7 @@ gateway 固定只做：
 这份清单当前建议固定为：
 
 - transport 单帧 `payload` 上限保持 `65536`
-- `60KiB` 指逻辑数据负载上限，只计算解码后的真实数据字节数
+- `60KiB` 只约束 `ReadAt / WriteAt` 的 raw 数据长度，只计算解码后的真实数据字节数
 - `ReadAt request` 不带 `compress`
 - `ReadAt response` 形状为 `compress:u8 | payload`
 - `WriteAt request` 形状为 `offset:u64 | length:u32 | compress:u8 | payload`
@@ -391,6 +404,9 @@ gateway 固定只做：
   - 再改协议面
   - 再上真实压缩编解码
   - 最后做首尾收口
+- transport 和业务层严格分离：
+  - transport 只处理实际帧长与包边界
+  - 业务层只处理 `ReadAt / WriteAt` 的 raw 长度与压缩语义
 
 这样推进的好处很直接：
 
