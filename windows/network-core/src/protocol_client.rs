@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fmt;
+use std::io::Cursor;
 
 pub const PROTOCOL_VERSION: u8 = 2;
 pub const HEADER_LEN: u8 = 24;
@@ -21,6 +22,9 @@ pub const WRITE_AT_REQUEST_HEADER_BYTES: usize = 13;
 pub const READ_AT_RESPONSE_HEADER_BYTES: usize = 1;
 pub const SESSION_FLAG_READ_ONLY: u16 = 1 << 0;
 pub const IO_COMPRESS_RAW: u8 = 0;
+pub const IO_COMPRESS_ZSTD_1: u8 = 1;
+pub const IO_COMPRESS_ZSTD_3: u8 = 2;
+pub const IO_COMPRESS_SOLID_BYTE: u8 = 255;
 // Limits the business-level raw data bytes carried by a single ReadAt/WriteAt
 // message: before encoding/compression on send, and after decoding/
 // decompression on receive. Transport frame size remains independently capped
@@ -555,16 +559,18 @@ impl ReadAtResponse {
         if body.len() < READ_AT_RESPONSE_HEADER_BYTES {
             return Err(ProtocolClientError::InvalidBody("read_response_body"));
         }
-        if body[0] != IO_COMPRESS_RAW {
-            return Err(ProtocolClientError::InvalidBody("read_response_compress"));
-        }
-
-        if body.len() != READ_AT_RESPONSE_HEADER_BYTES + expected_length as usize {
-            return Err(ProtocolClientError::InvalidBody("read_response_length"));
-        }
-
         Ok(Self {
-            data: body[READ_AT_RESPONSE_HEADER_BYTES..].to_vec(),
+            data: decode_data_plane_payload(
+                body[0],
+                &body[READ_AT_RESPONSE_HEADER_BYTES..],
+                expected_length,
+                DataPlaneDecodeLabels {
+                    compress: "read_response_compress",
+                    payload_length: "read_response_payload_length",
+                    body_length: "read_response_length",
+                    decompress: "read_response_decompress",
+                },
+            )?,
         })
     }
 }
@@ -575,12 +581,13 @@ impl WriteAtRequest {
         let length = u32::try_from(self.data.len())
             .map_err(|_| ProtocolClientError::InvalidBody("write_length"))?;
         validate_io_length(length)?;
+        let (compress, payload) = encode_data_plane_payload(&self.data);
 
-        let mut body = vec![0u8; WRITE_AT_REQUEST_HEADER_BYTES + self.data.len()];
+        let mut body = vec![0u8; WRITE_AT_REQUEST_HEADER_BYTES + payload.len()];
         body[0..8].copy_from_slice(&self.offset.to_be_bytes());
         body[8..12].copy_from_slice(&length.to_be_bytes());
-        body[12] = IO_COMPRESS_RAW;
-        body[13..].copy_from_slice(&self.data);
+        body[12] = compress;
+        body[13..].copy_from_slice(&payload);
         Ok(
             ProtocolHeader::new_request(ClientOperationCode::WriteAt, request_id, self.session_id)?
                 .encode(&body),
@@ -917,6 +924,93 @@ fn validate_io_length(length: u32) -> Result<(), ProtocolClientError> {
     Ok(())
 }
 
+fn encode_data_plane_payload(data: &[u8]) -> (u8, Vec<u8>) {
+    if data.is_empty() {
+        return (IO_COMPRESS_RAW, Vec::new());
+    }
+    if is_solid_byte_payload(data) {
+        return (IO_COMPRESS_SOLID_BYTE, vec![data[0]]);
+    }
+
+    let compressed = if data.len() < 1024 {
+        None
+    } else if data.len() < 4096 {
+        try_zstd_payload(data, IO_COMPRESS_ZSTD_1, 1)
+    } else {
+        try_zstd_payload(data, IO_COMPRESS_ZSTD_3, 3)
+    };
+    compressed.unwrap_or_else(|| (IO_COMPRESS_RAW, data.to_vec()))
+}
+
+fn try_zstd_payload(data: &[u8], compress: u8, level: i32) -> Option<(u8, Vec<u8>)> {
+    let encoded = zstd::stream::encode_all(Cursor::new(data), level).ok()?;
+    if encoded.len() > MAX_DATA_PLANE_RAW_BYTES as usize {
+        return None;
+    }
+
+    let savings = data.len().checked_sub(encoded.len())?;
+    if savings < minimum_compression_savings(data.len()) {
+        return None;
+    }
+
+    Some((compress, encoded))
+}
+
+fn minimum_compression_savings(raw_len: usize) -> usize {
+    let percent = (raw_len * 5).div_ceil(100);
+    64.max(percent)
+}
+
+fn is_solid_byte_payload(data: &[u8]) -> bool {
+    data.iter().all(|byte| *byte == data[0])
+}
+
+#[derive(Clone, Copy)]
+struct DataPlaneDecodeLabels {
+    compress: &'static str,
+    payload_length: &'static str,
+    body_length: &'static str,
+    decompress: &'static str,
+}
+
+fn decode_data_plane_payload(
+    compress: u8,
+    payload: &[u8],
+    expected_length: u32,
+    labels: DataPlaneDecodeLabels,
+) -> Result<Vec<u8>, ProtocolClientError> {
+    validate_io_length(expected_length)
+        .map_err(|_| ProtocolClientError::InvalidBody(labels.body_length))?;
+    if payload.len() > MAX_DATA_PLANE_RAW_BYTES as usize {
+        return Err(ProtocolClientError::InvalidBody(labels.payload_length));
+    }
+
+    let expected_length = expected_length as usize;
+    match compress {
+        IO_COMPRESS_RAW => {
+            if payload.len() != expected_length {
+                return Err(ProtocolClientError::InvalidBody(labels.body_length));
+            }
+            Ok(payload.to_vec())
+        }
+        IO_COMPRESS_ZSTD_1 | IO_COMPRESS_ZSTD_3 => {
+            let decoded = zstd::stream::decode_all(Cursor::new(payload))
+                .map_err(|_| ProtocolClientError::InvalidBody(labels.decompress))?;
+            if decoded.len() != expected_length {
+                return Err(ProtocolClientError::InvalidBody(labels.body_length));
+            }
+            Ok(decoded)
+        }
+        IO_COMPRESS_SOLID_BYTE => {
+            if payload.len() != 1 {
+                return Err(ProtocolClientError::InvalidBody(labels.body_length));
+            }
+            Ok(vec![payload[0]; expected_length])
+        }
+        _ => Err(ProtocolClientError::InvalidBody(labels.compress)),
+    }
+}
+
 fn is_ascii_alphanumeric(byte: u8) -> bool {
     byte.is_ascii_alphanumeric()
 }
@@ -938,6 +1032,9 @@ mod tests {
     use super::HEADER_LEN;
     use super::HEADER_SIZE;
     use super::IO_COMPRESS_RAW;
+    use super::IO_COMPRESS_SOLID_BYTE;
+    use super::IO_COMPRESS_ZSTD_1;
+    use super::IO_COMPRESS_ZSTD_3;
     use super::MAX_DATA_PLANE_RAW_BYTES;
     use super::PROTOCOL_VERSION;
     use super::ProtocolClientError;
@@ -955,6 +1052,7 @@ mod tests {
     use super::SessionOpenResponse;
     use super::WRITE_AT_REQUEST_HEADER_BYTES;
     use super::WriteAtRequest;
+    use std::io::Cursor;
 
     #[test]
     fn auth_start_request_matches_documented_layout() {
@@ -1162,7 +1260,7 @@ mod tests {
         let write = WriteAtRequest {
             session_id: 5,
             offset: 8,
-            data: vec![0u8; MAX_DATA_PLANE_RAW_BYTES as usize],
+            data: incompressible_test_data(MAX_DATA_PLANE_RAW_BYTES as usize),
         }
         .encode_request(32)
         .expect("write encode should succeed");
@@ -1191,7 +1289,7 @@ mod tests {
     }
 
     #[test]
-    fn read_response_requires_raw_compress_during_phase_two() {
+    fn read_response_rejects_unknown_compress_code() {
         let payload = ProtocolHeader {
             protocol_version: PROTOCOL_VERSION,
             header_len: HEADER_LEN,
@@ -1202,13 +1300,191 @@ mod tests {
             request_id: 41,
             session_id: 9,
         }
-        .encode(&[1, b'D', b'A', b'T', b'A']);
+        .encode(&[9, b'D', b'A', b'T', b'A']);
 
         let error =
             ReadAtResponse::decode_response(&payload, 41, 9, 4).expect_err("decode should fail");
         assert_eq!(
             error,
             ProtocolClientError::InvalidBody("read_response_compress")
+        );
+    }
+
+    #[test]
+    fn write_request_uses_solid_byte_block_for_repeated_payload() {
+        let write = WriteAtRequest {
+            session_id: 5,
+            offset: 8,
+            data: vec![0xCC; 2048],
+        }
+        .encode_request(32)
+        .expect("write encode should succeed");
+
+        assert_eq!(write[HEADER_SIZE + 12], IO_COMPRESS_SOLID_BYTE);
+        assert_eq!(&write[HEADER_SIZE + 13..], &[0xCC]);
+    }
+
+    #[test]
+    fn write_request_uses_zstd_level_one_for_mid_sized_compressible_payload() {
+        let data = b"ABCD".repeat(600);
+        let write = WriteAtRequest {
+            session_id: 5,
+            offset: 8,
+            data: data.clone(),
+        }
+        .encode_request(32)
+        .expect("write encode should succeed");
+
+        assert_eq!(write[HEADER_SIZE + 12], IO_COMPRESS_ZSTD_1);
+        let decoded = zstd::stream::decode_all(Cursor::new(&write[HEADER_SIZE + 13..]))
+            .expect("zstd decode should succeed");
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn write_request_uses_zstd_level_three_for_large_compressible_payload() {
+        let data = b"ABCDEFGH".repeat(1024);
+        let write = WriteAtRequest {
+            session_id: 5,
+            offset: 8,
+            data: data.clone(),
+        }
+        .encode_request(32)
+        .expect("write encode should succeed");
+
+        assert_eq!(write[HEADER_SIZE + 12], IO_COMPRESS_ZSTD_3);
+        let decoded = zstd::stream::decode_all(Cursor::new(&write[HEADER_SIZE + 13..]))
+            .expect("zstd decode should succeed");
+        assert_eq!(decoded, data);
+    }
+
+    #[test]
+    fn write_request_falls_back_to_raw_when_compression_is_not_beneficial() {
+        let data = incompressible_test_data(2048);
+        let write = WriteAtRequest {
+            session_id: 5,
+            offset: 8,
+            data: data.clone(),
+        }
+        .encode_request(32)
+        .expect("write encode should succeed");
+
+        assert_eq!(write[HEADER_SIZE + 12], IO_COMPRESS_RAW);
+        assert_eq!(&write[HEADER_SIZE + 13..], data.as_slice());
+    }
+
+    #[test]
+    fn read_response_decodes_solid_byte_block() {
+        let payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::ReadAt,
+            flags: FLAG_RESPONSE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 41,
+            session_id: 9,
+        }
+        .encode(&[IO_COMPRESS_SOLID_BYTE, b'Q']);
+
+        let response =
+            ReadAtResponse::decode_response(&payload, 41, 9, 4096).expect("decode should work");
+        assert_eq!(response.data, vec![b'Q'; 4096]);
+    }
+
+    #[test]
+    fn read_response_decodes_zstd_payloads() {
+        let raw = b"ABCDEFGH".repeat(1024);
+        let compressed =
+            zstd::stream::encode_all(Cursor::new(&raw), 3).expect("zstd encode should succeed");
+        let mut body = Vec::with_capacity(1 + compressed.len());
+        body.push(IO_COMPRESS_ZSTD_3);
+        body.extend_from_slice(&compressed);
+        let payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::ReadAt,
+            flags: FLAG_RESPONSE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 41,
+            session_id: 9,
+        }
+        .encode(&body);
+
+        let response = ReadAtResponse::decode_response(&payload, 41, 9, raw.len() as u32)
+            .expect("decode should work");
+        assert_eq!(response.data, raw);
+    }
+
+    #[test]
+    fn read_response_rejects_bad_solid_byte_length() {
+        let payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::ReadAt,
+            flags: FLAG_RESPONSE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 41,
+            session_id: 9,
+        }
+        .encode(&[IO_COMPRESS_SOLID_BYTE, b'A', b'B']);
+
+        let error =
+            ReadAtResponse::decode_response(&payload, 41, 9, 4).expect_err("decode should fail");
+        assert_eq!(
+            error,
+            ProtocolClientError::InvalidBody("read_response_length")
+        );
+    }
+
+    #[test]
+    fn read_response_rejects_bad_zstd_payload() {
+        let payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::ReadAt,
+            flags: FLAG_RESPONSE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 41,
+            session_id: 9,
+        }
+        .encode(&[IO_COMPRESS_ZSTD_1, 1, 2, 3, 4]);
+
+        let error =
+            ReadAtResponse::decode_response(&payload, 41, 9, 4).expect_err("decode should fail");
+        assert_eq!(
+            error,
+            ProtocolClientError::InvalidBody("read_response_decompress")
+        );
+    }
+
+    #[test]
+    fn read_response_rejects_decompressed_length_mismatch() {
+        let compressed =
+            zstd::stream::encode_all(Cursor::new(b"DATA"), 1).expect("zstd encode should succeed");
+        let mut body = Vec::with_capacity(1 + compressed.len());
+        body.push(IO_COMPRESS_ZSTD_1);
+        body.extend_from_slice(&compressed);
+        let payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::ReadAt,
+            flags: FLAG_RESPONSE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 41,
+            session_id: 9,
+        }
+        .encode(&body);
+
+        let error =
+            ReadAtResponse::decode_response(&payload, 41, 9, 8).expect_err("decode should fail");
+        assert_eq!(
+            error,
+            ProtocolClientError::InvalidBody("read_response_length")
         );
     }
 
@@ -1297,5 +1573,17 @@ mod tests {
             error,
             ProtocolClientError::GatewayStatus(ProtocolStatusCode::ErrIoOutOfRange)
         );
+    }
+
+    fn incompressible_test_data(length: usize) -> Vec<u8> {
+        let mut state = 0x9E3779B97F4A7C15u64;
+        let mut output = Vec::with_capacity(length);
+        for _ in 0..length {
+            state ^= state << 7;
+            state ^= state >> 9;
+            state = state.wrapping_mul(0xA24BAED4963EE407);
+            output.push((state & 0xFF) as u8);
+        }
+        output
     }
 }

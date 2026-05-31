@@ -104,15 +104,10 @@ func ParseReadWriteBody(body []byte) (offset uint64, length uint32, data []byte,
 
 	offset = binary.BigEndian.Uint64(body[0:8])
 	length = binary.BigEndian.Uint32(body[8:12])
-	if body[12] != CompressRaw {
-		return 0, 0, nil, ErrSessionBody
+	data, err = decodeDataPlanePayload(body[12], body[13:], length)
+	if err != nil {
+		return 0, 0, nil, err
 	}
-	if uint64(len(body)) != uint64(WriteBodyHeaderSize)+uint64(length) {
-		return 0, 0, nil, ErrSessionBody
-	}
-
-	data = make([]byte, length)
-	copy(data, body[13:])
 	return offset, length, data, nil
 }
 
@@ -133,9 +128,10 @@ func BuildReadBody(offset uint64, length uint32) []byte {
 }
 
 func BuildReadResponseBody(data []byte) []byte {
-	body := make([]byte, ReadResponseHeaderSize+len(data))
-	body[0] = CompressRaw
-	copy(body[ReadResponseHeaderSize:], data)
+	compress, payload := encodeDataPlanePayload(data)
+	body := make([]byte, ReadResponseHeaderSize+len(payload))
+	body[0] = compress
+	copy(body[ReadResponseHeaderSize:], payload)
 	return body
 }
 
@@ -143,16 +139,7 @@ func ParseReadResponseBody(body []byte, expectedLength uint32) ([]byte, error) {
 	if len(body) < ReadResponseHeaderSize {
 		return nil, ErrSessionBody
 	}
-	if body[0] != CompressRaw {
-		return nil, ErrSessionBody
-	}
-	if len(body) != ReadResponseHeaderSize+int(expectedLength) {
-		return nil, ErrSessionBody
-	}
-
-	data := make([]byte, int(expectedLength))
-	copy(data, body[ReadResponseHeaderSize:])
-	return data, nil
+	return decodeDataPlanePayload(body[0], body[ReadResponseHeaderSize:], expectedLength)
 }
 
 func BuildReadWriteBody(offset uint64, length uint32) []byte {

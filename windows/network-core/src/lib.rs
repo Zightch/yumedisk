@@ -24,8 +24,9 @@ pub mod protocol {
     pub use crate::protocol_client::{
         AuthFinishRequest, AuthFinishResponse, AuthStartRequest, AuthStartResponse,
         ClientOperationCode, ConnHeartbeatRequest, ConnHeartbeatResponse, FLAG_NOTICE,
-        FLAG_RESPONSE, HEADER_SIZE, MAX_DATA_PLANE_RAW_BYTES, PROTOCOL_VERSION,
-        ProtocolClientError, ProtocolHeader, ProtocolStatusCode, ReadAtRequest, ReadAtResponse,
+        FLAG_RESPONSE, HEADER_SIZE, IO_COMPRESS_RAW, IO_COMPRESS_SOLID_BYTE, IO_COMPRESS_ZSTD_1,
+        IO_COMPRESS_ZSTD_3, MAX_DATA_PLANE_RAW_BYTES, PROTOCOL_VERSION, ProtocolClientError,
+        ProtocolHeader, ProtocolStatusCode, ReadAtRequest, ReadAtResponse,
         SESSION_CLOSE_REASON_CLIENT_CONNECTION_REPLACED, SESSION_CLOSE_REASON_GATEWAY_SHUTDOWN,
         SESSION_CLOSE_REASON_NORMAL_CLOSE, SESSION_CLOSE_REASON_PROTOCOL_ERROR,
         SESSION_CLOSE_REASON_ROUTE_LOST, SESSION_CLOSE_REASON_UPSTREAM_SESSION_CLOSED,
@@ -87,8 +88,9 @@ mod network {
     pub use crate::protocol::{
         AuthFinishRequest, AuthFinishResponse, AuthStartRequest, AuthStartResponse,
         ClientOperationCode, ConnHeartbeatRequest, ConnHeartbeatResponse, FLAG_NOTICE,
-        FLAG_RESPONSE, HEADER_SIZE, MAX_DATA_PLANE_RAW_BYTES, PROTOCOL_VERSION,
-        ProtocolClientError, ProtocolHeader, ProtocolStatusCode, ReadAtRequest, ReadAtResponse,
+        FLAG_RESPONSE, HEADER_SIZE, IO_COMPRESS_RAW, IO_COMPRESS_SOLID_BYTE, IO_COMPRESS_ZSTD_1,
+        IO_COMPRESS_ZSTD_3, MAX_DATA_PLANE_RAW_BYTES, PROTOCOL_VERSION, ProtocolClientError,
+        ProtocolHeader, ProtocolStatusCode, ReadAtRequest, ReadAtResponse,
         SESSION_CLOSE_REASON_CLIENT_CONNECTION_REPLACED, SESSION_CLOSE_REASON_GATEWAY_SHUTDOWN,
         SESSION_CLOSE_REASON_NORMAL_CLOSE, SESSION_CLOSE_REASON_PROTOCOL_ERROR,
         SESSION_CLOSE_REASON_ROUTE_LOST, SESSION_CLOSE_REASON_UPSTREAM_SESSION_CLOSED,

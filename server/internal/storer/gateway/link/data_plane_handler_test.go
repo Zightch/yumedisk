@@ -93,6 +93,56 @@ func TestDataPlaneHandlerRejectsBadOpenBodyAndAuthOps(t *testing.T) {
 	}
 }
 
+func TestDataPlaneHandlerAcceptsCompressedWriteAndReturnsCompressedRead(t *testing.T) {
+	t.Parallel()
+
+	core := newLinkTestCore(t)
+	handler := newDataPlaneHandler(20, core.SessionService(), nil)
+
+	openResp, err := handler.HandlePayload(buildGatewayRequest(proto.OpSessionOpen, 1, 0, nil))
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	openHeader := mustParseGatewayHeader(t, openResp)
+	if openHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected open status: %d", openHeader.StatusCode)
+	}
+
+	data := bytes.Repeat([]byte("ABCDEFGH"), 256)
+	writePayload := proto.BuildWriteRequestBody(128, data)
+	if writePayload[12] != proto.CompressZstd1 {
+		t.Fatalf("unexpected write compress code: got=%d want=%d", writePayload[12], proto.CompressZstd1)
+	}
+	writeResp, err := handler.HandlePayload(buildGatewayRequest(proto.OpWriteAt, 2, openHeader.SessionID, writePayload))
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if header := mustParseGatewayHeader(t, writeResp); header.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected write status: %d", header.StatusCode)
+	}
+
+	readResp, err := handler.HandlePayload(
+		buildGatewayRequest(proto.OpReadAt, 3, openHeader.SessionID, proto.BuildReadBody(128, uint32(len(data)))),
+	)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	readHeader := mustParseGatewayHeader(t, readResp)
+	if readHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected read status: %d", readHeader.StatusCode)
+	}
+	if readResp[proto.HeaderSize] != proto.CompressZstd1 {
+		t.Fatalf("unexpected read compress code: got=%d want=%d", readResp[proto.HeaderSize], proto.CompressZstd1)
+	}
+	decoded, err := proto.ParseReadResponseBody(readResp[proto.HeaderSize:], uint32(len(data)))
+	if err != nil {
+		t.Fatalf("decode read payload: %v", err)
+	}
+	if !bytes.Equal(decoded, data) {
+		t.Fatalf("unexpected decoded read payload")
+	}
+}
+
 func TestLinkHeartbeatWatchdogTimesOutWithoutHeartbeat(t *testing.T) {
 	t.Parallel()
 

@@ -5,3 +5,6 @@ edition = "2024"
 
 [features]
 test-support = []
+
+[dependencies]
+zstd = "0.13"

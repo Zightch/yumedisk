@@ -313,6 +313,8 @@ mod tests {
     #[test]
     fn write_locked_splits_large_requests_by_raw_limit() {
         let split_len = MAX_DATA_PLANE_RAW_BYTES as usize;
+        let expected_first_chunk = incompressible_test_data(split_len);
+        let expected_first_chunk_for_server = expected_first_chunk.clone();
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
         let address = listener.local_addr().expect("local addr should succeed");
 
@@ -332,8 +334,7 @@ mod tests {
                 &MAX_DATA_PLANE_RAW_BYTES.to_be_bytes()
             );
             assert_eq!(first[HEADER_SIZE + 12], 0);
-            let expected_first_chunk = vec![b'A'; split_len];
-            assert_eq!(&first[HEADER_SIZE + 13..], expected_first_chunk);
+            assert_eq!(&first[HEADER_SIZE + 13..], expected_first_chunk_for_server);
             let first_response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
                 header_len: HEADER_SIZE as u8,
@@ -361,7 +362,7 @@ mod tests {
                 &4u32.to_be_bytes()
             );
             assert_eq!(second[HEADER_SIZE + 12], 0);
-            assert_eq!(&second[HEADER_SIZE + 13..], b"BBBB");
+            assert_eq!(&second[HEADER_SIZE + 13..], b"BCDE");
             let second_response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
                 header_len: HEADER_SIZE as u8,
@@ -390,14 +391,26 @@ mod tests {
         )
         .expect("bind should succeed");
 
-        let mut write_data = vec![b'A'; split_len];
-        write_data.extend_from_slice(b"BBBB");
+        let mut write_data = expected_first_chunk;
+        write_data.extend_from_slice(b"BCDE");
         media
             .write_locked(0, &write_data)
             .expect("write should succeed");
 
         connection.close().expect("close should succeed");
         server.join().expect("server should join");
+    }
+
+    fn incompressible_test_data(length: usize) -> Vec<u8> {
+        let mut state = 0x9E3779B97F4A7C15u64;
+        let mut output = Vec::with_capacity(length);
+        for _ in 0..length {
+            state ^= state << 7;
+            state ^= state >> 9;
+            state = state.wrapping_mul(0xA24BAED4963EE407);
+            output.push((state & 0xFF) as u8);
+        }
+        output
     }
 
     #[test]
