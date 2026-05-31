@@ -121,7 +121,13 @@
     <ClCompile Include="core\memory.c" />
     <ClCompile Include="core\protocol.c" />
     <ClCompile Include="driver\main.c" />
+    <ClCompile Include="queue\debug\debug.c" />
+    <ClCompile Include="queue\event\event.c" />
+    <ClCompile Include="queue\lifecycle\lifecycle.c" />
     <ClCompile Include="queue\queue.c" />
+    <ClCompile Include="queue\read\read.c" />
+    <ClCompile Include="queue\slot\slot.c" />
+    <ClCompile Include="queue\write\write.c" />
     <ClCompile Include="scsi\scsi.c" />
   </ItemGroup>
   <ItemGroup>
@@ -130,7 +136,13 @@
     <ClInclude Include="core\defs.h" />
     <ClInclude Include="core\memory.h" />
     <ClInclude Include="core\protocol.h" />
+    <ClInclude Include="queue\debug\debug.h" />
+    <ClInclude Include="queue\event\event.h" />
+    <ClInclude Include="queue\lifecycle\lifecycle.h" />
     <ClInclude Include="queue\queue.h" />
+    <ClInclude Include="queue\read\read.h" />
+    <ClInclude Include="queue\slot\slot.h" />
+    <ClInclude Include="queue\write\write.h" />
     <ClInclude Include="scsi\scsi.h" />
   </ItemGroup>
   <Import Project="..\..\shared\YumeDriverSelfSign.targets" />

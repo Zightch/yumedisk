@@ -19,6 +19,24 @@
     <Filter Include="Source Files\Queue">
       <UniqueIdentifier>{8D0AB45B-18C7-4FAA-AAD5-8973530332F8}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\Queue\Debug">
+      <UniqueIdentifier>{8B799342-F307-4C3E-8683-4C81C8366616}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Queue\Event">
+      <UniqueIdentifier>{7F88016A-F185-4727-9805-B0744ED4EAFA}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Queue\Lifecycle">
+      <UniqueIdentifier>{DF2B2C60-D929-4A5A-9484-1AB4278932E1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Queue\Read">
+      <UniqueIdentifier>{1EC57F40-7D53-4D46-B97C-EAFF8511D39D}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Queue\Slot">
+      <UniqueIdentifier>{B4388762-2AF6-46B6-96B2-31C99CCB0864}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Queue\Write">
+      <UniqueIdentifier>{5883A657-E59B-47D9-A59C-7E2831433F4F}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Source Files\Control">
       <UniqueIdentifier>{42D45FB8-0348-4347-B421-7DDAA6C13E68}</UniqueIdentifier>
     </Filter>
@@ -36,6 +54,24 @@
     </Filter>
     <Filter Include="Header Files\Queue">
       <UniqueIdentifier>{2313108A-F668-4E37-9E14-C6F8A0516AD9}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Queue\Debug">
+      <UniqueIdentifier>{A03A791E-00D0-472A-AC28-03772B23B9EB}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Queue\Event">
+      <UniqueIdentifier>{53E5E7E2-D2E0-45B4-9BF0-2E9752B13CBF}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Queue\Lifecycle">
+      <UniqueIdentifier>{517F7A8A-2426-4890-B7D1-975784A8B75A}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Queue\Read">
+      <UniqueIdentifier>{3F195539-6330-436A-BBDB-63FA247E85E5}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Queue\Slot">
+      <UniqueIdentifier>{1550CB6D-8EB3-4454-8BAC-7A365622B8A7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\Queue\Write">
+      <UniqueIdentifier>{0EF814AB-50A4-4D92-9D25-B80E4334CAFB}</UniqueIdentifier>
     </Filter>
     <Filter Include="Header Files\Control">
       <UniqueIdentifier>{EB42F65C-CE20-49E1-A1AB-2D327A936413}</UniqueIdentifier>
@@ -62,6 +98,24 @@
     <ClCompile Include="queue\queue.c">
       <Filter>Source Files\Queue</Filter>
     </ClCompile>
+    <ClCompile Include="queue\slot\slot.c">
+      <Filter>Source Files\Queue\Slot</Filter>
+    </ClCompile>
+    <ClCompile Include="queue\read\read.c">
+      <Filter>Source Files\Queue\Read</Filter>
+    </ClCompile>
+    <ClCompile Include="queue\write\write.c">
+      <Filter>Source Files\Queue\Write</Filter>
+    </ClCompile>
+    <ClCompile Include="queue\event\event.c">
+      <Filter>Source Files\Queue\Event</Filter>
+    </ClCompile>
+    <ClCompile Include="queue\lifecycle\lifecycle.c">
+      <Filter>Source Files\Queue\Lifecycle</Filter>
+    </ClCompile>
+    <ClCompile Include="queue\debug\debug.c">
+      <Filter>Source Files\Queue\Debug</Filter>
+    </ClCompile>
     <ClCompile Include="control\control.c">
       <Filter>Source Files\Control</Filter>
     </ClCompile>
@@ -87,6 +141,24 @@
     </ClInclude>
     <ClInclude Include="queue\queue.h">
       <Filter>Header Files\Queue</Filter>
+    </ClInclude>
+    <ClInclude Include="queue\slot\slot.h">
+      <Filter>Header Files\Queue\Slot</Filter>
+    </ClInclude>
+    <ClInclude Include="queue\read\read.h">
+      <Filter>Header Files\Queue\Read</Filter>
+    </ClInclude>
+    <ClInclude Include="queue\write\write.h">
+      <Filter>Header Files\Queue\Write</Filter>
+    </ClInclude>
+    <ClInclude Include="queue\event\event.h">
+      <Filter>Header Files\Queue\Event</Filter>
+    </ClInclude>
+    <ClInclude Include="queue\lifecycle\lifecycle.h">
+      <Filter>Header Files\Queue\Lifecycle</Filter>
+    </ClInclude>
+    <ClInclude Include="queue\debug\debug.h">
+      <Filter>Header Files\Queue\Debug</Filter>
     </ClInclude>
     <ClInclude Include="control\control.h">
       <Filter>Header Files\Control</Filter>
