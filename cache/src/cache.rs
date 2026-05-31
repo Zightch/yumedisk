@@ -1216,6 +1216,18 @@ mod tests {
     }
 
     #[test]
+    fn new_rejects_zero_lru_capacity() {
+        let mut config = test_config(32);
+        config.lru_capacity_blocks = 0;
+
+        let error = Cache::new(config, MockAtIo::default()).unwrap_err();
+        assert_eq!(
+            error,
+            CacheError::InvalidConfig("lru_capacity_blocks must be greater than 0")
+        );
+    }
+
+    #[test]
     fn new_rejects_zero_temp_file_limit() {
         let mut config = test_config(32);
         config.temp_max_files = 0;
@@ -1314,6 +1326,151 @@ mod tests {
         assert!(!block.has_active_snapshot);
         assert_eq!(block.pending_patch_count, 0);
         assert_eq!(block.valid_len, 32);
+    }
+
+    #[test]
+    fn configured_block_size_controls_right_io_granularity() {
+        let temp_dir = TestTempDir::with_prefix("cache-block-size");
+        let right = MemoryAtIo::from_bytes(16, test_bytes(96));
+        let mut config = test_config(16);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Cache::new(config, right.clone()).unwrap();
+        let mut buffer = [0u8; 6];
+
+        cache.write_locked(14, &[200, 201, 202, 203]).unwrap();
+        cache.read_locked(12, &mut buffer).unwrap();
+
+        assert_eq!(&buffer[..], &[12, 13, 200, 201, 202, 203]);
+        let log = right.take_log();
+        assert_eq!(log.len(), 2);
+        assert_eq!(log[0].operation, IoOperation::Read);
+        assert_eq!(log[0].offset, 0);
+        assert_eq!(log[0].length, 16);
+        assert_eq!(log[0].block_index, 0);
+        assert_eq!(log[1].operation, IoOperation::Read);
+        assert_eq!(log[1].offset, 16);
+        assert_eq!(log[1].length, 16);
+        assert_eq!(log[1].block_index, 1);
+    }
+
+    #[test]
+    fn first_cache_hit_promotes_fifo_block_into_lru() {
+        let temp_dir = TestTempDir::with_prefix("cache-promote-fifo");
+        let right = MockAtIo::with_len(128);
+        let mut config = test_config(32);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Cache::new_for_test(config, right, TestHooks::default()).unwrap();
+
+        cache.read_locked(0, &mut [0u8; 8]).unwrap();
+        let before_hit = cache.debug_snapshot();
+        cache.read_locked(0, &mut [0u8; 8]).unwrap();
+        let after_hit = cache.debug_snapshot();
+
+        assert_eq!(before_hit.resident.fifo_order, vec![0]);
+        assert!(before_hit.resident.lru_order.is_empty());
+        assert!(after_hit.resident.fifo_order.is_empty());
+        assert_eq!(after_hit.resident.lru_order, vec![0]);
+        assert_eq!(after_hit.resident.blocks[0].queue, QueueKindSnapshot::Lru);
+    }
+
+    #[test]
+    fn lru_hit_moves_block_to_tail_in_cache_flow() {
+        let temp_dir = TestTempDir::with_prefix("cache-lru-tail");
+        let right = MockAtIo::with_len(192);
+        let mut config = test_config(32);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Cache::new_for_test(config, right, TestHooks::default()).unwrap();
+
+        cache.read_locked(0, &mut [0u8; 1]).unwrap();
+        cache.read_locked(0, &mut [0u8; 1]).unwrap();
+        cache.read_locked(32, &mut [0u8; 1]).unwrap();
+        cache.read_locked(32, &mut [0u8; 1]).unwrap();
+        let before_refresh = cache.debug_snapshot();
+        cache.read_locked(0, &mut [0u8; 1]).unwrap();
+        let after_refresh = cache.debug_snapshot();
+
+        assert_eq!(before_refresh.resident.lru_order, vec![0, 1]);
+        assert_eq!(after_refresh.resident.lru_order, vec![1, 0]);
+    }
+
+    #[test]
+    fn insert_evicts_fifo_head_before_lru_resident() {
+        let temp_dir = TestTempDir::with_prefix("cache-fifo-victim");
+        let right = MockAtIo::with_len(192);
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 1;
+        config.lru_capacity_blocks = 1;
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Cache::new_for_test(config, right.clone(), TestHooks::default()).unwrap();
+
+        cache.read_locked(0, &mut [0u8; 1]).unwrap();
+        cache.read_locked(0, &mut [0u8; 1]).unwrap();
+        cache.read_locked(32, &mut [0u8; 1]).unwrap();
+        cache.read_locked(64, &mut [0u8; 1]).unwrap();
+        let snapshot = cache.debug_snapshot();
+        right.take_calls();
+
+        assert_eq!(snapshot.resident.fifo_order, vec![2]);
+        assert_eq!(snapshot.resident.lru_order, vec![0]);
+        assert_eq!(
+            snapshot
+                .resident
+                .blocks
+                .iter()
+                .map(|block| block.block_index)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+
+        cache.read_locked(0, &mut [0u8; 1]).unwrap();
+        assert!(right.take_calls().is_empty());
+    }
+
+    #[test]
+    fn temp_file_limit_two_allows_second_snapshot_then_stops() {
+        let temp_dir = TestTempDir::with_prefix("cache-temp-limit-two");
+        let right = MockAtIo::with_len(192);
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 1;
+        config.lru_capacity_blocks = 1;
+        config.temp_max_files = 2;
+        config.dirty_scan_interval = Duration::from_secs(60);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Cache::new(config, right).unwrap();
+
+        cache.write_locked(4, &[200, 201, 202]).unwrap();
+        cache.read_locked(32, &mut [0u8; 1]).unwrap();
+        cache.write_locked(36, &[210, 211]).unwrap();
+
+        let mut state = cache.state.lock().unwrap();
+        let created = Cache::<MockAtIo>::create_snapshot_temp_locked(
+            cache.config(),
+            &mut state,
+            cache.temp_store(),
+        )
+        .unwrap();
+        assert!(created);
+        assert_eq!(state.spilled_dirty.len(), 1);
+        assert!(state.spilled_dirty.contains_key(&0));
+        assert_eq!(state.temp_file_count(), 2);
+        assert!(
+            state
+                .resident
+                .get(1)
+                .unwrap()
+                .state
+                .active_snapshot
+                .is_some()
+        );
+
+        let created_again = Cache::<MockAtIo>::create_snapshot_temp_locked(
+            cache.config(),
+            &mut state,
+            cache.temp_store(),
+        )
+        .unwrap();
+        assert!(!created_again);
+        assert_eq!(state.temp_file_count(), 2);
     }
 
     #[test]
