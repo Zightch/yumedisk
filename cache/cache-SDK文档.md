@@ -32,7 +32,7 @@
 | --- | --- |
 | crate 名 | `cache` |
 | 版本 | `0.1.0` |
-| edition | `2026` |
+| edition | `2024` |
 | 默认 feature | 无 |
 | 可选 feature | `test-hooks` |
 
