@@ -1,0 +1,65 @@
+<svg width="1800" height="1080" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <marker orient="auto" markerHeight="8" markerWidth="8" refY="5" refX="8" viewBox="0 0 10 10" id="arrow-green">
+   <path id="svg_1" fill="#0f766e" d="m0,0l10,5l-10,5l0,-10z"/>
+  </marker>
+  <marker orient="auto" markerHeight="8" markerWidth="8" refY="5" refX="8" viewBox="0 0 10 10" id="arrow-blue">
+   <path id="svg_2" fill="#0369a1" d="m0,0l10,5l-10,5l0,-10z"/>
+  </marker>
+  <marker orient="auto" markerHeight="8" markerWidth="8" refY="5" refX="8" viewBox="0 0 10 10" id="arrow-gray">
+   <path id="svg_3" fill="#64748b" d="m0,0l10,5l-10,5l0,-10z"/>
+  </marker>
+  <marker orient="auto-start-reverse" markerHeight="8" markerWidth="8" refY="5" refX="8" viewBox="0 0 10 10" id="arrow-indigo">
+   <path id="svg_4" fill="#4338ca" d="m0,0l10,5l-10,5l0,-10z"/>
+  </marker>
+ </defs>
+ <g>
+  <title>Layer 1</title>
+  <rect id="svg_5" fill="#fcfcfb" height="1080" width="1800"/>
+  <text id="svg_6" font-weight="700" font-size="30px" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="title" y="92" x="90">NetworkMedia 缓存结构</text>
+  <text id="svg_7" font-weight="600" font-size="18px" fill="#475569" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="subtitle" y="128" x="90">当前正式口径：rw 走 cache，ro 继续由 mux 旁路直通 DiskSession</text>
+  <rect id="svg_8" rx="16" stroke-width="4" stroke="#111827" fill="#ffffff" class="backend-box" height="220" width="300" y="405.38461" x="40.76923"/>
+  <text style="cursor: move;" id="svg_9" font-weight="700" font-size="22px" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="label" y="446.15385" x="70">Backend</text>
+  <text id="svg_10" font-weight="700" font-size="22px" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="label" y="472.30769" x="70">Rust</text>
+  <text id="svg_11" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="551.15385" x="99.69231">按字节语义读写 Media</text>
+  <rect id="svg_12" rx="20" stroke-width="5" stroke="#111827" fill="#fffdf7" class="network-frame" height="560" width="760" y="220" x="520"/>
+  <text id="svg_13" font-weight="700" font-size="30px" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="title" y="263.84616" x="545.38462">NetworkMedia</text>
+  <text id="svg_14" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="297.69231" x="548.46154">内部容纳 mux、cache 和 session 复用状态</text>
+  <rect id="svg_15" rx="14" stroke-width="4" stroke="#e11d48" fill="#fff1f2" class="mux-box" height="235" width="120" y="411.15385" x="572.69231"/>
+  <text id="svg_16" font-weight="700" font-size="22px" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" fill="#0f172a" class="label" y="449.61539" x="590">mux</text>
+  <text id="svg_17" font-weight="600" font-size="15px" fill="#475569" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="small" y="520" x="591.23077">仅负责复用</text>
+  <text style="cursor: move;" id="svg_18" font-weight="600" font-size="15px" fill="#475569" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="small" y="540.38462" x="592">和分流</text>
+  <rect id="svg_19" rx="28" stroke-width="5" stroke="#f97316" fill="#fff7ed" class="cache-box" height="255" width="310" y="322.69231" x="794.23077"/>
+  <text id="svg_20" font-weight="700" font-size="22px" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" fill="#0f172a" class="label" y="360.38461" x="817.38462">cache</text>
+  <text id="svg_21" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="428" x="803.76923">左侧接任意 offset / len</text>
+  <text id="svg_22" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="507.61539" x="900.46154">右侧只产出 32 KiB 对齐块</text>
+  <text id="svg_23" font-weight="600" font-size="15px" fill="#475569" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="small" y="568.76923" x="865.92308">2Q / dirty / temp / flush</text>
+  <rect id="svg_24" rx="18" stroke-width="4" stroke="#4f46e5" fill="#eef2ff" class="temp-box" height="120" width="220" y="41.53847" x="890"/>
+  <text id="svg_25" font-weight="700" font-size="22px" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" fill="#0f172a" class="label" y="71.84616" x="905.69231">temp 文件</text>
+  <text id="svg_26" font-weight="600" font-size="15px" fill="#475569" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="small" y="119.15385" x="951.53846">cache 独立管理</text>
+  <rect id="svg_27" rx="16" stroke-width="4" stroke="#111827" fill="#ffffff" class="disk-box" height="330" width="280" y="335" x="1451.53846"/>
+  <text id="svg_28" font-weight="700" font-size="22px" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="label" y="375.76924" x="1473.23077">DiskSession</text>
+  <text id="svg_29" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="518.76923" x="1511.84615">远端 read_at / write_at</text>
+  <path stroke="#0f766e" id="svg_30" stroke-linejoin="round" stroke-linecap="round" fill="none" stroke-width="6" marker-end="url(#arrow-green)" class="path-cache" d="m354.61539,500c73.86588,0 110.79882,0 205.76923,0"/>
+  <text style="cursor: move;" id="svg_31" font-weight="700" font-size="16px" fill="#0f766e" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="accent" y="453.07692" x="374.61539">任意字节请求进入</text>
+  <path stroke="#0f766e" id="svg_32" stroke-linejoin="round" stroke-linecap="round" fill="none" stroke-width="6" marker-end="url(#arrow-green)" class="path-cache" d="m705,478.84616c45.19231,-30.76923 28.46154,-49.23078 80,-98.46154"/>
+  <path stroke="#0f766e" id="svg_33" stroke-linejoin="round" stroke-linecap="round" fill="none" stroke-width="6" marker-end="url(#arrow-green)" class="path-cache" d="m1111.92307,383.46155c116.49935,0 188.618,93.46153 327.3077,93.46153"/>
+  <path stroke="#64748b" id="svg_40" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="14 12" fill="none" stroke-width="5" marker-end="url(#arrow-gray)" class="path-pass" d="m677.30769,656.2516c230,140.39661 544.99999,129.0131 764.99999,-49.32854"/>
+  <text id="svg_34" font-weight="700" font-size="16px" fill="#0f766e" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="accent" y="638.46154" x="792.92308">rw cache path</text>
+  <text id="svg_35" font-weight="600" font-size="15px" fill="#475569" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="small" y="665" x="792.92308">cache 内部完成对齐、整块读取、patch 和命中处理</text>
+  <path stroke="#0369a1" id="svg_36" stroke-linejoin="round" stroke-linecap="round" fill="none" stroke-width="6" marker-end="url(#arrow-blue)" class="path-cache-return" d="m1440.76923,565.76923c-118.60496,0 -188.68971,-95 -318.07694,-95"/>
+  <path stroke="#0369a1" id="svg_37" stroke-linejoin="round" stroke-linecap="round" fill="none" stroke-width="6" marker-end="url(#arrow-blue)" class="path-cache-return" d="m783.46154,438.46154c-51.58653,36.92308 11.58654,16.92316 -81.53845,75.3847"/>
+  <path stroke="#0369a1" id="svg_38" stroke-linejoin="round" stroke-linecap="round" fill="none" stroke-width="6" marker-end="url(#arrow-blue)" class="path-cache-return" d="m565,535.38462c-102.49507,0 -140.25641,0 -210.38462,0"/>
+  <text id="svg_39" font-weight="700" font-size="16px" fill="#0369a1" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="accent-blue" y="691.53847" x="793.69231">cache 处理后的字节结果返回 BackendRust</text>
+  <text id="svg_41" font-weight="700" font-size="16px" fill="#64748b" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="accent-gray" y="875" x="930">ro passthrough path</text>
+  <text id="svg_42" font-weight="600" font-size="15px" fill="#475569" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="small" y="900" x="894">由 mux 旁路 cache，直接复用 DiskSession</text>
+  <path id="svg_43" stroke-linejoin="round" stroke-linecap="round" fill="none" stroke-width="5" stroke="#4338ca" marker-end="url(#arrow-indigo)" marker-start="url(#arrow-indigo)" class="path-manage" d="m1003.07692,170.76923l0,135"/>
+  <text id="svg_44" font-weight="700" font-size="22px" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" fill="#0f172a" class="label" y="258.07693" x="1018.84615">管理</text>
+  <rect id="svg_45" rx="12" stroke-width="2" stroke="#cbd5e1" fill="#f8fafc" class="legend-box" height="150" width="1660" y="865" x="70"/>
+  <text id="svg_46" font-weight="700" font-size="22px" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="label" y="915" x="105">说明</text>
+  <text id="svg_47" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="955" x="105">1. mux 只做路径复用，不做对齐、拼接、裁剪。</text>
+  <text id="svg_48" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="988" x="105">2. cache 左侧保持字节语义，右侧统一为 32 KiB 对齐固定块。</text>
+  <text id="svg_49" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="955" x="880">3. temp 文件只归 cache 管，承载 snapshot 和 spilled dirty。</text>
+  <text id="svg_50" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="988" x="880">4. DiskSession 继续只是远端 I/O 通道，不感知上层缓存细节。</text>
+ </g>
+</svg>

@@ -7,6 +7,7 @@
 目标很简单：
 
 - 只改 `NetworkMedia`
+- 当前版只做权威侧 `rw` 缓存，`ro` 继续直通
 - 把它从“按请求直通远端”的薄适配层，改成“本地 32 KiB 块缓存层”
 - 其余层继续不感知缓存
 
@@ -32,11 +33,18 @@
   - gateway 转给 storer
   - storer 再落到文件后端
 
+另外，当前项目模型已经保证：
+
+- 写端唯一
+- 所以这版不处理“多个写端同时改同一块盘”的缓存一致性问题
+
 所以这件事可以只收在 `NetworkMedia` 里做。
 
 ## 3. 一句话模型
 
-`NetworkMedia` 内部维护一份 32 KiB 对齐块缓存。
+只有权威侧 `rw` 的 `NetworkMedia` 才维护一份 32 KiB 对齐块缓存。
+
+`ro` 侧当前继续直通，不做缓存。
 
 这份缓存有 4 个核心部分：
 
@@ -50,6 +58,12 @@
   - resident 空间和 temp 空间都有限，打满后要阻塞需要新资源的请求
 
 ## 4. 固定约束
+
+这版先固定一条大前提：
+
+- 只有 `rw` 侧启用缓存
+- `ro` 侧继续直通
+- 所以下面的 2Q、状态机、temp、背压，都是 `rw` 路径的规则
 
 ### 4.1 块模型
 
@@ -159,7 +173,7 @@ temp 文件按“单盘文件数”限，不按“总字节数”限。
 - `read hit`
   - 直接放行
 - `write hit` 到已 resident 块
-  - 一般直接放行
+  - 直接放行
 - 只有那些“必须拿到新 resident 空间”或“必须拿到新 temp slot”才能继续的请求，才阻塞
 
 典型阻塞场景：
@@ -170,9 +184,17 @@ temp 文件按“单盘文件数”限，不按“总字节数”限。
   - 而 dirty eviction 又因为 temp 满了做不了
 - `write miss`
   - 同理
-- dirty block 淘汰
+- dirty victim 淘汰
   - 需要先落 temp
   - 但 temp 已满
+
+这里再明确一层：
+
+- resident 满了，但 victim 是 clean block
+  - 直接淘汰，再继续 miss
+- resident 满了，且 victim 是 dirty block
+  - 必须先做 dirty eviction
+  - 如果 temp 已满，则当前 miss 在远端拉块前阻塞
 
 阻塞结束的时机：
 
@@ -198,6 +220,16 @@ temp 文件按“单盘文件数”限，不按“总字节数”限。
 ### 5.1 `NetworkMedia`
 
 对外实现 `Media`。
+
+这里分两种模式：
+
+- `ro`
+  - 保持当前直通实现
+  - 不创建 2Q
+  - 不启动 worker
+  - 不使用 temp
+- `rw`
+  - 才进入这份草案里的缓存模型
 
 它对外只暴露：
 
@@ -268,6 +300,10 @@ temp 文件按“单盘文件数”限，不按“总字节数”限。
 
 ## 6. 状态机
 
+这部分只适用于 `rw` 缓存路径。
+
+`ro` 侧没有这套状态机，继续直通。
+
 单块状态不用画得太细，理解下面 6 个状态就够了。
 
 ### 6.1 `Missing`
@@ -317,6 +353,8 @@ temp 文件按“单盘文件数”限，不按“总字节数”限。
 
 `read_locked(offset, buffer)` 的流程：
 
+0. 如果当前是 `ro` 侧
+   - 直接直通远端
 1. 先校验范围
 2. 按 `32 KiB` 拆成触达块
 3. 每块优先查 resident
@@ -355,12 +393,22 @@ temp 文件按“单盘文件数”限，不按“总字节数”限。
 
 普通 miss 的流程：
 
-1. 在 `blocks` 里先放一个 `LoadingRemote` 占位
-2. 释放锁
-3. 对 `block_base` 发一次 aligned read
-4. 回来后填满整块
-5. 变成 `ResidentClean` 或 `ResidentDirty`
-6. 新块进入 FIFO
+1. 先判断当前是否需要为新块腾 resident 空间
+2. 如果不需要腾位
+   - 直接放 `LoadingRemote` 占位
+   - 再发 aligned read
+3. 如果需要腾位，先选 victim
+4. victim 是 clean block
+   - 直接淘汰
+   - 放 `LoadingRemote` 占位
+   - 再发 aligned read
+5. victim 是 dirty block
+   - 必须先完成 dirty eviction
+   - 若 temp 已满，则当前 miss 在发 aligned read 前阻塞
+   - 等条件满足后，再淘汰并继续
+6. 回来后填满整块
+7. 变成 `ResidentClean` 或 `ResidentDirty`
+8. 新块进入 FIFO
 
 这里读 miss 一律拿整块，不拿局部。
 
@@ -370,11 +418,13 @@ temp 文件按“单盘文件数”限，不按“总字节数”限。
 
 `write_locked(offset, data)` 的流程：
 
-1. 先校验范围
-2. 只读盘直接失败
-3. 按 `32 KiB` 拆块
-4. 每块独立 patch
-5. patch 后只改 resident 数据和脏位
+1. 如果当前是 `ro` 侧
+   - 直接按只读失败
+2. 先校验范围
+3. 只读盘直接失败
+4. 按 `32 KiB` 拆块
+5. 每块独立 patch
+6. patch 后只改 resident 数据和脏位
 
 ### 8.2 resident ready hit
 
@@ -404,6 +454,8 @@ temp 文件按“单盘文件数”限，不按“总字节数”限。
 
 ```text
 write miss
+-> if need victim: decide victim first
+-> dirty victim + temp full => block before remote read
 -> install LoadingRemote
 -> attach current patch into pending_patches
 -> remote aligned read full block
@@ -441,6 +493,7 @@ worker 只负责两类对象：
 
 - 前台读命中
 - 2Q 提升/降级
+- 为 `ro` 侧提供任何缓存能力
 
 ### 9.2 触发源
 
@@ -452,20 +505,27 @@ worker 只负责两类对象：
 
 ### 9.3 处理顺序
 
-建议每轮都这样处理：
+这版优先级固定如下：
 
-1. 先处理 `spilled_dirty`
-2. 再处理 resident block
+1. 先处理已经存在的 temp
+   - `spilled_dirty`
+   - `active snapshot`
+   - `RetryPending`
+2. temp slot 一旦释放，先让“等待 dirty eviction 的前台 miss”继续推进
+3. 最后才处理 resident dirty block 的后台周期扫描
 
 理由很直接：
 
-- `spilled_dirty` 更脆弱
-- 先把它们送走，能先释放 temp slot
+- 先把已有 temp 往前推，才能释放 temp slot
+- 释放 slot 之后，优先让前台 miss 推进
+- 周期扫描不能反过来抢占 dirty eviction 需要的 temp slot
 
 ### 9.4 resident block flush
 
 resident block 被扫描到时，按下面规则处理：
 
+- 如果当前已经有前台 miss 在等待 dirty eviction
+  - 本轮不再为 resident dirty block 创建新的 temp snapshot
 - 如果 active snapshot 是 `InFlight`
   - 跳过
 - 如果 active snapshot 是 `RetryPending`
@@ -530,7 +590,12 @@ resident block 被扫描到时，按下面规则处理：
 
 ### 10.1 clean block 淘汰
 
-最简单：
+这版先固定一个收口：
+
+- 淘汰只发生在 `read miss / write miss` 需要装入新块时
+- 周期扫描不会主动淘汰 resident block
+
+clean block 淘汰最简单：
 
 - 从 resident 表删掉
 - 从 FIFO/LRU 删掉
@@ -538,6 +603,11 @@ resident block 被扫描到时，按下面规则处理：
 ### 10.2 dirty block 淘汰
 
 dirty block 不能直接丢。
+
+这版也固定成：
+
+- dirty eviction 只在前台 miss 需要腾位时发生
+- dirty eviction 的优先级高于 resident dirty 的周期扫描 flush
 
 规则固定为：
 
@@ -666,7 +736,7 @@ blk-0000000000000012-t000005.bin
 
 - 校验 `max_io_bytes >= 32 KiB`
 - 创建 temp 根目录
-- 启动 flush worker
+- 如果是 `rw` 路径，再启动 flush worker
 
 ### 13.2 drop / eject
 
@@ -704,9 +774,14 @@ blk-0000000000000012-t000005.bin
   - 新块进 FIFO
   - FIFO 再命中进 LRU
   - LRU 命中移尾
+- `ro` 路径
+  - 继续直通
+  - 不创建缓存状态
 - 读写 miss
   - miss 会补整块
   - 同块并发 miss 不重复补块
+  - dirty victim + temp 满时，会在拉块前阻塞
+  - clean victim 不会被无谓阻塞
 - dirty / snapshot
   - temp 落盘成功后只清覆盖脏位
   - 同块任意时刻只允许一个 active snapshot
@@ -717,6 +792,8 @@ blk-0000000000000012-t000005.bin
 - 背压
   - temp 满时，需要新 temp 的请求会阻塞
   - `read hit` 不会被误阻塞
+  - `write hit` 不会被误阻塞
+  - 前台 dirty eviction 优先级高于周期扫描
 - 生命周期
   - `Drop` 不死锁
   - terminal error 后等待请求能退出
@@ -725,9 +802,11 @@ blk-0000000000000012-t000005.bin
 
 这份设计收口后，`NetworkMedia` 的模型其实很简单：
 
-- resident 内存里是一张 `FIFO + LRU` 的 2Q 表
-- 每个块按固定状态机流转
+- `ro` 侧继续直通，不做缓存
+- `rw` 侧 resident 内存里是一张 `FIFO + LRU` 的 2Q 表
+- 淘汰只发生在 miss 需要装入新块时
 - dirty 数据离开内存前，必须先落 temp
-- temp 和 resident 都有上限，打满后对需要新资源的请求做阻塞
+- temp 和 resident 都有上限，打满后只阻塞那些必须拿新资源的 miss
+- dirty eviction 的优先级高于周期扫描 resident dirty
 
 其余层继续保持无感。
