@@ -11,6 +11,7 @@ const props = defineProps<{
   adding: boolean;
   submitting: boolean;
   removingRemoteDiskId: string | null;
+  interactionLocked: boolean;
   connectionStatusText: string;
   connectionStatusClass: string;
 }>();
@@ -58,13 +59,13 @@ const claimCodeModel = computed({
           <el-input
             v-model="serverAddrModel"
             placeholder="输入服务器 IP 或地址"
-            :disabled="testing || submitting || adding || removingRemoteDiskId !== null"
+            :disabled="interactionLocked || testing || submitting || adding || removingRemoteDiskId !== null"
           />
           <el-button
             class="network-dialog__test-button network-dialog__utility-button"
             type="primary"
             :loading="testing"
-            :disabled="submitting || adding || removingRemoteDiskId !== null"
+            :disabled="interactionLocked || submitting || adding || removingRemoteDiskId !== null"
             @click="emit('testConnection')"
           >
             测试连接
@@ -82,7 +83,7 @@ const claimCodeModel = computed({
         <el-input
           v-model="diskNameModel"
           placeholder="输入磁盘名称"
-          :disabled="!canEditDraft"
+          :disabled="interactionLocked || !canEditDraft"
         />
       </el-form-item>
 
@@ -90,7 +91,7 @@ const claimCodeModel = computed({
         <el-input
           v-model="claimCodeModel"
           placeholder="输入领盘码"
-          :disabled="!canEditDraft"
+          :disabled="interactionLocked || !canEditDraft"
         />
       </el-form-item>
     </el-form>
@@ -100,7 +101,7 @@ const claimCodeModel = computed({
         class="network-dialog__action-button network-dialog__utility-button"
         type="primary"
         :loading="adding"
-        :disabled="!canAddItem || testing || submitting || removingRemoteDiskId !== null"
+        :disabled="interactionLocked || !canAddItem || testing || submitting || removingRemoteDiskId !== null"
         @click="emit('addItem')"
       >
         添加

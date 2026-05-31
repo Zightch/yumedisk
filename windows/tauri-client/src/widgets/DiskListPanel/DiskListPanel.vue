@@ -8,6 +8,8 @@ const props = defineProps<{
   disks: HomeDiskListItem[];
   autoMountCount: number;
   loading: boolean;
+  rescanLoading: boolean;
+  interactionDisabled: boolean;
   errorText: string | null;
   actionLoadingDiskId: string | null;
 }>();
@@ -33,7 +35,14 @@ const diskCount = computed(() => props.disks.length);
         </div>
 
         <div class="list-panel__meta">
-          <el-button class="list-panel__rescan" text aria-label="重扫" @click="emit('rescan')">
+          <el-button
+            class="list-panel__rescan"
+            text
+            aria-label="重扫"
+            :loading="rescanLoading"
+            :disabled="interactionDisabled"
+            @click="emit('rescan')"
+          >
             <el-icon>
               <RefreshRight />
             </el-icon>
@@ -59,6 +68,7 @@ const diskCount = computed(() => props.disks.length);
               :key="disk.localDiskId"
               :disk="disk"
               :action-loading="actionLoadingDiskId === disk.localDiskId"
+              :interaction-disabled="interactionDisabled"
               @mount="emit('mount', $event)"
               @eject="emit('eject', $event)"
               @edit="emit('edit', $event)"

@@ -6,6 +6,7 @@ defineProps<{
   items: NetworkDraftItem[];
   errorText: string | null;
   removingRemoteDiskId: string | null;
+  interactionLocked: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -75,6 +76,7 @@ function formatCapacityText(value: number, readOnly: boolean): string {
             class="network-draft-card__remove"
             aria-label="删除草稿项"
             :loading="removingRemoteDiskId === item.remoteDiskId"
+            :disabled="interactionLocked"
             @click="emit('remove', item.remoteDiskId)"
           >
             <el-icon>

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, toRef } from "vue";
 import NetworkDraftForm from "./NetworkDraftForm.vue";
 import NetworkDraftList from "./NetworkDraftList.vue";
 import { useNetworkDraftFlow } from "./useNetworkDraftFlow";
 
 const props = defineProps<{
   modelValue: boolean;
+  interactionLocked: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -38,6 +39,7 @@ const {
   testing,
 } = useNetworkDraftFlow({
   visible: dialogVisible,
+  interactionLocked: toRef(props, "interactionLocked"),
   closeDialog: () => {
     dialogVisible.value = false;
   },
@@ -77,6 +79,7 @@ const {
             :adding="adding"
             :submitting="submitting"
             :removing-remote-disk-id="removingRemoteDiskId"
+            :interaction-locked="interactionLocked"
             :connection-status-text="connectionStatusText"
             :connection-status-class="connectionStatusClass"
             @update:server-addr="form.serverAddr = $event"
@@ -90,6 +93,7 @@ const {
             :items="draftItems"
             :error-text="errorText"
             :removing-remote-disk-id="removingRemoteDiskId"
+            :interaction-locked="interactionLocked"
             @remove="handleRemoveDraftItem"
           />
 
@@ -104,7 +108,7 @@ const {
               class="app-dialog__button"
               type="primary"
               :loading="submitting"
-              :disabled="!canSubmit"
+              :disabled="!canSubmit || interactionLocked"
               @click="handleSubmit"
             >
               提交

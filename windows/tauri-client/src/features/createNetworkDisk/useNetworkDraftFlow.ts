@@ -12,6 +12,7 @@ import { mapNetworkDraftError } from "./networkDraftError";
 
 interface UseNetworkDraftFlowOptions {
   visible: Ref<boolean>;
+  interactionLocked: Ref<boolean>;
   closeDialog: () => void;
   onCreated: () => void;
 }
@@ -37,6 +38,7 @@ export function useNetworkDraftFlow(options: UseNetworkDraftFlowOptions) {
   const canEditDraft = computed(
     () =>
       draftId.value !== null &&
+      !options.interactionLocked.value &&
       !testing.value &&
       !submitting.value &&
       !adding.value &&
@@ -52,6 +54,7 @@ export function useNetworkDraftFlow(options: UseNetworkDraftFlowOptions) {
     () =>
       draftId.value !== null &&
       draftItems.value.length > 0 &&
+      !options.interactionLocked.value &&
       !testing.value &&
       !adding.value &&
       removingRemoteDiskId.value === null &&
@@ -204,6 +207,10 @@ export function useNetworkDraftFlow(options: UseNetworkDraftFlowOptions) {
   }
 
   async function handleTestConnection() {
+    if (options.interactionLocked.value) {
+      return;
+    }
+
     const error = validateServerAddr();
     if (error) {
       errorText.value = error;
@@ -247,6 +254,10 @@ export function useNetworkDraftFlow(options: UseNetworkDraftFlowOptions) {
   }
 
   async function handleAddDraftItem() {
+    if (options.interactionLocked.value) {
+      return;
+    }
+
     const error = validateDraftItem();
     if (error) {
       errorText.value = error;
@@ -285,6 +296,10 @@ export function useNetworkDraftFlow(options: UseNetworkDraftFlowOptions) {
   }
 
   async function handleRemoveDraftItem(remoteDiskId: string) {
+    if (options.interactionLocked.value) {
+      return;
+    }
+
     if (!draftId.value) {
       return;
     }
@@ -309,6 +324,10 @@ export function useNetworkDraftFlow(options: UseNetworkDraftFlowOptions) {
   }
 
   async function handleSubmit() {
+    if (options.interactionLocked.value) {
+      return;
+    }
+
     if (!draftId.value) {
       errorText.value = "请先测试连接";
       ElMessage.error("请先测试连接");

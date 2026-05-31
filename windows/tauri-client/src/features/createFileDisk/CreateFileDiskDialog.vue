@@ -31,6 +31,7 @@ interface NewFileDiskFormModel {
 
 const props = defineProps<{
   modelValue: boolean;
+  interactionLocked: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -140,6 +141,10 @@ function validateNewFileRequest(): string | null {
 }
 
 async function handleBrowse() {
+  if (props.interactionLocked) {
+    return;
+  }
+
   browsing.value = true;
 
   try {
@@ -155,6 +160,10 @@ async function handleBrowse() {
 }
 
 async function handleBrowseNewFilePath() {
+  if (props.interactionLocked) {
+    return;
+  }
+
   browsing.value = true;
 
   try {
@@ -170,6 +179,10 @@ async function handleBrowseNewFilePath() {
 }
 
 async function handleSubmit() {
+  if (props.interactionLocked) {
+    return;
+  }
+
   errorText.value = validateRequest();
   if (errorText.value) {
     return;
@@ -197,6 +210,10 @@ async function handleSubmit() {
 }
 
 async function handleCreateNewFileSubmit() {
+  if (props.interactionLocked) {
+    return;
+  }
+
   errorText.value = validateNewFileRequest();
   if (errorText.value) {
     return;
@@ -254,15 +271,16 @@ async function handleCreateNewFileSubmit() {
         <div v-if="isPickExistingTab" class="app-dialog__content app-dialog__content--tabbed">
           <el-form class="app-dialog-form" label-position="top">
             <el-form-item label="名称">
-              <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
+              <el-input v-model="form.diskName" placeholder="输入磁盘名称" :disabled="interactionLocked" />
             </el-form-item>
 
             <el-form-item label="文件路径">
               <div class="app-dialog-path-field">
-                <el-input v-model="form.filePath" placeholder="选择现有文件" />
+                <el-input v-model="form.filePath" placeholder="选择现有文件" :disabled="interactionLocked" />
                 <el-button
                   class="app-dialog-path-field__browse"
                   :loading="browsing"
+                  :disabled="interactionLocked"
                   @click="handleBrowse"
                 >
                   浏览
@@ -271,11 +289,11 @@ async function handleCreateNewFileSubmit() {
             </el-form-item>
 
             <el-form-item class="app-dialog-form__switch" label="启动自动挂载">
-              <el-switch v-model="form.autoMount" />
+              <el-switch v-model="form.autoMount" :disabled="interactionLocked" />
             </el-form-item>
 
             <el-form-item class="app-dialog-form__switch" label="只读">
-              <el-switch v-model="form.configuredReadOnly" />
+              <el-switch v-model="form.configuredReadOnly" :disabled="interactionLocked" />
             </el-form-item>
           </el-form>
 
@@ -299,6 +317,7 @@ async function handleCreateNewFileSubmit() {
               class="app-dialog__button"
               type="primary"
               :loading="submitting"
+              :disabled="interactionLocked"
               @click="handleSubmit"
             >
               创建
@@ -309,15 +328,24 @@ async function handleCreateNewFileSubmit() {
         <div v-else class="app-dialog__content app-dialog__content--tabbed">
           <el-form class="app-dialog-form" label-position="top">
             <el-form-item label="名称">
-              <el-input v-model="newFileForm.diskName" placeholder="输入磁盘名称" />
+              <el-input
+                v-model="newFileForm.diskName"
+                placeholder="输入磁盘名称"
+                :disabled="interactionLocked"
+              />
             </el-form-item>
 
             <el-form-item label="文件路径">
               <div class="app-dialog-path-field">
-                <el-input v-model="newFileForm.filePath" placeholder="输入要创建的文件路径" />
+                <el-input
+                  v-model="newFileForm.filePath"
+                  placeholder="输入要创建的文件路径"
+                  :disabled="interactionLocked"
+                />
                 <el-button
                   class="app-dialog-path-field__browse"
                   :loading="browsing"
+                  :disabled="interactionLocked"
                   @click="handleBrowseNewFilePath"
                 >
                   浏览
@@ -332,11 +360,16 @@ async function handleCreateNewFileSubmit() {
                 :step="1"
                 :precision="0"
                 controls-position="right"
+                :disabled="interactionLocked"
               />
             </el-form-item>
 
             <el-form-item label="文件格式">
-              <el-radio-group v-model="newFileForm.fileFormat" class="app-dialog-chips">
+              <el-radio-group
+                v-model="newFileForm.fileFormat"
+                class="app-dialog-chips"
+                :disabled="interactionLocked"
+              >
                 <el-radio-button
                   v-for="item in createFileFormats"
                   :key="item.value"
@@ -349,7 +382,7 @@ async function handleCreateNewFileSubmit() {
             </el-form-item>
 
             <el-form-item class="app-dialog-form__switch" label="启动自动挂载">
-              <el-switch v-model="newFileForm.autoMount" />
+              <el-switch v-model="newFileForm.autoMount" :disabled="interactionLocked" />
             </el-form-item>
           </el-form>
 
@@ -373,6 +406,7 @@ async function handleCreateNewFileSubmit() {
               class="app-dialog__button"
               type="primary"
               :loading="submitting"
+              :disabled="interactionLocked"
               @click="handleCreateNewFileSubmit"
             >
               创建

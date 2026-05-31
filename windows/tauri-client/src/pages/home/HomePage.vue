@@ -36,6 +36,7 @@ const {
   handleRescanRuntimeDisks: runRescanRuntimeDisks,
   loadHomeDiskList,
   loading,
+  rescanLoading,
   retryOpenAppSessionFlow,
   runtimeDisks,
   appSessionPhase,
@@ -46,20 +47,33 @@ const displayDisks = computed(() => mapHomeDiskDisplayItems(runtimeDisks.value, 
   appSessionPhase: appSessionPhase.value,
   diskDisplayPhase: diskDisplayPhase.value,
 }));
+const interactionDisabled = computed(() => rescanLoading.value);
 const { removeDisk } = useRemoveDiskFlow({
   actionLoadingDiskId,
   loadHomeDiskList,
 });
 
 function handleOpenMemoryCreate() {
+  if (interactionDisabled.value) {
+    return;
+  }
+
   memoryCreateVisible.value = true;
 }
 
 function handleOpenFileCreate() {
+  if (interactionDisabled.value) {
+    return;
+  }
+
   fileCreateVisible.value = true;
 }
 
 function handleOpenNetworkCreate() {
+  if (interactionDisabled.value) {
+    return;
+  }
+
   networkCreateVisible.value = true;
 }
 
@@ -84,6 +98,10 @@ async function handleNetworkDiskCreated() {
 }
 
 function handleEditDisk(localDiskId: string) {
+  if (interactionDisabled.value) {
+    return;
+  }
+
   const disk = runtimeDisks.value.find((item) => item.localDiskId === localDiskId) ?? null;
   if (disk === null) {
     ElMessage.error("磁盘不存在");
@@ -103,6 +121,10 @@ async function handleMountDisk(
   localDiskId: string,
   options: { silentSuccess?: boolean } = {},
 ) {
+  if (interactionDisabled.value) {
+    return;
+  }
+
   const { ok, errorText: message } = await runMountDisk(localDiskId, options);
 
   if (ok) {
@@ -118,6 +140,10 @@ async function handleMountDisk(
 }
 
 async function handleEjectDisk(localDiskId: string) {
+  if (interactionDisabled.value) {
+    return;
+  }
+
   actionLoadingDiskId.value = localDiskId;
 
   try {
@@ -132,6 +158,10 @@ async function handleEjectDisk(localDiskId: string) {
 }
 
 async function handleDeleteDisk(localDiskId: string) {
+  if (interactionDisabled.value) {
+    return;
+  }
+
   const disk = runtimeDisks.value.find((item) => item.localDiskId === localDiskId) ?? null;
   if (disk === null) {
     ElMessage.error("磁盘不存在");
@@ -170,6 +200,7 @@ function handleThemeChanged(theme: AppTheme) {
     <el-header class="home-page__header" height="auto">
       <AppHeader
         :app-session-phase="appSessionPhase"
+        :interaction-disabled="interactionDisabled"
         @open-app-session-status="handleOpenAppSessionStatus"
         @open-settings="handleOpenSettings"
         @open-memory-create="handleOpenMemoryCreate"
@@ -183,6 +214,8 @@ function handleThemeChanged(theme: AppTheme) {
         :disks="displayDisks"
         :auto-mount-count="autoMountCount"
         :loading="loading"
+        :rescan-loading="rescanLoading"
+        :interaction-disabled="interactionDisabled"
         :error-text="errorText"
         :action-loading-disk-id="actionLoadingDiskId"
         @rescan="handleRescanRuntimeDisks"
@@ -207,19 +240,23 @@ function handleThemeChanged(theme: AppTheme) {
   />
   <CreateMemoryDiskDialog
     v-model="memoryCreateVisible"
+    :interaction-locked="interactionDisabled"
     @created="handleMemoryDiskCreated"
   />
   <CreateFileDiskDialog
     v-model="fileCreateVisible"
+    :interaction-locked="interactionDisabled"
     @created="handleFileDiskCreated"
   />
   <CreateNetworkDiskDialog
     v-model="networkCreateVisible"
+    :interaction-locked="interactionDisabled"
     @created="handleNetworkDiskCreated"
   />
   <EditDiskDialog
     v-model="editDiskVisible"
     :disk="editingDisk"
+    :interaction-locked="interactionDisabled"
     @updated="handleDiskUpdated"
   />
 </template>

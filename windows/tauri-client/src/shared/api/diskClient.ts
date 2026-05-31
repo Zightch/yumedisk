@@ -15,6 +15,8 @@ import type {
   EjectDiskRequest,
   HomeDiskListSnapshot,
   PickRawFilePathResponse,
+  RuntimeRescanStartResponse,
+  RuntimeRescanState,
   UpdateDiskRequest,
 } from "../../entities/disk/model";
 
@@ -22,8 +24,12 @@ export async function queryHomeDiskList(): Promise<HomeDiskListSnapshot> {
   return invoke<HomeDiskListSnapshot>("query_home_disk_list");
 }
 
-export async function rescanRuntimeDisks(): Promise<HomeDiskListSnapshot> {
-  return invoke<HomeDiskListSnapshot>("rescan_runtime_disks");
+export async function rescanRuntimeDisks(): Promise<RuntimeRescanStartResponse> {
+  return invoke<RuntimeRescanStartResponse>("rescan_runtime_disks");
+}
+
+export async function queryRuntimeRescanState(): Promise<RuntimeRescanState> {
+  return invoke<RuntimeRescanState>("query_runtime_rescan_state");
 }
 
 export async function createMemoryDisk(

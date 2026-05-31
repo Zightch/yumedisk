@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::api_error::ApiError;
 use crate::backend::disk_service;
@@ -13,6 +13,7 @@ use crate::state::disk_runtime::FileMediaKind;
 use crate::state::disk_runtime::MemoryMediaKind;
 use crate::workflow::network_runtime;
 use crate::workflow::runtime_disk;
+use crate::workflow::runtime_rescan;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +30,19 @@ pub struct ManagedDiskSnapshotDto {
 #[serde(rename_all = "camelCase")]
 pub struct QueryManagedDisksResponse {
     pub disks: Vec<ManagedDiskSnapshotDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeRescanStateResponse {
+    pub running: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeRescanStartResponse {
+    pub started: bool,
+    pub running: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -346,11 +360,15 @@ pub fn query_home_disk_list(state: State<'_, ClientState>) -> QueryHomeDiskListR
             .disk_catalog
             .lock()
             .expect("disk catalog mutex should not be poisoned");
-        runtime_disk::query_home_disk_list(
-            &state.backend,
-            disk_catalog.runtime_store_mut(),
-            &state.network_client,
-        )
+        if state.is_runtime_rescan_running() {
+            disk_service::query_home_disk_list(&state.backend, disk_catalog.runtime_store())
+        } else {
+            runtime_disk::query_home_disk_list(
+                &state.backend,
+                disk_catalog.runtime_store_mut(),
+                &state.network_client,
+            )
+        }
     };
 
     build_home_disk_list_response(snapshot)
@@ -358,23 +376,20 @@ pub fn query_home_disk_list(state: State<'_, ClientState>) -> QueryHomeDiskListR
 
 #[tauri::command]
 pub fn rescan_runtime_disks(
-    state: State<'_, ClientState>,
-) -> Result<QueryHomeDiskListResponse, ApiError> {
-    let snapshot = {
-        let mut disk_catalog = state
-            .disk_catalog
-            .lock()
-            .expect("disk catalog mutex should not be poisoned");
-        let snapshot = runtime_disk::rescan_runtime_disks(
-            &state.backend,
-            disk_catalog.runtime_store_mut(),
-            &state.network_client,
-        );
-        persistence_service::save_client_state(&state.backend, disk_catalog.runtime_store())?;
-        snapshot
-    };
+    app: AppHandle,
+) -> Result<RuntimeRescanStartResponse, ApiError> {
+    runtime_rescan::start_runtime_rescan(app).map(|result| RuntimeRescanStartResponse {
+        started: result.started,
+        running: result.running,
+    })
+}
 
-    Ok(build_home_disk_list_response(snapshot))
+#[tauri::command]
+pub fn query_runtime_rescan_state(state: State<'_, ClientState>) -> RuntimeRescanStateResponse {
+    let snapshot = runtime_rescan::query_runtime_rescan_state(&state);
+    RuntimeRescanStateResponse {
+        running: snapshot.running,
+    }
 }
 
 #[tauri::command]
@@ -382,6 +397,8 @@ pub fn create_memory_disk(
     state: State<'_, ClientState>,
     request: CreateMemoryDiskRequestDto,
 ) -> Result<CreateMemoryDiskResponse, ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
+
     let local_disk_id = {
         let mut disk_catalog = state
             .disk_catalog
@@ -430,6 +447,8 @@ pub fn create_file_disk(
     state: State<'_, ClientState>,
     request: CreateFileDiskRequestDto,
 ) -> Result<CreateFileDiskResponse, ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
+
     let local_disk_id = {
         let mut disk_catalog = state
             .disk_catalog
@@ -462,6 +481,8 @@ pub fn create_new_file_disk(
     state: State<'_, ClientState>,
     request: CreateNewFileDiskRequestDto,
 ) -> Result<CreateFileDiskResponse, ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
+
     let local_disk_id = {
         let mut disk_catalog = state
             .disk_catalog
@@ -495,6 +516,8 @@ pub fn mount_disk(
     state: State<'_, ClientState>,
     request: MountDiskRequestDto,
 ) -> Result<MountDiskResponse, ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
+
     let target_id = {
         let mut disk_catalog = state
             .disk_catalog
@@ -516,6 +539,8 @@ pub fn eject_disk(
     state: State<'_, ClientState>,
     request: EjectDiskRequestDto,
 ) -> Result<(), ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
+
     let mut disk_catalog = state
         .disk_catalog
         .lock()
@@ -533,6 +558,8 @@ pub fn delete_disk(
     state: State<'_, ClientState>,
     request: DeleteDiskRequestDto,
 ) -> Result<DeleteDiskResponse, ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
+
     let mut disk_catalog = state
         .disk_catalog
         .lock()
@@ -579,6 +606,8 @@ pub fn undo_delete_disk(
     state: State<'_, ClientState>,
     request: UndoDeleteDiskRequestDto,
 ) -> Result<(), ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
+
     let mut disk_catalog = state
         .disk_catalog
         .lock()
@@ -624,6 +653,8 @@ pub fn commit_deleted_disk(
     state: State<'_, ClientState>,
     request: CommitDeletedDiskRequestDto,
 ) -> Result<(), ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
+
     let mut disk_catalog = state
         .disk_catalog
         .lock()
@@ -647,6 +678,8 @@ pub fn update_disk(
     state: State<'_, ClientState>,
     request: UpdateDiskRequestDto,
 ) -> Result<(), ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
+
     let mut disk_catalog = state
         .disk_catalog
         .lock()

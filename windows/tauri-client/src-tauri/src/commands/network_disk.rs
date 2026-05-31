@@ -6,6 +6,7 @@ use crate::api_error::ApiError;
 use crate::network::draft_flow;
 use crate::state::client_state::ClientState;
 use crate::workflow::network_draft;
+use crate::workflow::runtime_rescan;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,6 +90,7 @@ pub fn test_network_connection(
     state: State<'_, ClientState>,
     request: TestNetworkConnectionRequestDto,
 ) -> Result<(), ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
     draft_flow::test_connection(&state.network_client, &request.server_addr)
 }
 
@@ -97,6 +99,7 @@ pub fn create_network_draft(
     state: State<'_, ClientState>,
     request: CreateNetworkDraftRequestDto,
 ) -> Result<NetworkDraftSnapshotDto, ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
     draft_flow::create_network_draft(
         &state.network_client,
         draft_flow::CreateNetworkDraftRequest {
@@ -111,6 +114,7 @@ pub fn add_network_draft_item(
     state: State<'_, ClientState>,
     request: AddNetworkDraftItemRequestDto,
 ) -> Result<NetworkDraftSnapshotDto, ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
     let mut disk_catalog = state
         .disk_catalog
         .lock()
@@ -133,6 +137,7 @@ pub fn remove_network_draft_item(
     state: State<'_, ClientState>,
     request: RemoveNetworkDraftItemRequestDto,
 ) -> Result<NetworkDraftSnapshotDto, ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
     draft_flow::remove_network_draft_item(
         &state.network_client,
         draft_flow::RemoveNetworkDraftItemRequest {
@@ -148,6 +153,7 @@ pub fn submit_network_draft(
     state: State<'_, ClientState>,
     request: SubmitNetworkDraftRequestDto,
 ) -> Result<(), ApiError> {
+    runtime_rescan::ensure_runtime_rescan_idle(&state)?;
     let mut disk_catalog = state
         .disk_catalog
         .lock()

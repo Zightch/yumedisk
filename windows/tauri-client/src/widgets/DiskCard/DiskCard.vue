@@ -10,6 +10,7 @@ import {
 const props = defineProps<{
   disk: HomeDiskListItem;
   actionLoading: boolean;
+  interactionDisabled: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -72,7 +73,7 @@ const primaryActionClassName = computed(() =>
 );
 
 function handlePrimaryAction(): void {
-  if (props.actionLoading) {
+  if (props.actionLoading || props.interactionDisabled) {
     return;
   }
 
@@ -85,7 +86,7 @@ function handlePrimaryAction(): void {
 }
 
 function handleEdit(): void {
-  if (props.actionLoading) {
+  if (props.actionLoading || props.interactionDisabled) {
     return;
   }
 
@@ -93,7 +94,7 @@ function handleEdit(): void {
 }
 
 function handleDelete(): void {
-  if (props.actionLoading) {
+  if (props.actionLoading || props.interactionDisabled) {
     return;
   }
 
@@ -139,7 +140,7 @@ function handleDelete(): void {
           :class="primaryActionClassName"
           size="small"
           :loading="actionLoading"
-          :disabled="isInvalid"
+          :disabled="isInvalid || interactionDisabled"
           @click="handlePrimaryAction"
         >
           {{ primaryActionText }}
@@ -148,7 +149,7 @@ function handleDelete(): void {
         <el-button
           class="disk-card__icon-action"
           aria-label="编辑"
-          :disabled="actionLoading"
+          :disabled="actionLoading || interactionDisabled"
           @click="handleEdit"
         >
           <el-icon>
@@ -159,7 +160,7 @@ function handleDelete(): void {
         <el-button
           class="disk-card__icon-action disk-card__icon-action--danger"
           aria-label="删除"
-          :disabled="actionLoading"
+          :disabled="actionLoading || interactionDisabled"
           @click="handleDelete"
         >
           <el-icon>

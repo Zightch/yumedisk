@@ -17,6 +17,7 @@ interface MemoryDiskFormModel {
 
 const props = defineProps<{
   modelValue: boolean;
+  interactionLocked: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -76,6 +77,10 @@ function validateRequest(): string | null {
 }
 
 async function handleSubmit() {
+  if (props.interactionLocked) {
+    return;
+  }
+
   errorText.value = validateRequest();
   if (errorText.value) {
     return;
@@ -127,7 +132,7 @@ async function handleSubmit() {
         <div class="app-dialog__content">
           <el-form class="app-dialog-form" label-position="top">
             <el-form-item label="名称">
-              <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
+              <el-input v-model="form.diskName" placeholder="输入磁盘名称" :disabled="interactionLocked" />
             </el-form-item>
 
             <el-form-item label="容量 (MiB)">
@@ -137,11 +142,16 @@ async function handleSubmit() {
                 :step="1"
                 :precision="0"
                 controls-position="right"
+                :disabled="interactionLocked"
               />
             </el-form-item>
 
             <el-form-item label="介质选择">
-              <el-radio-group v-model="form.requestedMemoryKind" class="app-dialog-chips">
+              <el-radio-group
+                v-model="form.requestedMemoryKind"
+                class="app-dialog-chips"
+                :disabled="interactionLocked"
+              >
                 <el-radio-button value="auto">自动</el-radio-button>
                 <el-radio-button value="denseMem">稠密</el-radio-button>
                 <el-radio-button value="sparseMem">稀疏</el-radio-button>
@@ -149,7 +159,7 @@ async function handleSubmit() {
             </el-form-item>
 
             <el-form-item class="app-dialog-form__switch" label="启动自动挂载">
-              <el-switch v-model="form.autoMount" />
+              <el-switch v-model="form.autoMount" :disabled="interactionLocked" />
             </el-form-item>
           </el-form>
 
@@ -173,6 +183,7 @@ async function handleSubmit() {
               class="app-dialog__button"
               type="primary"
               :loading="submitting"
+              :disabled="interactionLocked"
               @click="handleSubmit"
             >
               创建

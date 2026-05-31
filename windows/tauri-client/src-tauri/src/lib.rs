@@ -12,6 +12,7 @@ use std::time::Duration;
 use crate::backend::persistence_service;
 use crate::state::client_state::ClientState;
 use crate::workflow::network_runtime;
+use crate::workflow::runtime_rescan;
 use tauri::image::Image;
 use tauri::menu::{MenuBuilder, MenuEvent, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -20,7 +21,6 @@ use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 const MAIN_WINDOW_LABEL: &str = "main";
 const TRAY_OPEN_ID: &str = "tray-open-main-window";
 const TRAY_EXIT_ID: &str = "tray-exit-app";
-const NETWORK_RUNTIME_CHANGED_EVENT: &str = "network-runtime-changed";
 const NETWORK_EVENT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 fn show_main_window(app: &AppHandle) {
@@ -92,6 +92,9 @@ fn spawn_network_event_watcher(app: AppHandle) {
         if state.is_exiting() {
             break;
         }
+        if state.is_runtime_rescan_running() {
+            continue;
+        }
 
         let changed = {
             let mut disk_catalog = state
@@ -113,7 +116,7 @@ fn spawn_network_event_watcher(app: AppHandle) {
         };
 
         if changed {
-            let _ = app.emit(NETWORK_RUNTIME_CHANGED_EVENT, ());
+            let _ = app.emit(runtime_rescan::RUNTIME_DISKS_CHANGED_EVENT, ());
         }
     });
 }
@@ -170,6 +173,7 @@ pub fn run() {
             commands::disk::query_managed_disks,
             commands::disk::query_home_disk_list,
             commands::disk::rescan_runtime_disks,
+            commands::disk::query_runtime_rescan_state,
             commands::disk::create_memory_disk,
             commands::disk::pick_raw_file_path,
             commands::disk::pick_new_raw_file_path,

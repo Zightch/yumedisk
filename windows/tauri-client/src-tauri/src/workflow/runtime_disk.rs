@@ -20,15 +20,13 @@ pub fn query_home_disk_list(
     disk_service::query_home_disk_list(backend, runtime_store)
 }
 
-pub fn rescan_runtime_disks(
+pub fn rescan_local_runtime_disks(
     backend: &BackendContext,
     runtime_store: &mut DiskRuntimeStore,
     network_client_mutex: &Mutex<NetworkClientState>,
-) -> disk_service::HomeDiskListSnapshot {
+) {
     network_runtime::sync_runtime_state(backend, runtime_store, network_client_mutex);
     disk_service::rescan_local_runtime_disks(backend, runtime_store);
-    runtime_flow::rescan_network_runtimes(backend, runtime_store, network_client_mutex);
-    disk_service::query_home_disk_list(backend, runtime_store)
 }
 
 pub fn mount_disk(

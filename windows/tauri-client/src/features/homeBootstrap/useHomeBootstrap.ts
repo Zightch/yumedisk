@@ -1,9 +1,14 @@
 import { listen } from "@tauri-apps/api/event";
 import { nextTick, onMounted, onUnmounted, ref } from "vue";
-import type { HomeDiskListItem, HomeDiskListSnapshot } from "../../entities/disk/model";
+import type {
+  HomeDiskListItem,
+  HomeDiskListSnapshot,
+  RuntimeRescanLifecycleEvent,
+} from "../../entities/disk/model";
 import type { AppSessionPhase, AppSessionSnapshot } from "../../entities/appSession/model";
 import {
   mountDisk,
+  queryRuntimeRescanState,
   queryHomeDiskList,
   rescanRuntimeDisks,
 } from "../../shared/api/diskClient";
@@ -19,6 +24,7 @@ export interface HomeBootstrapState {
   runtimeDisks: HomeDiskListItem[];
   autoMountCount: number;
   loading: boolean;
+  rescanLoading: boolean;
   errorText: string | null;
   appSessionPhase: AppSessionPhase;
   appSessionStatusText: string | null;
@@ -30,6 +36,7 @@ export function useHomeBootstrap() {
   const runtimeDisks = ref<HomeDiskListItem[]>([]);
   const autoMountCount = ref(0);
   const loading = ref(true);
+  const rescanLoading = ref(false);
   const errorText = ref<string | null>(null);
   const appSessionPhase = ref<AppSessionPhase>("initializing");
   const appSessionStatusText = ref<string | null>("正在恢复配置");
@@ -38,6 +45,11 @@ export function useHomeBootstrap() {
   const initialAutoMountCompleted = ref(false);
   const actionLoadingDiskId = ref<string | null>(null);
   let stopNetworkRuntimeListener: (() => void) | null = null;
+  let stopRuntimeRescanListener: (() => void) | null = null;
+  let rescanWaiters: Array<{
+    resolve: () => void;
+    reject: (error: Error) => void;
+  }> = [];
 
   function applyHomeDiskListSnapshot(snapshot: HomeDiskListSnapshot): void {
     runtimeDisks.value = snapshot.disks;
@@ -74,17 +86,33 @@ export function useHomeBootstrap() {
     }
   }
 
-  async function loadHomeDiskList(options: { showLoading?: boolean } = {}): Promise<HomeDiskListSnapshot | null> {
+  async function loadHomeDiskList(
+    options: { showLoading?: boolean; preserveSnapshotOnError?: boolean } = {},
+  ): Promise<HomeDiskListSnapshot | null> {
     return runHomeDiskListOperation(queryHomeDiskList, options);
   }
 
   async function handleRescanRuntimeDisks(
-    options: { showLoading?: boolean } = {},
+    options: { awaitCompletion?: boolean } = {},
   ): Promise<HomeDiskListSnapshot | null> {
-    return runHomeDiskListOperation(rescanRuntimeDisks, {
-      ...options,
-      preserveSnapshotOnError: true,
-    });
+    errorText.value = null;
+
+    try {
+      const result = await rescanRuntimeDisks();
+      rescanLoading.value = result.running;
+
+      if (options.awaitCompletion !== false && result.running) {
+        await waitForActiveRescan();
+      }
+
+      return loadHomeDiskList({
+        showLoading: false,
+        preserveSnapshotOnError: true,
+      });
+    } catch (error) {
+      errorText.value = getErrorMessage(error);
+      return null;
+    }
   }
 
   async function handleMountDisk(
@@ -135,6 +163,49 @@ export function useHomeBootstrap() {
     return getErrorDetail(error) ?? getErrorMessage(error);
   }
 
+  function resolveRescanFailureText(errorTextValue: string | null): string {
+    return errorTextValue ?? "重扫磁盘运行态失败";
+  }
+
+  function settleRescanWaiters(errorTextValue: string | null = null) {
+    const waiters = rescanWaiters;
+    rescanWaiters = [];
+
+    if (errorTextValue === null) {
+      waiters.forEach((waiter) => waiter.resolve());
+      return;
+    }
+
+    waiters.forEach((waiter) => waiter.reject(new Error(errorTextValue)));
+  }
+
+  function handleRuntimeRescanLifecycleEvent(payload: RuntimeRescanLifecycleEvent) {
+    if (payload.phase === "started") {
+      rescanLoading.value = true;
+      return;
+    }
+
+    rescanLoading.value = false;
+
+    if (payload.phase === "failed") {
+      errorText.value = resolveRescanFailureText(payload.errorText);
+      settleRescanWaiters(errorText.value);
+      return;
+    }
+
+    settleRescanWaiters();
+  }
+
+  function waitForActiveRescan(): Promise<void> {
+    if (!rescanLoading.value) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      rescanWaiters.push({ resolve, reject });
+    });
+  }
+
   async function runOpenAppSessionFlow(): Promise<boolean> {
     errorText.value = null;
     appSessionPhase.value = "initializing";
@@ -146,9 +217,9 @@ export function useHomeBootstrap() {
       appSessionPhase.value = "ready";
 
       appSessionStatusText.value = "正在重扫磁盘运行态";
-      const rescanSnapshot = await handleRescanRuntimeDisks({ showLoading: false });
+      const rescanSnapshot = await handleRescanRuntimeDisks();
       if (rescanSnapshot === null) {
-        setAppSessionFailureState(errorText.value ?? "重扫磁盘运行态失败");
+        setAppSessionFailureState(resolveRescanFailureText(errorText.value));
         return false;
       }
 
@@ -208,17 +279,31 @@ export function useHomeBootstrap() {
   }
 
   onMounted(() => {
-    void bootstrapHomePage();
-    void listen("network-runtime-changed", () => {
-      void loadHomeDiskList({ showLoading: false });
-    }).then((unlisten) => {
-      stopNetworkRuntimeListener = unlisten;
-    });
+    void (async () => {
+      stopNetworkRuntimeListener = await listen("network-runtime-changed", () => {
+        void loadHomeDiskList({
+          showLoading: false,
+          preserveSnapshotOnError: true,
+        });
+      });
+      stopRuntimeRescanListener = await listen<RuntimeRescanLifecycleEvent>(
+        "runtime-rescan-state-changed",
+        (event) => {
+          handleRuntimeRescanLifecycleEvent(event.payload);
+        },
+      );
+      const snapshot = await queryRuntimeRescanState();
+      rescanLoading.value = snapshot.running;
+      await bootstrapHomePage();
+    })();
   });
 
   onUnmounted(() => {
     stopNetworkRuntimeListener?.();
     stopNetworkRuntimeListener = null;
+    stopRuntimeRescanListener?.();
+    stopRuntimeRescanListener = null;
+    settleRescanWaiters("页面已关闭");
   });
 
   return {
@@ -230,6 +315,7 @@ export function useHomeBootstrap() {
     handleRescanRuntimeDisks,
     loadHomeDiskList,
     loading,
+    rescanLoading,
     retryOpenAppSessionFlow,
     runtimeDisks,
     appSessionPhase,

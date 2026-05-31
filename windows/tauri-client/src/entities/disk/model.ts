@@ -42,6 +42,22 @@ export interface HomeDiskListSnapshot {
   autoMountCount: number;
 }
 
+export interface RuntimeRescanState {
+  running: boolean;
+}
+
+export interface RuntimeRescanStartResponse {
+  started: boolean;
+  running: boolean;
+}
+
+export type RuntimeRescanPhase = "started" | "finished" | "failed";
+
+export interface RuntimeRescanLifecycleEvent {
+  phase: RuntimeRescanPhase;
+  errorText: string | null;
+}
+
 export interface CreateMemoryDiskRequest {
   diskName: string;
   capacityMiB: number;

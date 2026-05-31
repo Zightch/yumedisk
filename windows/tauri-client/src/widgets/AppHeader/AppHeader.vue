@@ -6,6 +6,7 @@ import type { AppSessionPhase } from "../../entities/appSession/model";
 
 const props = defineProps<{
   appSessionPhase: AppSessionPhase;
+  interactionDisabled: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -21,7 +22,9 @@ const isInitializing = computed(() => props.appSessionPhase === "initializing");
 const isReady = computed(() => props.appSessionPhase === "ready");
 const isFailed = computed(() => props.appSessionPhase === "failed");
 const statusText = computed(() => formatAppSessionPhaseText(props.appSessionPhase));
-const canCreateDisk = computed(() => props.appSessionPhase === "ready");
+const canCreateDisk = computed(
+  () => props.appSessionPhase === "ready" && !props.interactionDisabled,
+);
 
 function handleOpenMemoryCreate() {
   if (!canCreateDisk.value) {
@@ -99,7 +102,7 @@ function handleOpenNetworkCreate() {
         :offset="8"
       >
         <template #reference>
-          <el-button class="app-header__add" circle aria-label="添加磁盘">
+          <el-button class="app-header__add" circle aria-label="添加磁盘" :disabled="!canCreateDisk">
             <el-icon>
               <Plus />
             </el-icon>

@@ -29,6 +29,18 @@ struct NetworkRescanTask {
     was_mounted: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct NetworkRescanServerPlan {
+    server_addr: String,
+    tasks: Vec<NetworkRescanTask>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NetworkRescanServerResolution {
+    server_addr: String,
+    actions: Vec<NetworkResolvedAction>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CandidateSource {
     Existing,
@@ -94,20 +106,54 @@ pub fn rescan_network_runtimes(
     runtime_store: &mut DiskRuntimeStore,
     network_client_mutex: &Mutex<NetworkClientState>,
 ) {
-    let tasks = collect_network_rescan_tasks(runtime_store);
-    let tasks_by_server = group_rescan_tasks_by_server(tasks);
+    let plans = collect_network_rescan_plans(runtime_store);
 
-    for (server_addr, server_tasks) in tasks_by_server {
-        let observations = collect_server_observations(network_client_mutex, &server_tasks);
-        let actions = resolve_server_actions(observations);
-        commit_server_actions(
+    for plan in plans {
+        let resolution = resolve_network_rescan_plan(network_client_mutex, &plan);
+        commit_network_rescan_resolution(
             backend,
             runtime_store,
             network_client_mutex,
-            &server_addr,
-            actions,
+            resolution,
         );
     }
+}
+
+pub(crate) fn collect_network_rescan_plans(
+    runtime_store: &DiskRuntimeStore,
+) -> Vec<NetworkRescanServerPlan> {
+    let tasks = collect_network_rescan_tasks(runtime_store);
+    group_rescan_tasks_by_server(tasks)
+        .into_iter()
+        .map(|(server_addr, tasks)| NetworkRescanServerPlan { server_addr, tasks })
+        .collect()
+}
+
+pub(crate) fn resolve_network_rescan_plan(
+    network_client_mutex: &Mutex<NetworkClientState>,
+    plan: &NetworkRescanServerPlan,
+) -> NetworkRescanServerResolution {
+    let observations = collect_server_observations(network_client_mutex, &plan.tasks);
+    let actions = resolve_server_actions(observations);
+    NetworkRescanServerResolution {
+        server_addr: plan.server_addr.clone(),
+        actions,
+    }
+}
+
+pub(crate) fn commit_network_rescan_resolution(
+    backend: &BackendContext,
+    runtime_store: &mut DiskRuntimeStore,
+    network_client_mutex: &Mutex<NetworkClientState>,
+    resolution: NetworkRescanServerResolution,
+) {
+    commit_server_actions(
+        backend,
+        runtime_store,
+        network_client_mutex,
+        &resolution.server_addr,
+        resolution.actions,
+    );
 }
 
 fn collect_network_rescan_tasks(runtime_store: &DiskRuntimeStore) -> Vec<NetworkRescanTask> {

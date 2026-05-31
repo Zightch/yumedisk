@@ -14,6 +14,7 @@ interface EditDiskFormModel {
 const props = defineProps<{
   modelValue: boolean;
   disk: HomeDiskListItem | null;
+  interactionLocked: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -77,6 +78,10 @@ function validateRequest(): string | null {
 }
 
 async function handleSubmit() {
+  if (props.interactionLocked) {
+    return;
+  }
+
   errorText.value = validateRequest();
   if (errorText.value || props.disk === null) {
     return;
@@ -126,15 +131,15 @@ async function handleSubmit() {
     <div class="app-dialog__content">
       <el-form class="app-dialog-form" label-position="top">
         <el-form-item label="名称">
-          <el-input v-model="form.diskName" placeholder="输入磁盘名称" />
+          <el-input v-model="form.diskName" placeholder="输入磁盘名称" :disabled="interactionLocked" />
         </el-form-item>
 
         <el-form-item class="app-dialog-form__switch" label="启动自动挂载">
-          <el-switch v-model="form.autoMount" />
+          <el-switch v-model="form.autoMount" :disabled="interactionLocked" />
         </el-form-item>
 
         <el-form-item class="app-dialog-form__switch" label="只读">
-          <el-switch v-model="displayReadOnly" :disabled="isReadOnlyLocked" />
+          <el-switch v-model="displayReadOnly" :disabled="isReadOnlyLocked || interactionLocked" />
         </el-form-item>
 
         <p v-if="isReadOnlyLocked" class="app-dialog__hint">
@@ -161,6 +166,7 @@ async function handleSubmit() {
           class="app-dialog__button"
           type="primary"
           :loading="submitting"
+          :disabled="interactionLocked"
           @click="handleSubmit"
         >
           保存

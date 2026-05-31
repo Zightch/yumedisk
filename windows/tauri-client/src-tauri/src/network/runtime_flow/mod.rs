@@ -20,6 +20,9 @@ use super::lock_network_client;
 use super::validation;
 use super::NETWORK_SESSION_MISSING_REASON;
 
+pub(crate) use rescan::collect_network_rescan_plans;
+pub(crate) use rescan::commit_network_rescan_resolution;
+pub(crate) use rescan::resolve_network_rescan_plan;
 pub use rescan::rescan_network_runtimes;
 
 pub fn mount_network_disk(
