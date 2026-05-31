@@ -60,21 +60,90 @@ DiskExtractTargetId(
 
 static
 BOOLEAN
+DiskFillQueryCapabilities(
+    _Inout_ PSCSI_PNP_REQUEST_BLOCK PnpSrb
+)
+{
+    if (PnpSrb->DataBuffer == NULL ||
+        PnpSrb->DataTransferLength < sizeof(STOR_DEVICE_CAPABILITIES)) {
+        PnpSrb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+        return FALSE;
+    }
+
+    if (PnpSrb->DataTransferLength >= sizeof(STOR_DEVICE_CAPABILITIES_EX)) {
+        PSTOR_DEVICE_CAPABILITIES_EX capabilitiesEx;
+
+        capabilitiesEx = (PSTOR_DEVICE_CAPABILITIES_EX)PnpSrb->DataBuffer;
+        RtlZeroMemory(capabilitiesEx, sizeof(*capabilitiesEx));
+        capabilitiesEx->Version = STOR_DEVICE_CAPABILITIES_EX_VERSION_1;
+        capabilitiesEx->Size = (USHORT)sizeof(*capabilitiesEx);
+        capabilitiesEx->SilentInstall = 1;
+        capabilitiesEx->RawDeviceOK = 1;
+        capabilitiesEx->SurpriseRemovalOK = 0;
+        capabilitiesEx->NoDisplayInUI = 0;
+        return TRUE;
+    }
+
+    {
+        PSTOR_DEVICE_CAPABILITIES capabilities;
+
+        capabilities = (PSTOR_DEVICE_CAPABILITIES)PnpSrb->DataBuffer;
+        RtlZeroMemory(capabilities, sizeof(*capabilities));
+        capabilities->Version = STOR_DEVICE_CAPABILITIES_EX_VERSION_1;
+        capabilities->SilentInstall = 1;
+        capabilities->SurpriseRemovalOK = 0;
+        capabilities->NoDisplayInUI = 0;
+    }
+
+    return TRUE;
+}
+
+static
+BOOLEAN
+DiskHandleAdapterPnpRequest(
+    _In_ PVOID DeviceExtension,
+    _In_ PSTORAGE_REQUEST_BLOCK Srb
+)
+{
+    PSCSI_PNP_REQUEST_BLOCK pnpSrb;
+
+    pnpSrb = (PSCSI_PNP_REQUEST_BLOCK)Srb;
+    pnpSrb->SrbStatus = SRB_STATUS_SUCCESS;
+
+    switch (pnpSrb->PnPAction) {
+    case StorQueryCapabilities:
+        (VOID)DiskFillQueryCapabilities(pnpSrb);
+        break;
+    case StorRemoveDevice:
+    case StorSurpriseRemoval:
+    case StorStartDevice:
+    case StorStopDevice:
+    case StorQueryResourceRequirements:
+    case StorFilterResourceRequirements:
+        break;
+    default:
+        pnpSrb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+        break;
+    }
+
+    StorPortNotification(RequestComplete, DeviceExtension, Srb);
+    return TRUE;
+}
+
+static
+BOOLEAN
 DiskHandlePnpRequest(
     _In_ PVOID DeviceExtension,
     _In_ PSTORAGE_REQUEST_BLOCK Srb
 )
 {
     PSCSI_PNP_REQUEST_BLOCK pnpSrb;
-    UCHAR targetId;
-    NTSTATUS status;
 
     pnpSrb = (PSCSI_PNP_REQUEST_BLOCK)Srb;
     pnpSrb->SrbStatus = SRB_STATUS_SUCCESS;
 
     if ((pnpSrb->SrbPnPFlags & SRB_PNP_FLAGS_ADAPTER_REQUEST) != 0) {
-        StorPortNotification(RequestComplete, DeviceExtension, Srb);
-        return TRUE;
+        return DiskHandleAdapterPnpRequest(DeviceExtension, Srb);
     }
 
     if (pnpSrb->PathId != 0 ||
@@ -85,46 +154,12 @@ DiskHandlePnpRequest(
         return TRUE;
     }
 
-    targetId = pnpSrb->TargetId;
     switch (pnpSrb->PnPAction) {
     case StorQueryCapabilities:
-        if (pnpSrb->DataBuffer == NULL ||
-            pnpSrb->DataTransferLength < sizeof(STOR_DEVICE_CAPABILITIES)) {
-            pnpSrb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
-            break;
-        }
-
-        {
-            if (pnpSrb->DataTransferLength >= sizeof(STOR_DEVICE_CAPABILITIES_EX)) {
-                PSTOR_DEVICE_CAPABILITIES_EX capabilitiesEx;
-
-                capabilitiesEx = (PSTOR_DEVICE_CAPABILITIES_EX)pnpSrb->DataBuffer;
-                RtlZeroMemory(capabilitiesEx, sizeof(*capabilitiesEx));
-                capabilitiesEx->Version = STOR_DEVICE_CAPABILITIES_EX_VERSION_1;
-                capabilitiesEx->Size = (USHORT)sizeof(*capabilitiesEx);
-                capabilitiesEx->EjectSupported = 1;
-                capabilitiesEx->Removable = 1;
-                capabilitiesEx->SurpriseRemovalOK = 0;
-                capabilitiesEx->NoDisplayInUI = 0;
-            } else {
-                PSTOR_DEVICE_CAPABILITIES capabilities;
-
-                capabilities = (PSTOR_DEVICE_CAPABILITIES)pnpSrb->DataBuffer;
-                RtlZeroMemory(capabilities, sizeof(*capabilities));
-                capabilities->Removable = 1;
-                capabilities->EjectSupported = 1;
-                capabilities->SurpriseRemovalOK = 0;
-                capabilities->NoDisplayInUI = 0;
-            }
-        }
+        (VOID)DiskFillQueryCapabilities(pnpSrb);
         break;
     case StorRemoveDevice:
     case StorSurpriseRemoval:
-        status = DiskSystemEjectTarget(DeviceExtension, targetId);
-        if (!NT_SUCCESS(status)) {
-            pnpSrb->SrbStatus = SRB_STATUS_ERROR;
-        }
-        break;
     case StorStartDevice:
     case StorStopDevice:
     case StorQueryResourceRequirements:

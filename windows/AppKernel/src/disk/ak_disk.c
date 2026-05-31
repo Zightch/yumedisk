@@ -697,54 +697,7 @@ static AK_STATUS AkDiskValidateDiskEvent(
         return AK_STATUS_INVALID_PARAMETER;
     }
 
-    switch ((YUMEDISK_DISK_EVENT_KIND)event_record->EventKind) {
-    case YumeDiskDiskEventSystemEjected:
-        return AK_STATUS_SUCCESS;
-    default:
-        return AK_STATUS_INVALID_PARAMETER;
-    }
-}
-
-static AK_STATUS AkDiskDispatchDiskEvent(
-    AK_DISK* disk,
-    const YUMEDISK_DISK_EVENT* event_record)
-{
-    AK_DISK_EVENT dispatch_event;
-
-    if ((disk == NULL) || (event_record == NULL)) {
-        return AK_STATUS_INVALID_PARAMETER;
-    }
-
-    if (AkDiskIsStopRequested(disk) || !AkSessionIsDiskRegistered(disk->Session, disk)) {
-        return AK_STATUS_SUCCESS;
-    }
-
-    (void)memset(&dispatch_event, 0, sizeof(dispatch_event));
-    switch ((YUMEDISK_DISK_EVENT_KIND)event_record->EventKind) {
-    case YumeDiskDiskEventSystemEjected:
-        dispatch_event.Type = AkDiskEventSystemEjected;
-        break;
-    default:
-        return AK_STATUS_INVALID_PARAMETER;
-    }
-
-    dispatch_event.TargetId = disk->State.TargetId;
-    dispatch_event.DiskRuntimeId = disk->State.DiskRuntimeId;
-    dispatch_event.Flags = event_record->Flags;
-    dispatch_event.Status = event_record->Status;
-    disk->DiskOps.on_event(disk->DiskCtx, &dispatch_event);
-
-    if ((YUMEDISK_DISK_EVENT_KIND)event_record->EventKind == YumeDiskDiskEventSystemEjected) {
-        AcquireSRWLockExclusive(&disk->Lock);
-        if (disk->State.Lifecycle == AkStateRunning) {
-            disk->State.Lifecycle = AkStateRemoving;
-            disk->State.LastError = AK_STATUS_SUCCESS;
-        }
-        ReleaseSRWLockExclusive(&disk->Lock);
-        AkDiskSignalWorkerStop(disk);
-    }
-
-    return AK_STATUS_SUCCESS;
+    return AK_STATUS_INVALID_PARAMETER;
 }
 
 static AK_STATUS AkDiskPostEventSlotAsync(
@@ -841,10 +794,9 @@ static AK_STATUS AkDiskHandleEventSlotCompletion(
         return AK_STATUS_SUCCESS;
     }
 
-    status = AkDiskDispatchDiskEvent(disk, &slot_context->Event);
     (void)memset(&slot_context->Event, 0, sizeof(slot_context->Event));
     slot_context->RetryTick = 0u;
-    return status;
+    return AK_STATUS_SUCCESS;
 }
 
 static AK_STATUS AkDiskInitializeWriteAckFlushContext(

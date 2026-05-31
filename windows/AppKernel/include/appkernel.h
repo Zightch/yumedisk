@@ -56,7 +56,7 @@ typedef enum AK_SESSION_NOTICE_TYPE {
 } AK_SESSION_NOTICE_TYPE;
 
 typedef enum AK_DISK_EVENT_TYPE {
-    AkDiskEventSystemEjected = 0
+    AkDiskEventReserved0 = 0
 } AK_DISK_EVENT_TYPE;
 
 typedef VOID(AK_CALL* AK_LOG_FN)(

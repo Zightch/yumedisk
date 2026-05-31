@@ -45,7 +45,7 @@ pub enum AkSessionNoticeType {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AkDiskEventType {
-    SystemEjected = 0,
+    Reserved0 = 0,
 }
 
 #[repr(C)]

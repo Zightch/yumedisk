@@ -575,7 +575,7 @@ AK_STATUS AK_CALL AkDetachDisk(
 
 - 目标 target 已经由驱动/系统侧先清理完成。
 - 宿主只需要被动收掉 `AppKernel` 本地盘对象。
-- 典型就是 `AkDiskEventSystemEjected` 之后的异步收尾。
+- 典型就是未来某条正式盘级主动事件之后的异步收尾。
 
 返回后保证：
 
@@ -718,7 +718,7 @@ typedef struct AK_DISK_OPS {
 
 ```c
 typedef enum AK_DISK_EVENT_TYPE {
-    AkDiskEventSystemEjected = 0
+    AkDiskEventReserved0 = 0
 } AK_DISK_EVENT_TYPE;
 
 typedef struct AK_DISK_EVENT {
@@ -739,7 +739,7 @@ typedef struct AK_DISK_EVENT {
 | `out_data_length` | `read_bytes` | 需要回填的实际返回字节数 | 当前实现要求与请求长度匹配 |
 | `data_buffer` | `stage_write` | 当前 write fragment 数据载荷 | 长度由 `data_length` 指定 |
 | `data_length` | `stage_write` | 当前 write fragment 数据长度 | 应与 `AK_WRITE_OP.DataLength` 一致 |
-| `event_record` | `on_event` | 驱动主动上报的单盘事件 | 当前最小闭环只定义 `AkDiskEventSystemEjected` |
+| `event_record` | `on_event` | 驱动主动上报的单盘事件 | 当前最小闭环只保留结构和入口，不定义正式事件类型 |
 
 ### 8.1 `read_bytes`
 
@@ -935,7 +935,7 @@ typedef struct AK_SESSION_NOTICE {
 
 ```c
 typedef enum AK_DISK_EVENT_TYPE {
-    AkDiskEventSystemEjected = 0
+    AkDiskEventReserved0 = 0
 } AK_DISK_EVENT_TYPE;
 
 typedef struct AK_DISK_EVENT {
@@ -951,7 +951,7 @@ typedef struct AK_DISK_EVENT {
 
 - 它是单盘级驱动主动上行面，不走 response，也不走 session notice。
 - 当前 `event slot` 骨架已经在 `AppKernel / KMDF / SCSI` 之间接通，并且 `AK_DISK_OPS.on_event` 只从这一条链路接收盘级事件。
-- 当前最小闭环只定义事件类型和回调入口，不在本轮文档里承诺完整系统弹出策略。
+- 当前最小闭环只保留事件结构和回调入口，不定义任何正式盘级事件类型。
 
 ## 10. 写路径真实语义
 

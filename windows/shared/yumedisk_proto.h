@@ -208,7 +208,7 @@ typedef struct _YUMEDISK_WRITE_ACK_BATCH_RESULT {
     (YUMEDISK_WRITE_ACK_BATCH_RESULT_BASE_SIZE + ((_failureCount) * sizeof(YUMEDISK_WRITE_ACK_FAILURE)))
 
 typedef enum _YUMEDISK_DISK_EVENT_KIND {
-    YumeDiskDiskEventSystemEjected = 0
+    YumeDiskDiskEventReserved0 = 0
 } YUMEDISK_DISK_EVENT_KIND;
 
 typedef struct _YUMEDISK_DISK_EVENT {

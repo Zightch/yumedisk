@@ -241,7 +241,7 @@ typedef struct AK_SESSION_NOTICE {
 } AK_SESSION_NOTICE;
 
 typedef enum AK_DISK_EVENT_TYPE {
-    AkDiskEventSystemEjected
+    AkDiskEventReserved0
 } AK_DISK_EVENT_TYPE;
 
 typedef struct AK_DISK_EVENT {
@@ -260,7 +260,7 @@ typedef struct AK_DISK_EVENT {
 - `AkSessionNoticeBroken` 只允许进入 session notice 队列。
 - `AK_DISK_EVENT` 只允许从单盘 `event slot` 上行，不回塞到 response 或 notice。
 - 当前已经打通 `AkWaitResponse / AkPollResponse` 和 `AkWaitSessionNotice / AkPollSessionNotice` 两条公开消费口。
-- 当前最小闭环下只定义 `AkDiskEventSystemEjected` 类型，不在本节承诺完整系统弹出实现。
+- 当前最小闭环只保留 `event slot` 骨架和回调入口，不定义任何正式盘级事件类型。
 
 ## 5. 对外接口
 

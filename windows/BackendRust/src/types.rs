@@ -50,7 +50,7 @@ pub struct ManagedSessionNotice {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedDiskEventType {
-    SystemEjected,
+    Reserved0,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

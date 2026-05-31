@@ -621,18 +621,12 @@ fn reap_host_disk_events(host: &Arc<Mutex<CliHost>>) {
     loop {
         let result = host.lock().expect("host poisoned").poll_managed_disk_event();
         match result {
-            Ok(Some(event)) => match event.event.event_type {
-                backend_rust::ManagedDiskEventType::SystemEjected => {
-                    if let Some(smid) = event.preserved_smid {
-                        eprintln!(
-                            "notice: system-ejected target={}, preserved_smid={}",
-                            event.event.target_id, smid
-                        );
-                    } else {
-                        eprintln!("notice: system-ejected target={}", event.event.target_id);
-                    }
-                }
-            },
+            Ok(Some(event)) => {
+                eprintln!(
+                    "notice: disk-event target={}, type={:?}",
+                    event.event.target_id, event.event.event_type
+                );
+            }
             Ok(None) => break,
             Err(error) => {
                 eprintln!("error: host-disk-event-poll-failed: {}", error);

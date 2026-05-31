@@ -557,6 +557,85 @@ POST_READ_SLOT / POST_WRITE_SLOT
 - 这类现象优先记录为“环境扰动敏感”，不要直接据此重构驱动。
 - 真正需要修的前提仍是“不可恢复”或“无扰动也稳定复现”。
 
+### 3.12 `SCSI` 盘身份从“软盘路径”收回到“固定 SSD”，但仍无系统手动弹出
+
+相关提交：
+
+- `2b2c6da feat: wire system eject through scsi and backend`
+- `2c5f7be feat: refine yumedisk scsi identity`
+
+现象：
+
+- 引入系统弹出链后，`DiskGenius` 一度把盘识别成软盘。
+- 此时顺序读取性能会明显掉下去，`64 MB` 内存盘甚至只剩几十 `KB/s`。
+- 把盘身份收回后，吞吐恢复正常。
+- 后续继续补 `VPD` 和 `BusType` 后：
+  - `DiskGenius` 能识别成固态。
+  - `Get-PhysicalDisk` 能识别成 `SSD`。
+  - `Get-Disk` / `Get-PhysicalDisk` 的 `BusType` 可以从默认 `Fibre Channel` 收成 `NVMe`/`Virtual`。
+- 但系统侧仍然没有“手动弹出”入口。
+
+根因分层：
+
+第一层是 `INQUIRY.RemovableMedia = TRUE` 语义错误：
+
+- 这个位表达的是“可换介质驱动器”，更接近软盘、读卡器这类设备。
+- 它并不等于“可热插拔的固定 SSD”。
+- 在当前 Windows 存储栈下，把这个位打开后，系统会更倾向走 removable/floppy 路径，直接把盘类型和性能语义带偏。
+
+第二层是 SSD 识别依赖 `VPD`，不是依赖 `RemovableMedia`：
+
+- Windows `classpnp` 会用 `Block Device Characteristics VPD page (0xB1)` 中的 `MediumRotationRate` 判断是否存在 seek penalty。
+- `MediumRotationRate = 0x0001` 表示 non-rotating media，也就是纯 SSD。
+- 因此“让系统把盘认成 SSD”的正确做法是补 `VPD 00h/B1h`，而不是重新打开 `RemovableMedia`。
+
+第三层是总线类型和盘介质类型是两回事：
+
+- 不补总线类型时，Storport 默认会把盘枚举成 `Fibre Channel`。
+- 这会让任务管理器/存储工具展示结果比较脏，即使介质层已经是 `SSD`。
+- 通过 adapter bus type 和 unit bus type 收口后，系统可以把盘统一显示为 `NVMe`/`Virtual + SSD`。
+
+第四层是“系统手动弹出”仍然没起来，问题已经不在盘身份，而在 `SCSIAdapter` 能力面：
+
+- 目标机实测中，即使盘已经是 `NVMe + SSD`，其 `DEVPKEY_Device_RemovalPolicy` 仍是 `RemovalPolicyExpectNoRemoval`。
+- `DEVPKEY_Device_SafeRemovalRequired = False`。
+- `DEVPKEY_Device_Capabilities` 也没有进入带 `EjectSupported/Removable` 的 hotplug 语义。
+- 这说明“没有手动弹出入口”不再是盘身份问题，而是 `ROOT\\SCSIADAPTER` 这一层还没有把热插拔/弹出能力正确交给系统。
+
+本轮 `SCSI` 侧实际修改：
+
+- 把 `INQUIRY.RemovableMedia` 收回 `FALSE`，避免再走软盘语义。
+- `SCSIOP_INQUIRY` 开始区分普通 inquiry 和 `EVPD` inquiry。
+- 新增 `VPD_SUPPORTED_PAGES (00h)`。
+- 新增 `VPD_BLOCK_DEVICE_CHARACTERISTICS (B1h)`。
+- `B1h` 中把 `MediumRotationRate` 固定为 `0x0001`，让 Windows 把介质识别成 SSD。
+- `StorQueryCapabilities` 优先填 `STOR_DEVICE_CAPABILITIES_EX`，并保留旧结构 fallback。
+- miniport 初始化从 `VIRTUAL_HW_INITIALIZATION_DATA` 收到 `HW_INITIALIZATION_DATA`。
+- 打开 `STOR_FEATURE_VIRTUAL_MINIPORT | STOR_FEATURE_FULL_PNP_DEVICE_CAPABILITIES`。
+- 新增 `HwUnitControl`，处理 `ScsiUnitQueryBusType`。
+- adapter 级 `BusType` 和 unit 级 `BusType` 都已经可以单独上报。
+
+当前结论：
+
+- `RemovableMedia = TRUE` 不应该再加回去。
+- “固定 SSD” 这条线当前已经收干净：
+  - 不再走软盘语义。
+  - 盘介质能识别成 SSD。
+  - 总线类型也可以显式收口。
+- 若后续继续做系统原生手动弹出，剩余问题会聚焦到 `SCSIAdapter` 层：
+  - 重点不是再改盘类型。
+  - 重点是把 adapter request 的 `StorQueryCapabilities`、`RemovalPolicy`、safe-removal 语义真正补完整。
+- 但当前项目已经明确收口为“不做系统手动弹出”：
+  - 只保留 `Virtual + SSD` 身份。
+  - 不再向系统声明 `Removable / EjectSupported`。
+  - `event slot` 骨架保留，但当前不定义正式盘级事件类型。
+
+后续排查口径：
+
+- 若未来重开这条线，再先看 `ROOT\\SCSIADAPTER\\0000` 的 `DEVPKEY_Device_Capabilities`、`DEVPKEY_Device_RemovalPolicy`、`DEVPKEY_Device_SafeRemovalRequired`。
+- 不先看 UI，也不先看 `DiskDrive` 名称展示。
+- 只有 adapter 层先进入 hotplug/eject 语义，系统“手动弹出”入口才有可能真正出现。
+
 ## 4. 调试和压测注意事项
 
 ### 4.1 `diskspd` 使用注意

@@ -470,40 +470,6 @@ DiskHandleModeSense(
     *DataTransferLength = RequiredLength;
 }
 
-NTSTATUS
-DiskSystemEjectTarget(
-    _In_ PVOID DeviceExtension,
-    _In_ UCHAR TargetId
-)
-{
-    PDEVICE_CONTEXT extension;
-    YUMEDISK_DISK_EVENT eventRecord;
-
-    extension = (PDEVICE_CONTEXT)DeviceExtension;
-    if (extension == NULL ||
-        TargetId >= extension->MaxTargets ||
-        !DiskIsUsableTargetId(TargetId)) {
-        return STATUS_INVALID_PARAMETER;
-    }
-
-    if (!DiskDeactivateTarget(extension, TargetId)) {
-        return STATUS_SUCCESS;
-    }
-
-    RtlZeroMemory(&eventRecord, sizeof(eventRecord));
-    eventRecord.EventKind = YumeDiskDiskEventSystemEjected;
-    eventRecord.Flags = 0u;
-    eventRecord.Status = STATUS_SUCCESS;
-    eventRecord.Reserved0 = 0u;
-    DiskCompleteTargetPendingWithEvent(
-        DeviceExtension,
-        TargetId,
-        STATUS_DEVICE_NOT_CONNECTED,
-        &eventRecord);
-    StorPortNotification(BusChangeDetected, DeviceExtension, 0);
-    return STATUS_SUCCESS;
-}
-
 VOID
 DiskHandleScsiCdb(
     _In_ PVOID DeviceExtension,
@@ -647,15 +613,6 @@ DiskHandleScsiCdb(
     case SCSIOP_MEDIUM_REMOVAL:
         break;
     case SCSIOP_START_STOP_UNIT:
-        if (((Cdb->AsByte[4] & 0x02u) != 0u) &&
-            ((Cdb->AsByte[4] & 0x01u) == 0u)) {
-            status = DiskSystemEjectTarget(DeviceExtension, TargetId);
-            if (!NT_SUCCESS(status)) {
-                *SrbStatus = DiskMapQueueFailureToSrbStatus(status);
-                *ScsiStatus = SCSISTAT_CHECK_CONDITION;
-                *DataTransferLength = 0;
-            }
-        }
         break;
     case SCSIOP_SYNCHRONIZE_CACHE:
         break;

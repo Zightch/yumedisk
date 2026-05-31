@@ -68,7 +68,7 @@ fn map_session_notice_type(
 
 fn map_disk_event_type(event_type: appkernel::AkDiskEventType) -> types::ManagedDiskEventType {
     match event_type {
-        appkernel::AkDiskEventType::SystemEjected => types::ManagedDiskEventType::SystemEjected,
+        appkernel::AkDiskEventType::Reserved0 => types::ManagedDiskEventType::Reserved0,
     }
 }
 
@@ -1428,7 +1428,7 @@ unsafe extern "C" fn host_on_disk_event(
     append_log_inner(
         &inner,
         format!(
-            "[backend] disk event type=system-ejected, target={}, status={}",
+            "[backend] disk event type=reserved0, target={}, status={}",
             event_record.target_id,
             format_status_hex(event_record.status)
         ),
@@ -1763,7 +1763,7 @@ mod tests {
     fn poll_managed_disk_event_returns_fifo_order() {
         let context = BackendContext::new();
         context.enqueue_disk_event(&appkernel::AkDiskEvent {
-            event_type: appkernel::AkDiskEventType::SystemEjected,
+            event_type: appkernel::AkDiskEventType::Reserved0,
             target_id: 9,
             disk_runtime_id: 101,
             flags: 1,
@@ -1773,7 +1773,7 @@ mod tests {
         let event = context
             .poll_managed_disk_event()
             .expect("event should exist");
-        assert_eq!(event.event_type, ManagedDiskEventType::SystemEjected);
+        assert_eq!(event.event_type, ManagedDiskEventType::Reserved0);
         assert_eq!(event.target_id, 9);
         assert_eq!(event.disk_runtime_id, 101);
         assert_eq!(event.flags, 1);

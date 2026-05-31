@@ -209,15 +209,11 @@ pub struct ManagedDiskSnapshot {
   - `ManagedDiskEvent`
   - `ManagedSessionNotice`
 
-当前只定义一种盘级事件：
-
-- `ManagedDiskEventType::SystemEjected`
-
 固定要求：
 
 - 这是一条驱动主动上行事件，不走 response，也不走 session notice。
-- 宿主收到 `SystemEjected` 后，应在回调外异步调用 `detach_managed_disk_with_media()` 做被动收口。
-- 不要在 `on_event` 回调栈内直接调用 `remove_managed_disk_with_media()` 或 `detach_managed_disk_with_media()`。
+- 当前最小闭环只保留 `ManagedDiskEvent` 结构和 `poll_managed_disk_event()` 入口，不定义任何正式盘级事件类型。
+- 不要把 `ManagedDiskEvent` 当成当前版本稳定业务语义去绑定自动清理动作。
 
 ### 7.2 `notify_managed_disk_data_changed()`
 
@@ -308,4 +304,4 @@ pub fn notify_managed_disk_data_changed(
 - 建盘成功不代表宿主需要等待系统设备路径；当前 SDK 不提供这类路径。
 - 如果宿主直接校验内存介质，应允许 staged write 到最终 commit 之间存在短暂窗口。
 - `notify_managed_disk_data_changed()` 只接单盘目标，不提供共享组或 sibling 批量语义。
-- `SystemEjected` 属于驱动主动事件；宿主要在独立控制路径中再调用 `detach_managed_disk_with_media()` 做被动收口。
+- 当前版本没有正式定义的盘级主动事件；若后续补事件语义，再按实现文档决定宿主如何被动收口。
