@@ -554,7 +554,36 @@ AK_STATUS AK_CALL AkRemoveDisk(
 - `disk_ctx` 不会再被访问。
 - 宿主可以安全释放该盘介质对象和 staged write 记录。
 
-### 7.3 `AkNotifyDiskDataChanged`
+### 7.3 `AkDetachDisk`
+
+函数：
+
+```c
+AK_STATUS AK_CALL AkDetachDisk(
+    AK_DISK* disk);
+```
+
+固定语义：
+
+1. 将该盘置为 `Removing`。
+2. 不再向驱动发送 `REMOVE_DISK`。
+3. 只停止并回收该盘 worker。
+4. 不入队 `AkResponseDiskRemoved`。
+5. 直接销毁本地 runtime。
+
+适用场景：
+
+- 目标 target 已经由驱动/系统侧先清理完成。
+- 宿主只需要被动收掉 `AppKernel` 本地盘对象。
+- 典型就是 `AkDiskEventSystemEjected` 之后的异步收尾。
+
+返回后保证：
+
+- 该盘的后台线程已经退出。
+- `disk_ctx` 不会再被访问。
+- 不会再对下层重复发送一次主动 `REMOVE_DISK`。
+
+### 7.4 `AkNotifyDiskDataChanged`
 
 函数：
 
@@ -582,7 +611,7 @@ AK_STATUS AK_CALL AkNotifyDiskDataChanged(
 - `AppKernel` 已把 `NotifyDataChanged` 同步下发给下层驱动链。
 - 后续是否以及何时被系统侧感知，由 `SCSI Unit Attention` 与系统探测路径共同决定。
 
-### 7.4 `AkQueryDiskState` / `AkQueryDiskStats`
+### 7.5 `AkQueryDiskState` / `AkQueryDiskStats`
 
 函数：
 
@@ -821,6 +850,7 @@ typedef struct AK_WRITE_OP {
 
 - 不要在 `read_bytes / stage_write / on_event` 里调用 `AkClose`
 - 不要在 `read_bytes / stage_write / on_event` 里调用 `AkRemoveDisk`
+- 不要在 `read_bytes / stage_write / on_event` 里调用 `AkDetachDisk`
 - 不要在回调里长时间等待宿主自己的全局控制锁
 - 不要把磁盘文件枚举、驱动安装、CLI 交互塞进回调
 

@@ -16,3 +16,8 @@ DiskHandleScsiCdb(
     _In_ PCDB Cdb
 );
 
+NTSTATUS
+DiskSystemEjectTarget(
+    _In_ PVOID DeviceExtension,
+    _In_ UCHAR TargetId
+);

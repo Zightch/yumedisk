@@ -7,6 +7,8 @@ use backend_rust::BackendContext;
 use backend_rust::BackendStatsSnapshot;
 use backend_rust::DebugSnapshot;
 use backend_rust::DiskConfig;
+use backend_rust::ManagedDiskEvent;
+use backend_rust::ManagedDiskEventType;
 use backend_rust::ManagedDiskResponse;
 use backend_rust::ManagedDiskResponseType;
 use backend_rust::ManagedDiskSnapshot;
@@ -72,6 +74,12 @@ pub struct NetworkMountResult {
     pub disk_size_bytes: u64,
     pub read_only: bool,
     pub max_io_bytes: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostManagedDiskEvent {
+    pub event: ManagedDiskEvent,
+    pub preserved_smid: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -447,6 +455,15 @@ impl CliHost {
         Ok(None)
     }
 
+    pub fn poll_managed_disk_event(&mut self) -> AppResult<Option<HostManagedDiskEvent>> {
+        let event = self.context.poll_managed_disk_event();
+        if let Some(event) = event {
+            let notice = self.handle_host_disk_event(&event)?;
+            return Ok(Some(notice));
+        }
+        Ok(None)
+    }
+
     pub fn poll_managed_session_notice(&mut self) -> AppResult<Option<ManagedSessionNotice>> {
         let notice = self.context.poll_managed_session_notice();
         if let Some(notice) = notice {
@@ -516,10 +533,49 @@ impl CliHost {
         }
     }
 
+    fn handle_host_disk_event(
+        &mut self,
+        event: &ManagedDiskEvent,
+    ) -> AppResult<HostManagedDiskEvent> {
+        match event.event_type {
+            ManagedDiskEventType::SystemEjected => {
+                let preserved_smid = self.passive_eject_target(event.target_id)?;
+                Ok(HostManagedDiskEvent {
+                    event: *event,
+                    preserved_smid,
+                })
+            }
+        }
+    }
+
     fn handle_host_session_notice(&mut self, notice: &ManagedSessionNotice) -> AppResult<()> {
         match notice.notice_type {
             ManagedSessionNoticeType::Broken => Ok(()),
         }
+    }
+
+    fn passive_eject_target(&mut self, target_id: u32) -> AppResult<Option<u64>> {
+        let mounted = self.network_mounts.take(target_id);
+        let mut error_text = String::new();
+        let _media = self
+            .context
+            .detach_managed_disk_with_media(target_id, Some(&mut error_text))
+            .ok_or_else(|| {
+                if error_text.is_empty() {
+                    error_text = "detach-failed".to_string();
+                }
+                error_text
+            })?;
+
+        let preserved_smid = self.shared_memory.unbind_target(target_id);
+        self.network_mounts.clear_cleanup_mark(target_id);
+        if let Some(mounted) = mounted {
+            if close_session_for_cleanup(&mounted.session) {
+                self.network_mounts
+                    .release_connection_after_session_close(mounted.session.connection());
+            }
+        }
+        Ok(preserved_smid)
     }
 }
 

@@ -211,6 +211,35 @@ DiskResetDiskStorage(
 }
 
 BOOLEAN
+DiskDeactivateTarget(
+    _Inout_ PDEVICE_CONTEXT Extension,
+    _In_ ULONG TargetId
+)
+{
+    PYUME_DISK disk;
+
+    if (Extension == NULL ||
+        TargetId >= Extension->MaxTargets ||
+        !DiskIsUsableTargetId(TargetId)) {
+        return FALSE;
+    }
+
+    disk = &Extension->Disk[TargetId];
+    if (!disk->Present) {
+        return FALSE;
+    }
+
+    disk->Configured = FALSE;
+    disk->Present = FALSE;
+    disk->Removing = TRUE;
+    disk->ReadOnly = FALSE;
+    disk->PendingDataChangedUa = FALSE;
+    DiskResetDiskStorage(disk);
+    disk->Generation += 1u;
+    return TRUE;
+}
+
+BOOLEAN
 DiskTryMarkPendingDataChangedUa(
     _Inout_ PYUME_DISK Disk
 )

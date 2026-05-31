@@ -241,6 +241,9 @@ AK_API AK_STATUS AK_CALL AkCreateDisk(
 AK_API AK_STATUS AK_CALL AkRemoveDisk(
     AK_DISK* disk);
 
+AK_API AK_STATUS AK_CALL AkDetachDisk(
+    AK_DISK* disk);
+
 AK_API AK_STATUS AK_CALL AkNotifyDiskDataChanged(
     AK_DISK* disk);
 

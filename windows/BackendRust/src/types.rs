@@ -48,6 +48,20 @@ pub struct ManagedSessionNotice {
     pub status: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedDiskEventType {
+    SystemEjected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManagedDiskEvent {
+    pub event_type: ManagedDiskEventType,
+    pub target_id: u32,
+    pub disk_runtime_id: u64,
+    pub flags: u32,
+    pub status: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionConfig {
     pub heartbeat_interval_ms: u32,

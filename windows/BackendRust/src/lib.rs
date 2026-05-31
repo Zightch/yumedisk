@@ -26,6 +26,8 @@ pub use types::DEFAULT_WRITE_SLOT_BYTES;
 pub use types::DEFAULT_WRITE_WORKER_COUNT;
 pub use types::DebugSnapshot;
 pub use types::DiskConfig;
+pub use types::ManagedDiskEvent;
+pub use types::ManagedDiskEventType;
 pub use types::ManagedDiskResponse;
 pub use types::ManagedDiskResponseType;
 pub use types::ManagedDiskSnapshot;

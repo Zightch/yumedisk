@@ -20,6 +20,14 @@ DiskCompleteTargetPending(
 );
 
 VOID
+DiskCompleteTargetPendingWithEvent(
+    _In_ PVOID DeviceExtension,
+    _In_ ULONG TargetId,
+    _In_ NTSTATUS IoStatus,
+    _In_ const YUMEDISK_DISK_EVENT* EventRecord
+);
+
+VOID
 DiskCompleteAllPending(
     _In_ PVOID DeviceExtension,
     _In_ NTSTATUS Status

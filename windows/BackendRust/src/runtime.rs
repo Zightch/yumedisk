@@ -66,6 +66,12 @@ fn map_session_notice_type(
     }
 }
 
+fn map_disk_event_type(event_type: appkernel::AkDiskEventType) -> types::ManagedDiskEventType {
+    match event_type {
+        appkernel::AkDiskEventType::SystemEjected => types::ManagedDiskEventType::SystemEjected,
+    }
+}
+
 fn wide_from_multibyte(text: *const i8, code_page: u32) -> String {
     if text.is_null() {
         return String::new();
@@ -142,6 +148,7 @@ struct DiskMediaState {
 }
 
 struct DiskRuntime {
+    inner: Arc<Inner>,
     metadata: types::DiskMetadata,
     queue_config: types::DiskQueueConfig,
     lifecycle: DiskLifecycleState,
@@ -150,8 +157,9 @@ struct DiskRuntime {
 }
 
 impl DiskRuntime {
-    fn new(disk_config: &types::DiskConfig) -> Self {
+    fn new(inner: Arc<Inner>, disk_config: &types::DiskConfig) -> Self {
         Self {
+            inner,
             metadata: types::DiskMetadata {
                 target_id: disk_config.target_id,
                 sector_size: disk_config.sector_size,
@@ -179,6 +187,7 @@ struct Inner {
     stop: AtomicBool,
     disk_runtimes: Mutex<BTreeMap<u32, Arc<RwLock<DiskRuntime>>>>,
     disk_responses: Mutex<VecDeque<types::ManagedDiskResponse>>,
+    disk_events: Mutex<VecDeque<types::ManagedDiskEvent>>,
     session_notices: Mutex<VecDeque<types::ManagedSessionNotice>>,
     log_lines: Mutex<Vec<String>>,
     signal_thread: Mutex<Option<JoinHandle<()>>>,
@@ -213,6 +222,7 @@ impl BackendContext {
                 stop: AtomicBool::new(false),
                 disk_runtimes: Mutex::new(BTreeMap::new()),
                 disk_responses: Mutex::new(VecDeque::new()),
+                disk_events: Mutex::new(VecDeque::new()),
                 session_notices: Mutex::new(VecDeque::new()),
                 log_lines: Mutex::new(Vec::new()),
                 signal_thread: Mutex::new(None),
@@ -364,6 +374,21 @@ impl BackendContext {
             .push_back(response);
     }
 
+    fn enqueue_disk_event(&self, event_record: &appkernel::AkDiskEvent) {
+        let event = types::ManagedDiskEvent {
+            event_type: map_disk_event_type(event_record.event_type),
+            target_id: event_record.target_id,
+            disk_runtime_id: event_record.disk_runtime_id,
+            flags: event_record.flags,
+            status: event_record.status,
+        };
+        self.inner
+            .disk_events
+            .lock()
+            .expect("disk_events poisoned")
+            .push_back(event);
+    }
+
     fn enqueue_session_notice(&self, notice_record: &appkernel::AkSessionNotice) {
         let notice = types::ManagedSessionNotice {
             notice_type: map_session_notice_type(notice_record.notice_type),
@@ -490,6 +515,11 @@ impl BackendContext {
             .disk_responses
             .lock()
             .expect("disk_responses poisoned")
+            .clear();
+        self.inner
+            .disk_events
+            .lock()
+            .expect("disk_events poisoned")
             .clear();
         self.inner
             .session_notices
@@ -802,6 +832,14 @@ impl BackendContext {
             .pop_front()
     }
 
+    pub fn poll_managed_disk_event(&self) -> Option<types::ManagedDiskEvent> {
+        self.inner
+            .disk_events
+            .lock()
+            .expect("disk_events poisoned")
+            .pop_front()
+    }
+
     pub fn poll_managed_session_notice(&self) -> Option<types::ManagedSessionNotice> {
         self.inner
             .session_notices
@@ -912,7 +950,10 @@ impl BackendContext {
             return Err(media);
         }
 
-        let runtime = Arc::new(RwLock::new(DiskRuntime::new(&disk_config)));
+        let runtime = Arc::new(RwLock::new(DiskRuntime::new(
+            Arc::clone(&self.inner),
+            &disk_config,
+        )));
         {
             let mut runtime_guard = runtime.write().expect("disk runtime poisoned");
             runtime_guard.media.instance = Some(media);
@@ -1066,6 +1107,70 @@ impl BackendContext {
         };
 
         self.append_log(format!("[backend] removed target={}", target_id));
+        Some(media)
+    }
+
+    pub fn detach_managed_disk_with_media(
+        &self,
+        target_id: u32,
+        out_error_text: Option<&mut String>,
+    ) -> Option<Box<dyn Media>> {
+        let session = *self.inner.session.lock().expect("session poisoned");
+        if session == 0 {
+            if let Some(out_error_text) = out_error_text {
+                *out_error_text = String::from("session-not-open");
+            }
+            return None;
+        }
+
+        let Some(runtime) = self.find_disk_runtime(target_id) else {
+            if let Some(out_error_text) = out_error_text {
+                *out_error_text = String::from("target-not-found");
+            }
+            return None;
+        };
+
+        let handle = runtime
+            .read()
+            .expect("disk runtime poisoned")
+            .lifecycle
+            .handle;
+        if handle != 0 {
+            // SAFETY: valid disk handle.
+            let status = unsafe { appkernel::AkDetachDisk(handle as *mut appkernel::AkDisk) };
+            if status != appkernel::AK_STATUS_SUCCESS {
+                if let Some(out_error_text) = out_error_text {
+                    *out_error_text = format_status_hex(status);
+                }
+                self.append_log(format!(
+                    "[backend] detach failed, target={}, status={}",
+                    target_id,
+                    format_status_hex(status)
+                ));
+                return None;
+            }
+        }
+
+        let media = {
+            let mut runtime_guard = runtime.write().expect("disk runtime poisoned");
+            runtime_guard.lifecycle.handle = 0;
+            runtime_guard.staging.clear_locked();
+            runtime_guard.media.instance.take()
+        };
+        self.erase_disk_runtime(target_id);
+
+        let Some(media) = media else {
+            if let Some(out_error_text) = out_error_text {
+                *out_error_text = String::from("media-not-available");
+            }
+            self.append_log(format!(
+                "[backend] detach failed, target={}, media-not-available",
+                target_id
+            ));
+            return None;
+        };
+
+        self.append_log(format!("[backend] detached target={}", target_id));
         Some(media)
     }
 
@@ -1302,10 +1407,32 @@ unsafe extern "C" fn host_stage_write(
 }
 
 unsafe extern "C" fn host_on_disk_event(
-    _disk_ctx: *mut c_void,
-    _event_record: *const appkernel::AkDiskEvent,
+    disk_ctx: *mut c_void,
+    event_record: *const appkernel::AkDiskEvent,
 ) {
-    // Eject-specific host behavior is deferred to the later eject phase.
+    if disk_ctx.is_null() || event_record.is_null() {
+        return;
+    }
+
+    // SAFETY: pointers are owned by the AppKernel callback contract for the duration of the call.
+    let runtime = unsafe { &*(disk_ctx as *const RwLock<DiskRuntime>) };
+    let event_record = unsafe { &*event_record };
+    let inner = {
+        let runtime_guard = runtime.read().expect("disk runtime poisoned");
+        Arc::clone(&runtime_guard.inner)
+    };
+    let context = ManuallyDrop::new(BackendContext {
+        inner: Arc::clone(&inner),
+    });
+    context.enqueue_disk_event(event_record);
+    append_log_inner(
+        &inner,
+        format!(
+            "[backend] disk event type=system-ejected, target={}, status={}",
+            event_record.target_id,
+            format_status_hex(event_record.status)
+        ),
+    );
 }
 
 const AK_DISK_OPS: appkernel::AkDiskOps = appkernel::AkDiskOps {
@@ -1349,6 +1476,7 @@ mod tests {
     use crate::error::BackendError;
     use crate::media::Media;
     use crate::types::DiskConfig;
+    use crate::types::ManagedDiskEventType;
     use crate::types::ManagedDiskResponseType;
 
     struct DummyMedia {
@@ -1401,7 +1529,10 @@ mod tests {
             disk_size_bytes: 4096,
             ..DiskConfig::default()
         };
-        let runtime = Arc::new(RwLock::new(DiskRuntime::new(&disk_config)));
+        let runtime = Arc::new(RwLock::new(DiskRuntime::new(
+            Arc::clone(&context.inner),
+            &disk_config,
+        )));
         runtime
             .write()
             .expect("disk runtime poisoned")
@@ -1626,5 +1757,27 @@ mod tests {
         assert_eq!(second.event_id, 56);
 
         assert!(context.poll_managed_disk_response().is_none());
+    }
+
+    #[test]
+    fn poll_managed_disk_event_returns_fifo_order() {
+        let context = BackendContext::new();
+        context.enqueue_disk_event(&appkernel::AkDiskEvent {
+            event_type: appkernel::AkDiskEventType::SystemEjected,
+            target_id: 9,
+            disk_runtime_id: 101,
+            flags: 1,
+            status: appkernel::AK_STATUS_SUCCESS,
+        });
+
+        let event = context
+            .poll_managed_disk_event()
+            .expect("event should exist");
+        assert_eq!(event.event_type, ManagedDiskEventType::SystemEjected);
+        assert_eq!(event.target_id, 9);
+        assert_eq!(event.disk_runtime_id, 101);
+        assert_eq!(event.flags, 1);
+        assert_eq!(event.status, appkernel::AK_STATUS_SUCCESS);
+        assert!(context.poll_managed_disk_event().is_none());
     }
 }

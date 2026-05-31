@@ -49,6 +49,12 @@ DiskResetDiskStorage(
 );
 
 BOOLEAN
+DiskDeactivateTarget(
+    _Inout_ PDEVICE_CONTEXT Extension,
+    _In_ ULONG TargetId
+);
+
+BOOLEAN
 DiskTryMarkPendingDataChangedUa(
     _Inout_ PYUME_DISK Disk
 );

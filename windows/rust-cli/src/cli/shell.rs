@@ -82,6 +82,7 @@ fn run_command_loop(host: &Arc<Mutex<CliHost>>) -> AppResult<()> {
     let stdin = io::stdin();
 
     loop {
+        reap_host_disk_events(host);
         reap_host_responses(host);
         reap_host_session_notices(host);
         reap_network_data_changed(host);
@@ -109,6 +110,7 @@ fn run_command_loop(host: &Arc<Mutex<CliHost>>) -> AppResult<()> {
         match execute_command(&mut host_guard, tokens[0], &tokens[1..]) {
             Ok(LoopControl::Continue) => {
                 drop(host_guard);
+                reap_host_disk_events(host);
                 reap_host_responses(host);
                 reap_host_session_notices(host);
                 reap_network_data_changed(host);
@@ -615,6 +617,31 @@ fn reap_host_responses(host: &Arc<Mutex<CliHost>>) {
     }
 }
 
+fn reap_host_disk_events(host: &Arc<Mutex<CliHost>>) {
+    loop {
+        let result = host.lock().expect("host poisoned").poll_managed_disk_event();
+        match result {
+            Ok(Some(event)) => match event.event.event_type {
+                backend_rust::ManagedDiskEventType::SystemEjected => {
+                    if let Some(smid) = event.preserved_smid {
+                        eprintln!(
+                            "notice: system-ejected target={}, preserved_smid={}",
+                            event.event.target_id, smid
+                        );
+                    } else {
+                        eprintln!("notice: system-ejected target={}", event.event.target_id);
+                    }
+                }
+            },
+            Ok(None) => break,
+            Err(error) => {
+                eprintln!("error: host-disk-event-poll-failed: {}", error);
+                break;
+            }
+        }
+    }
+}
+
 fn reap_host_session_notices(host: &Arc<Mutex<CliHost>>) {
     loop {
         let result = host
@@ -667,6 +694,7 @@ fn start_dead_network_reaper(host: Arc<Mutex<CliHost>>) -> DeadNetworkReaper {
     let stop_flag = Arc::clone(&stop);
     let thread = thread::spawn(move || {
         while !stop_flag.load(Ordering::Acquire) {
+            reap_host_disk_events(&host);
             reap_host_responses(&host);
             reap_host_session_notices(&host);
             reap_network_data_changed(&host);

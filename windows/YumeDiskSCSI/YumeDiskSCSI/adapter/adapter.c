@@ -59,6 +59,73 @@ DiskExtractTargetId(
 
 static
 BOOLEAN
+DiskHandlePnpRequest(
+    _In_ PVOID DeviceExtension,
+    _In_ PSTORAGE_REQUEST_BLOCK Srb
+)
+{
+    PSCSI_PNP_REQUEST_BLOCK pnpSrb;
+    UCHAR targetId;
+    NTSTATUS status;
+
+    pnpSrb = (PSCSI_PNP_REQUEST_BLOCK)Srb;
+    pnpSrb->SrbStatus = SRB_STATUS_SUCCESS;
+
+    if ((pnpSrb->SrbPnPFlags & SRB_PNP_FLAGS_ADAPTER_REQUEST) != 0) {
+        StorPortNotification(RequestComplete, DeviceExtension, Srb);
+        return TRUE;
+    }
+
+    if (pnpSrb->PathId != 0 ||
+        pnpSrb->Lun != 0 ||
+        !DiskIsUsableTargetId(pnpSrb->TargetId)) {
+        pnpSrb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+        StorPortNotification(RequestComplete, DeviceExtension, Srb);
+        return TRUE;
+    }
+
+    targetId = pnpSrb->TargetId;
+    switch (pnpSrb->PnPAction) {
+    case StorQueryCapabilities:
+        if (pnpSrb->DataBuffer == NULL ||
+            pnpSrb->DataTransferLength < sizeof(STOR_DEVICE_CAPABILITIES)) {
+            pnpSrb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+            break;
+        }
+
+        {
+            PSTOR_DEVICE_CAPABILITIES capabilities;
+
+            capabilities = (PSTOR_DEVICE_CAPABILITIES)pnpSrb->DataBuffer;
+            capabilities->Removable = 1;
+            capabilities->EjectSupported = 1;
+            capabilities->SurpriseRemovalOK = 0;
+            capabilities->NoDisplayInUI = 0;
+        }
+        break;
+    case StorRemoveDevice:
+    case StorSurpriseRemoval:
+        status = DiskSystemEjectTarget(DeviceExtension, targetId);
+        if (!NT_SUCCESS(status)) {
+            pnpSrb->SrbStatus = SRB_STATUS_ERROR;
+        }
+        break;
+    case StorStartDevice:
+    case StorStopDevice:
+    case StorQueryResourceRequirements:
+    case StorFilterResourceRequirements:
+        break;
+    default:
+        pnpSrb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+        break;
+    }
+
+    StorPortNotification(RequestComplete, DeviceExtension, Srb);
+    return TRUE;
+}
+
+static
+BOOLEAN
 DiskHandleExecuteScsi(
     _In_ PVOID DeviceExtension,
     _In_ PSTORAGE_REQUEST_BLOCK Srb
@@ -162,6 +229,10 @@ DiskStartStorageRequest(
         return DiskHandleIoControlSrb(DeviceExtension, Srb);
     }
 
+    if (Srb->SrbFunction == SRB_FUNCTION_PNP) {
+        return DiskHandlePnpRequest(DeviceExtension, Srb);
+    }
+
     Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
     StorPortNotification(RequestComplete, DeviceExtension, Srb);
     return TRUE;
@@ -254,7 +325,6 @@ DiskResetBus(
     return TRUE;
 }
 
-static
 SCSI_ADAPTER_CONTROL_STATUS
 DiskAdapterControl(
     _In_ PVOID DeviceExtension,

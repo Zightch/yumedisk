@@ -91,6 +91,9 @@ static void AkDiskFreeWorkerArrays(
 static void AkDiskStopWorkers(
     AK_DISK* disk);
 
+static void AkDiskSignalWorkerStop(
+    AK_DISK* disk);
+
 static void AkDiskRecordFinalWriteCommitted(
     AK_DISK* disk);
 
@@ -730,6 +733,17 @@ static AK_STATUS AkDiskDispatchDiskEvent(
     dispatch_event.Flags = event_record->Flags;
     dispatch_event.Status = event_record->Status;
     disk->DiskOps.on_event(disk->DiskCtx, &dispatch_event);
+
+    if ((YUMEDISK_DISK_EVENT_KIND)event_record->EventKind == YumeDiskDiskEventSystemEjected) {
+        AcquireSRWLockExclusive(&disk->Lock);
+        if (disk->State.Lifecycle == AkStateRunning) {
+            disk->State.Lifecycle = AkStateRemoving;
+            disk->State.LastError = AK_STATUS_SUCCESS;
+        }
+        ReleaseSRWLockExclusive(&disk->Lock);
+        AkDiskSignalWorkerStop(disk);
+    }
+
     return AK_STATUS_SUCCESS;
 }
 
@@ -3259,6 +3273,38 @@ AK_STATUS AkDiskRemove(AK_DISK* disk)
     AkSessionUnregisterDisk(disk->Session, disk);
     AkDiskDestroy(disk);
     return remove_status;
+}
+
+AK_STATUS AkDiskDetach(AK_DISK* disk)
+{
+    BOOLEAN already_closed;
+
+    if (disk == NULL) {
+        return AK_STATUS_INVALID_PARAMETER;
+    }
+
+    AcquireSRWLockExclusive(&disk->Lock);
+    already_closed = (BOOLEAN)(disk->State.Lifecycle == AkStateClosed);
+    if (!already_closed) {
+        disk->State.Lifecycle = AkStateRemoving;
+        disk->State.LastError = AK_STATUS_SUCCESS;
+    }
+    ReleaseSRWLockExclusive(&disk->Lock);
+
+    if (already_closed) {
+        return AK_STATUS_SUCCESS;
+    }
+
+    AkDiskSignalWorkerStop(disk);
+    AkDiskStopWorkers(disk);
+
+    AcquireSRWLockExclusive(&disk->Lock);
+    disk->State.Lifecycle = AkStateClosed;
+    ReleaseSRWLockExclusive(&disk->Lock);
+
+    AkSessionUnregisterDisk(disk->Session, disk);
+    AkDiskDestroy(disk);
+    return AK_STATUS_SUCCESS;
 }
 
 AK_STATUS AkDiskNotifyDataChanged(

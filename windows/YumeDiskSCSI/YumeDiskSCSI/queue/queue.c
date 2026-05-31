@@ -698,10 +698,12 @@ DiskFreeQueuedState(
 }
 
 VOID
-DiskCompleteTargetPending(
+DiskCompleteTargetPendingInternal(
     _In_ PVOID DeviceExtension,
     _In_ ULONG TargetId,
-    _In_ NTSTATUS Status
+    _In_ NTSTATUS IoStatus,
+    _In_ NTSTATUS EventSlotStatus,
+    _In_opt_ const YUMEDISK_DISK_EVENT* EventRecord
 )
 {
     PDEVICE_CONTEXT extension;
@@ -763,14 +765,14 @@ DiskCompleteTargetPending(
         PYUME_READ_REQUEST request;
 
         request = CONTAINING_RECORD(RemoveHeadList(&readRequests), YUME_READ_REQUEST, Link);
-        DiskCompleteReadRequest(DeviceExtension, request, Status);
+        DiskCompleteReadRequest(DeviceExtension, request, IoStatus);
     }
 
     while (!IsListEmpty(&readSlots)) {
         PYUME_POSTED_SLOT slot;
 
         slot = CONTAINING_RECORD(RemoveHeadList(&readSlots), YUME_POSTED_SLOT, Link);
-        DiskCompleteSlotSrb(DeviceExtension, slot, Status);
+        DiskCompleteSlotSrb(DeviceExtension, slot, IoStatus);
         DiskFree(slot);
     }
 
@@ -778,7 +780,7 @@ DiskCompleteTargetPending(
         PYUME_WRITE_REQUEST request;
 
         request = CONTAINING_RECORD(RemoveHeadList(&writeRequests), YUME_WRITE_REQUEST, Link);
-        request->FinalStatus = Status;
+        request->FinalStatus = IoStatus;
         DiskCompleteWriteRequest(DeviceExtension, request);
     }
 
@@ -786,11 +788,42 @@ DiskCompleteTargetPending(
         PYUME_POSTED_SLOT slot;
 
         slot = CONTAINING_RECORD(RemoveHeadList(&writeSlots), YUME_POSTED_SLOT, Link);
-        DiskCompleteSlotSrb(DeviceExtension, slot, Status);
+        DiskCompleteSlotSrb(DeviceExtension, slot, IoStatus);
         DiskFree(slot);
     }
 
-    DiskCompletePendingEventSlot(DeviceExtension, TargetId, Status, NULL);
+    DiskCompletePendingEventSlot(DeviceExtension, TargetId, EventSlotStatus, EventRecord);
+}
+
+VOID
+DiskCompleteTargetPending(
+    _In_ PVOID DeviceExtension,
+    _In_ ULONG TargetId,
+    _In_ NTSTATUS Status
+)
+{
+    DiskCompleteTargetPendingInternal(
+        DeviceExtension,
+        TargetId,
+        Status,
+        Status,
+        NULL);
+}
+
+VOID
+DiskCompleteTargetPendingWithEvent(
+    _In_ PVOID DeviceExtension,
+    _In_ ULONG TargetId,
+    _In_ NTSTATUS IoStatus,
+    _In_ const YUMEDISK_DISK_EVENT* EventRecord
+)
+{
+    DiskCompleteTargetPendingInternal(
+        DeviceExtension,
+        TargetId,
+        IoStatus,
+        STATUS_SUCCESS,
+        EventRecord);
 }
 
 VOID

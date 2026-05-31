@@ -150,7 +150,6 @@ DiskHandleRemoveDisk(
 )
 {
     PYUMEDISK_REMOVE_DISK request;
-    PYUME_DISK disk;
 
     if (Message->Header.PayloadLength < sizeof(YUMEDISK_REMOVE_DISK)) {
         return STATUS_INVALID_PARAMETER;
@@ -162,18 +161,9 @@ DiskHandleRemoveDisk(
         return STATUS_INVALID_PARAMETER;
     }
 
-    disk = &Extension->Disk[request->TargetId];
-    if (!disk->Present) {
+    if (!DiskDeactivateTarget(Extension, request->TargetId)) {
         return STATUS_NOT_FOUND;
     }
-
-    disk->Configured = FALSE;
-    disk->Present = FALSE;
-    disk->Removing = TRUE;
-    disk->ReadOnly = FALSE;
-    disk->PendingDataChangedUa = FALSE;
-    DiskResetDiskStorage(disk);
-    disk->Generation++;
     DiskCompleteTargetPending(DeviceExtension, request->TargetId, STATUS_DEVICE_NOT_CONNECTED);
 
     DiskInitMessageStatus(Message, YumeDiskCommandRemoveDisk, STATUS_SUCCESS, 0);
@@ -196,15 +186,7 @@ DiskHandleRemoveAllDisks(
     closeSession = ((Message->Header.Flags & YUMEDISK_SESSION_CLOSE_FLAG) != 0);
 
     for (index = YUMEDISK_MIN_TARGET_ID; index <= YUMEDISK_MAX_USABLE_TARGET_ID; ++index) {
-        if (Extension->Disk[index].Present) {
-            Extension->Disk[index].Configured = FALSE;
-            Extension->Disk[index].Present = FALSE;
-            Extension->Disk[index].Removing = TRUE;
-            Extension->Disk[index].ReadOnly = FALSE;
-            Extension->Disk[index].PendingDataChangedUa = FALSE;
-            DiskResetDiskStorage(&Extension->Disk[index]);
-            Extension->Disk[index].Generation++;
-        }
+        (VOID)DiskDeactivateTarget(Extension, index);
     }
 
     DiskCompleteAllPending(DeviceExtension, STATUS_DEVICE_NOT_CONNECTED);

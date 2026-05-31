@@ -84,6 +84,12 @@ AK_STATUS AK_CALL AkRemoveDisk(
     return AkDiskRemove(disk);
 }
 
+AK_STATUS AK_CALL AkDetachDisk(
+    AK_DISK* disk)
+{
+    return AkDiskDetach(disk);
+}
+
 AK_STATUS AK_CALL AkNotifyDiskDataChanged(
     AK_DISK* disk)
 {
