@@ -192,9 +192,9 @@ impl CliHost {
         let (dense_mem, disk_size_bytes, binding) = match request.source {
             CreateLocalDiskSource::SizeMib(size_mib) => {
                 let size_bytes = mib_to_bytes(size_mib)?;
-                let (media, prepared_size) =
+                let (media, prepared_size, binding) =
                     self.shared_memory.prepare_dedicated_media(size_bytes)?;
-                (media, prepared_size, LocalBindingKind::Dedicated)
+                (media, prepared_size, binding)
             }
             CreateLocalDiskSource::SharedMemoryId(smid) => {
                 let (media, size_bytes) = self.shared_memory.prepare_shared_media(smid)?;
@@ -350,7 +350,7 @@ impl CliHost {
             }
         }
         self.network_mounts.clear_cleanup_mark(target_id);
-        self.shared_memory.unbind_target(target_id);
+        self.shared_memory.unbind_target(target_id, false);
 
         Ok(())
     }
@@ -402,7 +402,7 @@ impl CliHost {
                 mounted.shutdown();
             }
             self.network_mounts.clear_cleanup_mark(target_id);
-            self.shared_memory.unbind_target(target_id);
+            self.shared_memory.unbind_target(target_id, false);
         }
     }
 
@@ -500,7 +500,7 @@ impl CliHost {
     fn handle_host_response(&mut self, response: &ManagedDiskResponse) -> AppResult<()> {
         match response.response_type {
             ManagedDiskResponseType::DiskRemoved => {
-                self.shared_memory.unbind_target(response.target_id);
+                self.shared_memory.unbind_target(response.target_id, false);
                 return Ok(());
             }
             ManagedDiskResponseType::WriteFinalCommitted => {}
@@ -567,7 +567,7 @@ impl CliHost {
                 error_text
             })?;
 
-        let preserved_smid = self.shared_memory.unbind_target(target_id);
+        let preserved_smid = self.shared_memory.unbind_target(target_id, true);
         self.network_mounts.clear_cleanup_mark(target_id);
         if let Some(mounted) = mounted {
             if close_session_for_cleanup(&mounted.session) {

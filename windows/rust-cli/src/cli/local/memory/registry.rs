@@ -24,7 +24,7 @@ struct SharedMemoryEntry {
 pub struct SharedMemoryRegistry {
     next_smid: u64,
     shared: BTreeMap<u64, SharedMemoryEntry>,
-    target_bindings: BTreeMap<u32, u64>,
+    target_bindings: BTreeMap<u32, LocalBindingKind>,
 }
 
 impl Default for SharedMemoryRegistry {
@@ -38,13 +38,18 @@ impl Default for SharedMemoryRegistry {
 }
 
 impl SharedMemoryRegistry {
-    pub fn create_shared_memory(&mut self, size_bytes: u64) -> Result<u64, String> {
-        let media = DenseMem::new(size_bytes).map_err(|error| error.to_string())?;
+    fn allocate_smid(&mut self) -> Result<u64, String> {
         let smid = self.next_smid;
         self.next_smid = self
             .next_smid
             .checked_add(1)
             .ok_or_else(|| "smid-overflow".to_string())?;
+        Ok(smid)
+    }
+
+    pub fn create_shared_memory(&mut self, size_bytes: u64) -> Result<u64, String> {
+        let media = DenseMem::new(size_bytes).map_err(|error| error.to_string())?;
+        let smid = self.allocate_smid()?;
         self.shared.insert(
             smid,
             SharedMemoryEntry {
@@ -56,9 +61,21 @@ impl SharedMemoryRegistry {
         Ok(smid)
     }
 
-    pub fn prepare_dedicated_media(&self, size_bytes: u64) -> Result<(DenseMem, u64), String> {
+    pub fn prepare_dedicated_media(
+        &mut self,
+        size_bytes: u64,
+    ) -> Result<(DenseMem, u64, LocalBindingKind), String> {
         let media = DenseMem::new(size_bytes).map_err(|error| error.to_string())?;
-        Ok((media, size_bytes))
+        let smid = self.allocate_smid()?;
+        self.shared.insert(
+            smid,
+            SharedMemoryEntry {
+                media: media.clone(),
+                size_bytes,
+                bound_targets: BTreeSet::new(),
+            },
+        );
+        Ok((media, size_bytes, LocalBindingKind::Dedicated { smid }))
     }
 
     pub fn prepare_shared_media(&self, smid: u64) -> Result<(DenseMem, u64), String> {
@@ -75,29 +92,45 @@ impl SharedMemoryRegistry {
         binding: LocalBindingKind,
     ) -> Result<(), String> {
         match binding {
-            LocalBindingKind::Dedicated => Ok(()),
-            LocalBindingKind::Shared { smid } => {
+            LocalBindingKind::Dedicated { smid } | LocalBindingKind::Shared { smid } => {
                 let entry = self
                     .shared
                     .get_mut(&smid)
                     .ok_or_else(|| "smid-not-found".to_string())?;
                 entry.bound_targets.insert(target_id);
-                self.target_bindings.insert(target_id, smid);
+                self.target_bindings.insert(target_id, binding);
                 Ok(())
             }
         }
     }
 
-    pub fn unbind_target(&mut self, target_id: u32) -> Option<u64> {
-        let smid = self.target_bindings.remove(&target_id)?;
+    pub fn unbind_target(&mut self, target_id: u32, preserve_dedicated: bool) -> Option<u64> {
+        let binding = self.target_bindings.remove(&target_id)?;
+        let smid = match binding {
+            LocalBindingKind::Dedicated { smid } | LocalBindingKind::Shared { smid } => smid,
+        };
         if let Some(entry) = self.shared.get_mut(&smid) {
             entry.bound_targets.remove(&target_id);
+        }
+
+        if matches!(binding, LocalBindingKind::Dedicated { .. }) {
+            let should_remove = self
+                .shared
+                .get(&smid)
+                .map(|entry| entry.bound_targets.is_empty())
+                .unwrap_or(false);
+            if should_remove && !preserve_dedicated {
+                self.shared.remove(&smid);
+                return None;
+            }
         }
         Some(smid)
     }
 
     pub fn sibling_targets(&self, target_id: u32) -> Option<(u64, Vec<u32>)> {
-        let smid = self.target_bindings.get(&target_id).copied()?;
+        let LocalBindingKind::Shared { smid } = self.target_bindings.get(&target_id).copied()? else {
+            return None;
+        };
         let entry = self.shared.get(&smid)?;
         let siblings = entry
             .bound_targets
@@ -172,11 +205,14 @@ impl SharedMemoryRegistry {
     }
 
     fn shared_entry_for_target(&self, target_id: u32) -> Result<&SharedMemoryEntry, String> {
-        let smid = self
+        let binding = self
             .target_bindings
             .get(&target_id)
             .copied()
             .ok_or_else(|| "target-not-shared-memory".to_string())?;
+        let smid = match binding {
+            LocalBindingKind::Dedicated { smid } | LocalBindingKind::Shared { smid } => smid,
+        };
         self.shared
             .get(&smid)
             .ok_or_else(|| "smid-not-found".to_string())
@@ -269,5 +305,25 @@ mod tests {
             .read_bound_target_bytes(9, 0, 4)
             .expect_err("unbound target should fail");
         assert_eq!(error, "target-not-shared-memory");
+    }
+
+    #[test]
+    fn dedicated_binding_can_be_preserved_on_unbind() {
+        let mut registry = SharedMemoryRegistry::default();
+        let (_media, _size_bytes, binding) = registry
+            .prepare_dedicated_media(4096)
+            .expect("dedicated media should be prepared");
+        let LocalBindingKind::Dedicated { smid } = binding else {
+            panic!("binding should be dedicated");
+        };
+        registry
+            .register_target_binding(11, binding)
+            .expect("binding should succeed");
+
+        let preserved = registry
+            .unbind_target(11, true)
+            .expect("smid should stay available");
+        assert_eq!(preserved, smid);
+        assert!(registry.shared.contains_key(&smid));
     }
 }
