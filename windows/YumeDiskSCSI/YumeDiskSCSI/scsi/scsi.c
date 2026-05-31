@@ -236,31 +236,86 @@ VOID
 DiskHandleInquiry(
     _Inout_updates_bytes_(TransferLength) PUCHAR DataBuffer,
     _In_ ULONG TransferLength,
+    _In_ PCDB Cdb,
     _Out_ ULONG* DataTransferLength,
     _Out_ UCHAR* SrbStatus
 )
 {
-    PINQUIRYDATA inquiryData;
+    if (Cdb->CDB6INQUIRY3.EnableVitalProductData != 0) {
+        switch (Cdb->CDB6INQUIRY3.PageCode) {
+        case VPD_SUPPORTED_PAGES:
+        {
+            VPD_SUPPORTED_PAGES_PAGE supportedPages;
+            ULONG returnLength;
 
-    if (TransferLength < INQUIRYDATABUFFERSIZE) {
-        *SrbStatus = SRB_STATUS_DATA_OVERRUN;
-        return;
+            RtlZeroMemory(&supportedPages, sizeof(supportedPages));
+            supportedPages.DeviceType = DIRECT_ACCESS_DEVICE;
+            supportedPages.DeviceTypeQualifier = DEVICE_QUALIFIER_ACTIVE;
+            supportedPages.PageCode = VPD_SUPPORTED_PAGES;
+            supportedPages.PageLength = 2;
+
+            returnLength = min(TransferLength, (ULONG)(sizeof(supportedPages) + supportedPages.PageLength));
+            if (returnLength < sizeof(supportedPages)) {
+                *SrbStatus = SRB_STATUS_DATA_OVERRUN;
+                return;
+            }
+
+            RtlCopyMemory(DataBuffer, &supportedPages, sizeof(supportedPages));
+            DataBuffer[sizeof(supportedPages) + 0] = VPD_SUPPORTED_PAGES;
+            DataBuffer[sizeof(supportedPages) + 1] = VPD_BLOCK_DEVICE_CHARACTERISTICS;
+            *DataTransferLength = returnLength;
+            return;
+        }
+        case VPD_BLOCK_DEVICE_CHARACTERISTICS:
+        {
+            VPD_BLOCK_DEVICE_CHARACTERISTICS_PAGE page;
+            ULONG returnLength;
+
+            RtlZeroMemory(&page, sizeof(page));
+            page.DeviceType = DIRECT_ACCESS_DEVICE;
+            page.DeviceTypeQualifier = DEVICE_QUALIFIER_ACTIVE;
+            page.PageCode = VPD_BLOCK_DEVICE_CHARACTERISTICS;
+            page.PageLength = 0x3C;
+            page.MediumRotationRateMsb = 0x00;
+            page.MediumRotationRateLsb = 0x01;
+
+            returnLength = min(TransferLength, (ULONG)sizeof(page));
+            if (returnLength < 8u) {
+                *SrbStatus = SRB_STATUS_DATA_OVERRUN;
+                return;
+            }
+
+            RtlCopyMemory(DataBuffer, &page, returnLength);
+            *DataTransferLength = returnLength;
+            return;
+        }
+        default:
+            *SrbStatus = SRB_STATUS_INVALID_REQUEST;
+            return;
+        }
+    } else {
+        PINQUIRYDATA inquiryData;
+
+        if (TransferLength < INQUIRYDATABUFFERSIZE) {
+            *SrbStatus = SRB_STATUS_DATA_OVERRUN;
+            return;
+        }
+
+        inquiryData = (PINQUIRYDATA)DataBuffer;
+        RtlZeroMemory(inquiryData, INQUIRYDATABUFFERSIZE);
+        inquiryData->DeviceType = DIRECT_ACCESS_DEVICE;
+        inquiryData->DeviceTypeQualifier = DEVICE_QUALIFIER_ACTIVE;
+        inquiryData->RemovableMedia = FALSE;
+        inquiryData->CommandQueue = TRUE;
+        inquiryData->Versions = 0x05;
+        inquiryData->VersionDescriptors[0] = 0x0960;
+        inquiryData->VersionDescriptors[1] = 0x0060;
+
+        RtlCopyMemory(inquiryData->VendorId, "Zightch", 8);
+        RtlCopyMemory(inquiryData->ProductId, "YumeDisk        ", 16);
+        RtlCopyMemory(inquiryData->ProductRevisionLevel, "1.0 ", 4);
+        *DataTransferLength = INQUIRYDATABUFFERSIZE;
     }
-
-    inquiryData = (PINQUIRYDATA)DataBuffer;
-    RtlZeroMemory(inquiryData, INQUIRYDATABUFFERSIZE);
-    inquiryData->DeviceType = DIRECT_ACCESS_DEVICE;
-    inquiryData->DeviceTypeQualifier = DEVICE_QUALIFIER_ACTIVE;
-    inquiryData->RemovableMedia = TRUE;
-    inquiryData->CommandQueue = TRUE;
-    inquiryData->Versions = 0x05;
-    inquiryData->VersionDescriptors[0] = 0x0960;
-    inquiryData->VersionDescriptors[1] = 0x0060;
-
-    RtlCopyMemory(inquiryData->VendorId, "Zightch", 8);
-    RtlCopyMemory(inquiryData->ProductId, "YumeDisk        ", 16);
-    RtlCopyMemory(inquiryData->ProductRevisionLevel, "1.0 ", 4);
-    *DataTransferLength = INQUIRYDATABUFFERSIZE;
 }
 
 static
@@ -493,7 +548,7 @@ DiskHandleScsiCdb(
         DiskHandleReportLuns(DataBuffer, transferLength, DataTransferLength, SrbStatus);
         break;
     case SCSIOP_INQUIRY:
-        DiskHandleInquiry(DataBuffer, transferLength, DataTransferLength, SrbStatus);
+        DiskHandleInquiry(DataBuffer, transferLength, Cdb, DataTransferLength, SrbStatus);
         DiskRegisterTargetAsyncNotifications(DeviceExtension, TargetId);
         break;
     case SCSIOP_READ_CAPACITY:

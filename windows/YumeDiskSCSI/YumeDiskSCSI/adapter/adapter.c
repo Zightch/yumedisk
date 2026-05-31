@@ -1,4 +1,5 @@
 #include "adapter.h"
+#include <ntddstor.h>
 
 #pragma warning(disable: 4100)
 #pragma warning(disable: 4189)
@@ -94,13 +95,27 @@ DiskHandlePnpRequest(
         }
 
         {
-            PSTOR_DEVICE_CAPABILITIES capabilities;
+            if (pnpSrb->DataTransferLength >= sizeof(STOR_DEVICE_CAPABILITIES_EX)) {
+                PSTOR_DEVICE_CAPABILITIES_EX capabilitiesEx;
 
-            capabilities = (PSTOR_DEVICE_CAPABILITIES)pnpSrb->DataBuffer;
-            capabilities->Removable = 1;
-            capabilities->EjectSupported = 1;
-            capabilities->SurpriseRemovalOK = 0;
-            capabilities->NoDisplayInUI = 0;
+                capabilitiesEx = (PSTOR_DEVICE_CAPABILITIES_EX)pnpSrb->DataBuffer;
+                RtlZeroMemory(capabilitiesEx, sizeof(*capabilitiesEx));
+                capabilitiesEx->Version = STOR_DEVICE_CAPABILITIES_EX_VERSION_1;
+                capabilitiesEx->Size = (USHORT)sizeof(*capabilitiesEx);
+                capabilitiesEx->EjectSupported = 1;
+                capabilitiesEx->Removable = 1;
+                capabilitiesEx->SurpriseRemovalOK = 0;
+                capabilitiesEx->NoDisplayInUI = 0;
+            } else {
+                PSTOR_DEVICE_CAPABILITIES capabilities;
+
+                capabilities = (PSTOR_DEVICE_CAPABILITIES)pnpSrb->DataBuffer;
+                RtlZeroMemory(capabilities, sizeof(*capabilities));
+                capabilities->Removable = 1;
+                capabilities->EjectSupported = 1;
+                capabilities->SurpriseRemovalOK = 0;
+                capabilities->NoDisplayInUI = 0;
+            }
         }
         break;
     case StorRemoveDevice:
@@ -122,6 +137,62 @@ DiskHandlePnpRequest(
 
     StorPortNotification(RequestComplete, DeviceExtension, Srb);
     return TRUE;
+}
+
+static
+SCSI_UNIT_CONTROL_STATUS
+DiskUnitControl(
+    _In_ PVOID DeviceExtension,
+    _In_ SCSI_UNIT_CONTROL_TYPE ControlType,
+    _In_ PVOID Parameters
+)
+{
+    PDEVICE_CONTEXT extension;
+
+    extension = (PDEVICE_CONTEXT)DeviceExtension;
+    switch (ControlType) {
+    case ScsiQuerySupportedUnitControlTypes:
+    {
+        PSCSI_SUPPORTED_CONTROL_TYPE_LIST list;
+
+        list = (PSCSI_SUPPORTED_CONTROL_TYPE_LIST)Parameters;
+        if (ScsiQuerySupportedUnitControlTypes < list->MaxControlType) {
+            list->SupportedTypeList[ScsiQuerySupportedUnitControlTypes] = TRUE;
+        }
+        if (ScsiUnitQueryBusType < list->MaxControlType) {
+            list->SupportedTypeList[ScsiUnitQueryBusType] = TRUE;
+        }
+        return ScsiUnitControlSuccess;
+    }
+    case ScsiUnitQueryBusType:
+    {
+        PSTOR_UNIT_CONTROL_QUERY_BUS_TYPE query;
+        PSTOR_ADDR_BTL8 address;
+
+        query = (PSTOR_UNIT_CONTROL_QUERY_BUS_TYPE)Parameters;
+        if (query == NULL || query->Address == NULL) {
+            return ScsiUnitControlUnsuccessful;
+        }
+
+        if (query->Address->Type != STOR_ADDRESS_TYPE_BTL8 ||
+            query->Address->AddressLength != STOR_ADDR_BTL8_ADDRESS_LENGTH) {
+            return ScsiUnitControlUnsuccessful;
+        }
+
+        address = (PSTOR_ADDR_BTL8)query->Address;
+        if (address->Path != 0 ||
+            address->Lun != 0 ||
+            address->Target >= extension->MaxTargets ||
+            !DiskIsUsableTargetId(address->Target)) {
+            return ScsiUnitControlUnsuccessful;
+        }
+
+        query->BusType = BusTypeVirtual;
+        return ScsiUnitControlSuccess;
+    }
+    default:
+        return ScsiUnitControlNotSupported;
+    }
 }
 
 static
@@ -250,12 +321,19 @@ DiskFindAdapter(
     _In_ PBOOLEAN Again
 )
 {
+    BOOLEAN featureList[StorportFeatureMax];
+
     UNREFERENCED_PARAMETER(DeviceExtension);
     UNREFERENCED_PARAMETER(HwContext);
     UNREFERENCED_PARAMETER(BusInformation);
     UNREFERENCED_PARAMETER(LowerDevice);
     UNREFERENCED_PARAMETER(ArgumentString);
     UNREFERENCED_PARAMETER(Again);
+
+    RtlZeroMemory(featureList, sizeof(featureList));
+    featureList[StorportFeatureBusTypeUnitControl] = TRUE;
+    (VOID)StorPortSetFeatureList(DeviceExtension, StorportFeatureMax, featureList);
+    (VOID)StorPortSetAdapterBusType(DeviceExtension, BusTypeVirtual);
 
     ConfigInfo->WmiDataProvider = FALSE;
     ConfigInfo->VirtualDevice = TRUE;
@@ -370,14 +448,15 @@ DiskDriverEntry(
 )
 {
     NTSTATUS status;
-    VIRTUAL_HW_INITIALIZATION_DATA hwInitData;
+    HW_INITIALIZATION_DATA hwInitData;
 
     RtlZeroMemory(&hwInitData, sizeof(hwInitData));
     hwInitData.HwInitializationDataSize = sizeof(hwInitData);
-    hwInitData.HwFindAdapter = DiskFindAdapter;
+    hwInitData.HwFindAdapter = (PVOID)DiskFindAdapter;
     hwInitData.HwInitialize = DiskInitializeAdapter;
     hwInitData.HwStartIo = DiskStartIo;
     hwInitData.HwAdapterControl = DiskAdapterControl;
+    hwInitData.HwUnitControl = DiskUnitControl;
     hwInitData.HwFreeAdapterResources = DiskFreeAdapterResources;
     hwInitData.HwResetBus = DiskResetBus;
     hwInitData.AdapterInterfaceType = Internal;
@@ -386,6 +465,9 @@ DiskDriverEntry(
     hwInitData.DeviceExtensionSize = sizeof(DEVICE_CONTEXT);
     hwInitData.SpecificLuExtensionSize = 0;
     hwInitData.SrbExtensionSize = 0;
+    hwInitData.FeatureSupport =
+        STOR_FEATURE_VIRTUAL_MINIPORT |
+        STOR_FEATURE_FULL_PNP_DEVICE_CAPABILITIES;
 
     status = StorPortInitialize(
         DriverObject,
