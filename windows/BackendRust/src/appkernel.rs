@@ -27,12 +27,25 @@ pub enum AkLifecycleState {
 #[repr(C)]
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AkEventType {
+pub enum AkResponseType {
     DiskOnline = 0,
     DiskRemoved = 1,
     WriteFinalCommitted = 2,
     WriteFinalRejected = 3,
-    SessionBroken = 4,
+}
+
+#[repr(C)]
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AkSessionNoticeType {
+    Broken = 0,
+}
+
+#[repr(C)]
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AkDiskEventType {
+    SystemEjected = 0,
 }
 
 #[repr(C)]
@@ -51,7 +64,8 @@ pub type AkLogFn = unsafe extern "C" fn(log_ctx: *mut c_void, level: i32, text: 
 #[derive(Clone, Copy)]
 pub struct AkOpenParams {
     pub heartbeat_interval_ms: u32,
-    pub initial_event_queue_capacity: u32,
+    pub initial_response_queue_capacity: u32,
+    pub initial_session_notice_queue_capacity: u32,
     pub log_fn: Option<AkLogFn>,
     pub log_ctx: *mut c_void,
 }
@@ -106,27 +120,49 @@ pub type AkReadBytesFn = unsafe extern "C" fn(
 ) -> AkStatus;
 
 pub type AkStageWriteFn = unsafe extern "C" fn(
-    media_ctx: *mut c_void,
+    disk_ctx: *mut c_void,
     op: *const AkWriteOp,
     data_buffer: *const c_void,
     data_length: u32,
 ) -> AkStatus;
 
+pub type AkOnDiskEventFn =
+    unsafe extern "C" fn(disk_ctx: *mut c_void, event_record: *const AkDiskEvent);
+
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct AkMediaOps {
+pub struct AkDiskOps {
     pub read_bytes: Option<AkReadBytesFn>,
     pub stage_write: Option<AkStageWriteFn>,
+    pub on_event: Option<AkOnDiskEventFn>,
 }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct AkEvent {
-    pub event_type: AkEventType,
+pub struct AkDiskEvent {
+    pub event_type: AkDiskEventType,
+    pub target_id: u32,
+    pub disk_runtime_id: u64,
+    pub flags: u32,
+    pub status: AkStatus,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct AkResponse {
+    pub response_type: AkResponseType,
     pub target_id: u32,
     pub disk_runtime_id: u64,
     pub event_id: u64,
     pub total_seq: u32,
+    pub flags: u32,
+    pub status: AkStatus,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct AkSessionNotice {
+    pub notice_type: AkSessionNoticeType,
     pub flags: u32,
     pub status: AkStatus,
 }
@@ -163,8 +199,10 @@ pub struct AkSessionStats {
     pub heartbeat_sent: u64,
     pub command_failures: u64,
     pub protocol_failures: u64,
-    pub events_queued: u64,
-    pub events_dropped: u64,
+    pub responses_queued: u64,
+    pub responses_dropped: u64,
+    pub session_notices_queued: u64,
+    pub session_notices_dropped: u64,
 }
 
 unsafe extern "C" {
@@ -174,12 +212,28 @@ unsafe extern "C" {
     -> AkStatus;
     pub fn AkQuerySessionStats(session: *mut AkSession, out_stats: *mut AkSessionStats)
     -> AkStatus;
-    pub fn AkPollEvent(session: *mut AkSession, out_event: *mut AkEvent) -> AkStatus;
+    #[allow(dead_code)]
+    pub fn AkWaitResponse(
+        session: *mut AkSession,
+        timeout_ms: u32,
+        out_response: *mut AkResponse,
+    ) -> AkStatus;
+    pub fn AkPollResponse(session: *mut AkSession, out_response: *mut AkResponse) -> AkStatus;
+    #[allow(dead_code)]
+    pub fn AkWaitSessionNotice(
+        session: *mut AkSession,
+        timeout_ms: u32,
+        out_notice: *mut AkSessionNotice,
+    ) -> AkStatus;
+    pub fn AkPollSessionNotice(
+        session: *mut AkSession,
+        out_notice: *mut AkSessionNotice,
+    ) -> AkStatus;
     pub fn AkCreateDisk(
         session: *mut AkSession,
         params: *const AkDiskParams,
-        media_ops: *const AkMediaOps,
-        media_ctx: *mut c_void,
+        disk_ops: *const AkDiskOps,
+        disk_ctx: *mut c_void,
         out_disk: *mut *mut AkDisk,
     ) -> AkStatus;
     pub fn AkRemoveDisk(disk: *mut AkDisk) -> AkStatus;

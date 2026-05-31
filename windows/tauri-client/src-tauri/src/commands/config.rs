@@ -8,7 +8,8 @@ use crate::state::client_state::ClientState;
 #[serde(rename_all = "camelCase")]
 pub struct AppSessionConfigDto {
     pub heartbeat_interval_ms: u32,
-    pub initial_event_queue_capacity: u32,
+    pub initial_response_queue_capacity: u32,
+    pub initial_session_notice_queue_capacity: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,7 +39,8 @@ pub struct BackendDefaultsDto {
 fn map_session_config_dto(config: backend_rust::SessionConfig) -> AppSessionConfigDto {
     AppSessionConfigDto {
         heartbeat_interval_ms: config.heartbeat_interval_ms,
-        initial_event_queue_capacity: config.initial_event_queue_capacity,
+        initial_response_queue_capacity: config.initial_response_queue_capacity,
+        initial_session_notice_queue_capacity: config.initial_session_notice_queue_capacity,
     }
 }
 

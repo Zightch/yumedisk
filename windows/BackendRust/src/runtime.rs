@@ -43,17 +43,26 @@ fn lifecycle_to_text(lifecycle: appkernel::AkLifecycleState) -> &'static str {
     }
 }
 
-fn map_host_event_type(event_type: appkernel::AkEventType) -> types::ManagedDiskEventType {
-    match event_type {
-        appkernel::AkEventType::DiskOnline => types::ManagedDiskEventType::DiskOnline,
-        appkernel::AkEventType::DiskRemoved => types::ManagedDiskEventType::DiskRemoved,
-        appkernel::AkEventType::WriteFinalCommitted => {
-            types::ManagedDiskEventType::WriteFinalCommitted
+fn map_disk_response_type(
+    response_type: appkernel::AkResponseType,
+) -> types::ManagedDiskResponseType {
+    match response_type {
+        appkernel::AkResponseType::DiskOnline => types::ManagedDiskResponseType::DiskOnline,
+        appkernel::AkResponseType::DiskRemoved => types::ManagedDiskResponseType::DiskRemoved,
+        appkernel::AkResponseType::WriteFinalCommitted => {
+            types::ManagedDiskResponseType::WriteFinalCommitted
         }
-        appkernel::AkEventType::WriteFinalRejected => {
-            types::ManagedDiskEventType::WriteFinalRejected
+        appkernel::AkResponseType::WriteFinalRejected => {
+            types::ManagedDiskResponseType::WriteFinalRejected
         }
-        appkernel::AkEventType::SessionBroken => types::ManagedDiskEventType::SessionBroken,
+    }
+}
+
+fn map_session_notice_type(
+    notice_type: appkernel::AkSessionNoticeType,
+) -> types::ManagedSessionNoticeType {
+    match notice_type {
+        appkernel::AkSessionNoticeType::Broken => types::ManagedSessionNoticeType::Broken,
     }
 }
 
@@ -169,9 +178,10 @@ struct Inner {
     stop_event: Mutex<usize>,
     stop: AtomicBool,
     disk_runtimes: Mutex<BTreeMap<u32, Arc<RwLock<DiskRuntime>>>>,
-    host_events: Mutex<VecDeque<types::ManagedDiskEvent>>,
+    disk_responses: Mutex<VecDeque<types::ManagedDiskResponse>>,
+    session_notices: Mutex<VecDeque<types::ManagedSessionNotice>>,
     log_lines: Mutex<Vec<String>>,
-    event_thread: Mutex<Option<JoinHandle<()>>>,
+    signal_thread: Mutex<Option<JoinHandle<()>>>,
     open_status: Mutex<appkernel::AkStatus>,
     open_win32_error: Mutex<u32>,
     open_succeeded: Mutex<bool>,
@@ -202,9 +212,10 @@ impl BackendContext {
                 stop_event: Mutex::new(0),
                 stop: AtomicBool::new(false),
                 disk_runtimes: Mutex::new(BTreeMap::new()),
-                host_events: Mutex::new(VecDeque::new()),
+                disk_responses: Mutex::new(VecDeque::new()),
+                session_notices: Mutex::new(VecDeque::new()),
                 log_lines: Mutex::new(Vec::new()),
-                event_thread: Mutex::new(None),
+                signal_thread: Mutex::new(None),
                 open_status: Mutex::new(appkernel::AK_STATUS_SUCCESS),
                 open_win32_error: Mutex::new(win32::ERROR_SUCCESS),
                 open_succeeded: Mutex::new(false),
@@ -293,64 +304,80 @@ impl BackendContext {
         snapshot
     }
 
-    fn handle_appkernel_event(&self, event_record: &appkernel::AkEvent) {
-        self.enqueue_host_event(event_record);
-        if matches!(
-            event_record.event_type,
-            appkernel::AkEventType::SessionBroken
-        ) {
-            self.append_log(format!(
-                "[backend] session broken, status={}",
-                format_status_hex(event_record.status)
-            ));
-            self.inner.stop.store(true, Ordering::Relaxed);
-            let stop_event = *self.inner.stop_event.lock().expect("stop_event poisoned");
-            if stop_event != 0 {
-                // SAFETY: event handle created by CreateEventW.
-                unsafe { win32::SetEvent(stop_event as win32::Handle) };
-            }
-            return;
-        }
+    fn handle_appkernel_response(&self, response_record: &appkernel::AkResponse) {
+        self.enqueue_disk_response(response_record);
 
-        let Some(disk_runtime) = self.find_disk_runtime(event_record.target_id) else {
+        let Some(disk_runtime) = self.find_disk_runtime(response_record.target_id) else {
             return;
         };
 
-        match event_record.event_type {
-            appkernel::AkEventType::DiskOnline => {}
-            appkernel::AkEventType::WriteFinalCommitted => {
-                if !commit_disk_runtime_staging(&disk_runtime, event_record.event_id) {
+        match response_record.response_type {
+            appkernel::AkResponseType::DiskOnline => {}
+            appkernel::AkResponseType::WriteFinalCommitted => {
+                if !commit_disk_runtime_staging(&disk_runtime, response_record.event_id) {
                     self.append_log(format!(
                         "[backend] commit write failed, target={}, event={}",
-                        event_record.target_id, event_record.event_id
+                        response_record.target_id, response_record.event_id
                     ));
                 }
             }
-            appkernel::AkEventType::WriteFinalRejected => {
-                reject_disk_runtime_staging(&disk_runtime, event_record.event_id);
+            appkernel::AkResponseType::WriteFinalRejected => {
+                reject_disk_runtime_staging(&disk_runtime, response_record.event_id);
             }
-            appkernel::AkEventType::DiskRemoved | appkernel::AkEventType::SessionBroken => {}
+            appkernel::AkResponseType::DiskRemoved => {}
         }
     }
 
-    fn enqueue_host_event(&self, event_record: &appkernel::AkEvent) {
-        let host_event = types::ManagedDiskEvent {
-            event_type: map_host_event_type(event_record.event_type),
-            target_id: event_record.target_id,
-            disk_runtime_id: event_record.disk_runtime_id,
-            event_id: event_record.event_id,
-            total_seq: event_record.total_seq,
-            flags: event_record.flags,
-            status: event_record.status,
-        };
-        self.inner
-            .host_events
-            .lock()
-            .expect("host_events poisoned")
-            .push_back(host_event);
+    fn handle_appkernel_session_notice(&self, notice_record: &appkernel::AkSessionNotice) {
+        self.enqueue_session_notice(notice_record);
+
+        match notice_record.notice_type {
+            appkernel::AkSessionNoticeType::Broken => {
+                self.append_log(format!(
+                    "[backend] session broken, status={}",
+                    format_status_hex(notice_record.status)
+                ));
+                self.inner.stop.store(true, Ordering::Relaxed);
+                let stop_event = *self.inner.stop_event.lock().expect("stop_event poisoned");
+                if stop_event != 0 {
+                    // SAFETY: event handle created by CreateEventW.
+                    unsafe { win32::SetEvent(stop_event as win32::Handle) };
+                }
+            }
+        }
     }
 
-    fn run_event_loop(inner: Arc<Inner>) {
+    fn enqueue_disk_response(&self, response_record: &appkernel::AkResponse) {
+        let response = types::ManagedDiskResponse {
+            response_type: map_disk_response_type(response_record.response_type),
+            target_id: response_record.target_id,
+            disk_runtime_id: response_record.disk_runtime_id,
+            event_id: response_record.event_id,
+            total_seq: response_record.total_seq,
+            flags: response_record.flags,
+            status: response_record.status,
+        };
+        self.inner
+            .disk_responses
+            .lock()
+            .expect("disk_responses poisoned")
+            .push_back(response);
+    }
+
+    fn enqueue_session_notice(&self, notice_record: &appkernel::AkSessionNotice) {
+        let notice = types::ManagedSessionNotice {
+            notice_type: map_session_notice_type(notice_record.notice_type),
+            flags: notice_record.flags,
+            status: notice_record.status,
+        };
+        self.inner
+            .session_notices
+            .lock()
+            .expect("session_notices poisoned")
+            .push_back(notice);
+    }
+
+    fn run_signal_loop(inner: Arc<Inner>) {
         let context = ManuallyDrop::new(Self { inner });
         loop {
             if context.inner.stop.load(Ordering::Relaxed) {
@@ -362,8 +389,8 @@ impl BackendContext {
                 break;
             }
 
-            let mut event_record = appkernel::AkEvent {
-                event_type: appkernel::AkEventType::DiskOnline,
+            let mut response_record = appkernel::AkResponse {
+                response_type: appkernel::AkResponseType::DiskOnline,
                 target_id: 0,
                 disk_runtime_id: 0,
                 event_id: 0,
@@ -373,18 +400,21 @@ impl BackendContext {
             };
 
             // SAFETY: valid session while open.
-            let status = unsafe {
-                appkernel::AkPollEvent(session as *mut appkernel::AkSession, &mut event_record)
+            let response_status = unsafe {
+                appkernel::AkPollResponse(
+                    session as *mut appkernel::AkSession,
+                    &mut response_record,
+                )
             };
-            if status == appkernel::AK_STATUS_NO_MORE_ENTRIES {
-                // SAFETY: bounded polling sleep.
-                unsafe { win32::Sleep(types::EVENT_WAIT_POLL_MS) };
-                continue;
+            if response_status == appkernel::AK_STATUS_SUCCESS {
+                context.handle_appkernel_response(&response_record);
             }
-            if status != appkernel::AK_STATUS_SUCCESS {
+            if response_status != appkernel::AK_STATUS_SUCCESS
+                && response_status != appkernel::AK_STATUS_NO_MORE_ENTRIES
+            {
                 context.append_log(format!(
-                    "[backend] event loop failed, status={}",
-                    format_status_hex(status)
+                    "[backend] response loop failed, status={}",
+                    format_status_hex(response_status)
                 ));
                 context.inner.stop.store(true, Ordering::Relaxed);
                 let stop_event = *context
@@ -399,7 +429,47 @@ impl BackendContext {
                 break;
             }
 
-            context.handle_appkernel_event(&event_record);
+            let mut notice_record = appkernel::AkSessionNotice {
+                notice_type: appkernel::AkSessionNoticeType::Broken,
+                flags: 0,
+                status: 0,
+            };
+            // SAFETY: valid session while open.
+            let notice_status = unsafe {
+                appkernel::AkPollSessionNotice(
+                    session as *mut appkernel::AkSession,
+                    &mut notice_record,
+                )
+            };
+            if notice_status == appkernel::AK_STATUS_SUCCESS {
+                context.handle_appkernel_session_notice(&notice_record);
+            }
+            if notice_status != appkernel::AK_STATUS_SUCCESS
+                && notice_status != appkernel::AK_STATUS_NO_MORE_ENTRIES
+            {
+                context.append_log(format!(
+                    "[backend] session notice loop failed, status={}",
+                    format_status_hex(notice_status)
+                ));
+                context.inner.stop.store(true, Ordering::Relaxed);
+                let stop_event = *context
+                    .inner
+                    .stop_event
+                    .lock()
+                    .expect("stop_event poisoned");
+                if stop_event != 0 {
+                    // SAFETY: event handle created by CreateEventW.
+                    unsafe { win32::SetEvent(stop_event as win32::Handle) };
+                }
+                break;
+            }
+
+            if response_status == appkernel::AK_STATUS_NO_MORE_ENTRIES
+                && notice_status == appkernel::AK_STATUS_NO_MORE_ENTRIES
+            {
+                // SAFETY: bounded polling sleep.
+                unsafe { win32::Sleep(types::EVENT_WAIT_POLL_MS) };
+            }
         }
     }
 
@@ -417,9 +487,14 @@ impl BackendContext {
             .expect("disk map poisoned")
             .clear();
         self.inner
-            .host_events
+            .disk_responses
             .lock()
-            .expect("host_events poisoned")
+            .expect("disk_responses poisoned")
+            .clear();
+        self.inner
+            .session_notices
+            .lock()
+            .expect("session_notices poisoned")
             .clear();
     }
 
@@ -580,17 +655,19 @@ impl BackendContext {
             self.append_log("[backend] session opened".to_string());
         }
         self.append_log(format!(
-            "[backend] sessionConfig heartbeatIntervalMs={}, initialEventQueueCapacity={}",
-            session_config.heartbeat_interval_ms, session_config.initial_event_queue_capacity
+            "[backend] sessionConfig heartbeatIntervalMs={}, initialResponseQueueCapacity={}, initialSessionNoticeQueueCapacity={}",
+            session_config.heartbeat_interval_ms,
+            session_config.initial_response_queue_capacity,
+            session_config.initial_session_notice_queue_capacity
         ));
 
         let thread_inner = Arc::clone(&self.inner);
-        let thread = std::thread::spawn(move || Self::run_event_loop(thread_inner));
+        let thread = std::thread::spawn(move || Self::run_signal_loop(thread_inner));
         *self
             .inner
-            .event_thread
+            .signal_thread
             .lock()
-            .expect("event_thread poisoned") = Some(thread);
+            .expect("signal_thread poisoned") = Some(thread);
         true
     }
 
@@ -606,9 +683,9 @@ impl BackendContext {
 
         if let Some(thread) = self
             .inner
-            .event_thread
+            .signal_thread
             .lock()
-            .expect("event_thread poisoned")
+            .expect("signal_thread poisoned")
             .take()
         {
             let _ = thread.join();
@@ -717,11 +794,19 @@ impl BackendContext {
             .clone()
     }
 
-    pub fn poll_managed_disk_event(&self) -> Option<types::ManagedDiskEvent> {
+    pub fn poll_managed_disk_response(&self) -> Option<types::ManagedDiskResponse> {
         self.inner
-            .host_events
+            .disk_responses
             .lock()
-            .expect("host_events poisoned")
+            .expect("disk_responses poisoned")
+            .pop_front()
+    }
+
+    pub fn poll_managed_session_notice(&self) -> Option<types::ManagedSessionNotice> {
+        self.inner
+            .session_notices
+            .lock()
+            .expect("session_notices poisoned")
             .pop_front()
     }
 
@@ -760,8 +845,10 @@ impl BackendContext {
         out_stats.heartbeat_sent = session_stats.heartbeat_sent;
         out_stats.command_failures = session_stats.command_failures;
         out_stats.protocol_failures = session_stats.protocol_failures;
-        out_stats.events_queued = session_stats.events_queued;
-        out_stats.events_dropped = session_stats.events_dropped;
+        out_stats.responses_queued = session_stats.responses_queued;
+        out_stats.responses_dropped = session_stats.responses_dropped;
+        out_stats.session_notices_queued = session_stats.session_notices_queued;
+        out_stats.session_notices_dropped = session_stats.session_notices_dropped;
         out_stats.disk_count = self.snapshot_disk_runtimes().len() as u64;
         true
     }
@@ -840,7 +927,7 @@ impl BackendContext {
             appkernel::AkCreateDisk(
                 session as *mut appkernel::AkSession,
                 &params,
-                &AK_MEDIA_OPS,
+                &AK_DISK_OPS,
                 Arc::as_ptr(&runtime) as *mut c_void,
                 &mut handle,
             )
@@ -1145,17 +1232,17 @@ unsafe extern "C" fn appkernel_log_callback(log_ctx: *mut c_void, level: i32, te
 }
 
 unsafe extern "C" fn host_read_bytes(
-    media_ctx: *mut c_void,
+    disk_ctx: *mut c_void,
     op: *const appkernel::AkReadOp,
     out_buffer: *mut c_void,
     out_data_length: *mut u32,
 ) -> appkernel::AkStatus {
-    if media_ctx.is_null() || op.is_null() || out_buffer.is_null() || out_data_length.is_null() {
+    if disk_ctx.is_null() || op.is_null() || out_buffer.is_null() || out_data_length.is_null() {
         return appkernel::AK_STATUS_INVALID_PARAMETER;
     }
 
     // SAFETY: pointers validated above and owned by AppKernel callback contract.
-    let runtime = unsafe { &*(media_ctx as *const RwLock<DiskRuntime>) };
+    let runtime = unsafe { &*(disk_ctx as *const RwLock<DiskRuntime>) };
     let op = unsafe { &*op };
     if op.data_length == 0 {
         unsafe { *out_data_length = 0 };
@@ -1190,17 +1277,17 @@ unsafe extern "C" fn host_read_bytes(
 }
 
 unsafe extern "C" fn host_stage_write(
-    media_ctx: *mut c_void,
+    disk_ctx: *mut c_void,
     op: *const appkernel::AkWriteOp,
     data_buffer: *const c_void,
     data_length: u32,
 ) -> appkernel::AkStatus {
-    if media_ctx.is_null() || op.is_null() {
+    if disk_ctx.is_null() || op.is_null() {
         return appkernel::AK_STATUS_INVALID_PARAMETER;
     }
 
     // SAFETY: pointers validated above and owned by AppKernel callback contract.
-    let runtime = unsafe { &*(media_ctx as *const RwLock<DiskRuntime>) };
+    let runtime = unsafe { &*(disk_ctx as *const RwLock<DiskRuntime>) };
     let op = unsafe { &*op };
     let data = if data_length == 0 || data_buffer.is_null() {
         &[]
@@ -1214,9 +1301,16 @@ unsafe extern "C" fn host_stage_write(
         .stage_write_locked(op, data, disk_size_bytes)
 }
 
-const AK_MEDIA_OPS: appkernel::AkMediaOps = appkernel::AkMediaOps {
+unsafe extern "C" fn host_on_disk_event(
+    _disk_ctx: *mut c_void,
+    _event_record: *const appkernel::AkDiskEvent,
+) {
+}
+
+const AK_DISK_OPS: appkernel::AkDiskOps = appkernel::AkDiskOps {
     read_bytes: Some(host_read_bytes),
     stage_write: Some(host_stage_write),
+    on_event: Some(host_on_disk_event),
 };
 
 fn commit_disk_runtime_staging(runtime: &Arc<RwLock<DiskRuntime>>, event_id: u64) -> bool {
@@ -1254,7 +1348,7 @@ mod tests {
     use crate::error::BackendError;
     use crate::media::Media;
     use crate::types::DiskConfig;
-    use crate::types::ManagedDiskEventType;
+    use crate::types::ManagedDiskResponseType;
 
     struct DummyMedia {
         size_bytes: u64,
@@ -1327,7 +1421,8 @@ mod tests {
         let context = BackendContext::new();
         let config = context.session_config();
         assert_eq!(config.heartbeat_interval_ms, 1000);
-        assert_eq!(config.initial_event_queue_capacity, 1024);
+        assert_eq!(config.initial_response_queue_capacity, 1024);
+        assert_eq!(config.initial_session_notice_queue_capacity, 1024);
     }
 
     #[test]
@@ -1488,10 +1583,10 @@ mod tests {
     }
 
     #[test]
-    fn poll_managed_disk_event_returns_fifo_order() {
+    fn poll_managed_disk_response_returns_fifo_order() {
         let context = BackendContext::new();
-        context.enqueue_host_event(&appkernel::AkEvent {
-            event_type: appkernel::AkEventType::WriteFinalCommitted,
+        context.enqueue_disk_response(&appkernel::AkResponse {
+            response_type: appkernel::AkResponseType::WriteFinalCommitted,
             target_id: 3,
             disk_runtime_id: 44,
             event_id: 55,
@@ -1499,8 +1594,8 @@ mod tests {
             flags: 1,
             status: appkernel::AK_STATUS_SUCCESS,
         });
-        context.enqueue_host_event(&appkernel::AkEvent {
-            event_type: appkernel::AkEventType::WriteFinalRejected,
+        context.enqueue_disk_response(&appkernel::AkResponse {
+            response_type: appkernel::AkResponseType::WriteFinalRejected,
             target_id: 4,
             disk_runtime_id: 45,
             event_id: 56,
@@ -1510,19 +1605,25 @@ mod tests {
         });
 
         let first = context
-            .poll_managed_disk_event()
-            .expect("first event should exist");
-        assert_eq!(first.event_type, ManagedDiskEventType::WriteFinalCommitted);
+            .poll_managed_disk_response()
+            .expect("first response should exist");
+        assert_eq!(
+            first.response_type,
+            ManagedDiskResponseType::WriteFinalCommitted
+        );
         assert_eq!(first.target_id, 3);
         assert_eq!(first.event_id, 55);
 
         let second = context
-            .poll_managed_disk_event()
-            .expect("second event should exist");
-        assert_eq!(second.event_type, ManagedDiskEventType::WriteFinalRejected);
+            .poll_managed_disk_response()
+            .expect("second response should exist");
+        assert_eq!(
+            second.response_type,
+            ManagedDiskResponseType::WriteFinalRejected
+        );
         assert_eq!(second.target_id, 4);
         assert_eq!(second.event_id, 56);
 
-        assert!(context.poll_managed_disk_event().is_none());
+        assert!(context.poll_managed_disk_response().is_none());
     }
 }

@@ -4,8 +4,10 @@ use thiserror::Error;
 pub enum BackendError {
     #[error("invalid-heartbeat-interval-ms")]
     InvalidHeartbeatIntervalMs,
-    #[error("invalid-initial-event-queue-capacity")]
-    InvalidInitialEventQueueCapacity,
+    #[error("invalid-initial-response-queue-capacity")]
+    InvalidInitialResponseQueueCapacity,
+    #[error("invalid-initial-session-notice-queue-capacity")]
+    InvalidInitialSessionNoticeQueueCapacity,
     #[error("invalid-target-id")]
     InvalidTargetId,
     #[error("invalid-sector-size")]
@@ -42,7 +44,10 @@ impl BackendError {
     pub fn as_code(&self) -> &'static str {
         match self {
             Self::InvalidHeartbeatIntervalMs => "invalid-heartbeat-interval-ms",
-            Self::InvalidInitialEventQueueCapacity => "invalid-initial-event-queue-capacity",
+            Self::InvalidInitialResponseQueueCapacity => "invalid-initial-response-queue-capacity",
+            Self::InvalidInitialSessionNoticeQueueCapacity => {
+                "invalid-initial-session-notice-queue-capacity"
+            }
             Self::InvalidTargetId => "invalid-target-id",
             Self::InvalidSectorSize => "invalid-sector-size",
             Self::InvalidDiskSizeBytes => "invalid-disk-size-bytes",

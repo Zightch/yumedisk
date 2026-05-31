@@ -342,18 +342,18 @@ resident block 主表固定按：
 
 任务：
 
-- [ ] 设计 temp 文件命名规则
-- [ ] 实现 temp 文件创建、覆盖、删除
-- [ ] 建立 `active snapshot` 基础结构
-- [ ] 建立 `spilled dirty` 基础结构
-- [ ] 实现“先写 temp，再清对应 dirty bit”的流程骨架
-- [ ] 实现 dirty eviction 的 temp 前置规则
+- [x] 设计 temp 文件命名规则
+- [x] 实现 temp 文件创建、覆盖、删除
+- [x] 建立 `active snapshot` 基础结构
+- [x] 建立 `spilled dirty` 基础结构
+- [x] 实现“先写 temp，再清对应 dirty bit”的流程骨架
+- [x] 实现 dirty eviction 的 temp 前置规则
 
 测试重点：
 
-- [ ] dirty eviction 前必须先存在 temp
-- [ ] temp 写成功后才允许清对应 dirty bit
-- [ ] spilled dirty 可重新读回 resident
+- [x] dirty eviction 前必须先存在 temp
+- [x] temp 写成功后才允许清对应 dirty bit
+- [x] spilled dirty 可重新读回 resident
 
 ## 5.7 第七阶段：flush worker 和周期策略
 

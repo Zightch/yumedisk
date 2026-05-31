@@ -1,13 +1,16 @@
+use std::collections::HashMap;
 use std::sync::{Condvar, Mutex};
 
 use crate::block::{BlockLayout, TouchedBlock};
-use crate::resident::{BeginLoadResult, LoadState, TwoQueueResident};
+use crate::resident::{LoadState, TwoQueueResident};
+use crate::temp::TempStore;
 use crate::{AtIo, CacheConfig, CacheError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReadBlockAction {
     Copied,
     LoadRemote { block_index: u64, block_base: u64 },
+    Rehydrate { block_index: u64 },
     Wait,
 }
 
@@ -15,31 +18,66 @@ enum ReadBlockAction {
 enum WriteBlockAction {
     Patched,
     LoadRemote { block_index: u64, block_base: u64 },
+    Rehydrate { block_index: u64 },
     Wait,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SpilledDirty {
+    valid_len: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PrepareInsertResult {
+    Reserved,
+    Wait,
+}
+
+#[derive(Debug)]
+struct CacheState {
+    resident: TwoQueueResident,
+    spilled_dirty: HashMap<u64, SpilledDirty>,
+}
+
+impl CacheState {
+    fn temp_file_count(&self) -> usize {
+        self.spilled_dirty.len() + self.resident.active_snapshot_count()
+    }
 }
 
 #[derive(Debug)]
 pub struct Cache<R> {
     config: CacheConfig,
     layout: BlockLayout,
-    resident: Mutex<TwoQueueResident>,
-    resident_changed: Condvar,
+    state: Mutex<CacheState>,
+    state_changed: Condvar,
+    temp: TempStore,
     right: R,
 }
 
 impl<R: AtIo> Cache<R> {
     pub fn new(config: CacheConfig, right: R) -> Result<Self, CacheError> {
+        if config.temp_max_files == 0 {
+            return Err(CacheError::InvalidConfig(
+                "temp_max_files must be greater than 0",
+            ));
+        }
+
         let layout = BlockLayout::new(config.block_size_bytes)?;
-        let resident = Mutex::new(TwoQueueResident::new(
-            config.fifo_capacity_blocks,
-            config.lru_capacity_blocks,
-            layout.block_size_usize()?,
-        )?);
+        let state = Mutex::new(CacheState {
+            resident: TwoQueueResident::new(
+                config.fifo_capacity_blocks,
+                config.lru_capacity_blocks,
+                layout.block_size_usize()?,
+            )?,
+            spilled_dirty: HashMap::new(),
+        });
         Ok(Self {
+            temp: TempStore::new(config.temp_dir.clone()),
             config,
             layout,
-            resident,
-            resident_changed: Condvar::new(),
+            state,
+            state_changed: Condvar::new(),
             right,
         })
     }
@@ -86,38 +124,68 @@ impl<R: AtIo> Cache<R> {
         valid_len: usize,
     ) -> Result<(), CacheError> {
         loop {
-            let mut resident = self.resident.lock().unwrap();
-            match self.plan_read_touched_block(&mut resident, touched, buffer, valid_len)? {
+            let mut state = self.state.lock().unwrap();
+            match self.plan_read_touched_block(&mut state, touched, buffer, valid_len)? {
                 ReadBlockAction::Copied => return Ok(()),
                 ReadBlockAction::Wait => {
-                    drop(self.resident_changed.wait(resident).unwrap());
+                    drop(self.state_changed.wait(state).unwrap());
                 }
                 ReadBlockAction::LoadRemote {
                     block_index,
                     block_base,
                 } => {
-                    drop(resident);
+                    drop(state);
                     let mut loaded_block = vec![0u8; valid_len];
                     let read_result = self.read_right_block(block_base, &mut loaded_block);
 
-                    let mut resident = self.resident.lock().unwrap();
+                    let mut state = self.state.lock().unwrap();
                     match read_result {
                         Ok(()) => {
-                            resident.finish_remote_load(block_index, loaded_block)?;
-                            self.copy_ready_block(&resident, touched, buffer)?;
-                            drop(resident);
-                            self.resident_changed.notify_all();
+                            state
+                                .resident
+                                .finish_remote_load(block_index, loaded_block)?;
+                            self.copy_ready_block(&state, touched, buffer)?;
+                            drop(state);
+                            self.state_changed.notify_all();
                             return Ok(());
                         }
-                        Err(read_error) => match resident.abort_remote_load(block_index) {
+                        Err(read_error) => match state.resident.abort_remote_load(block_index) {
                             Ok(()) => {
-                                drop(resident);
-                                self.resident_changed.notify_all();
+                                drop(state);
+                                self.state_changed.notify_all();
                                 return Err(read_error);
                             }
                             Err(rollback_error) => {
-                                drop(resident);
-                                self.resident_changed.notify_all();
+                                drop(state);
+                                self.state_changed.notify_all();
+                                return Err(rollback_error);
+                            }
+                        },
+                    }
+                }
+                ReadBlockAction::Rehydrate { block_index } => {
+                    drop(state);
+                    let mut loaded_block = vec![0u8; valid_len];
+                    let read_result = self.read_temp_block(block_index, &mut loaded_block);
+
+                    let mut state = self.state.lock().unwrap();
+                    match read_result {
+                        Ok(()) => {
+                            self.finish_rehydrate(&mut state, block_index, loaded_block)?;
+                            self.copy_ready_block(&state, touched, buffer)?;
+                            drop(state);
+                            self.state_changed.notify_all();
+                            return Ok(());
+                        }
+                        Err(read_error) => match state.resident.abort_remote_load(block_index) {
+                            Ok(()) => {
+                                drop(state);
+                                self.state_changed.notify_all();
+                                return Err(read_error);
+                            }
+                            Err(rollback_error) => {
+                                drop(state);
+                                self.state_changed.notify_all();
                                 return Err(rollback_error);
                             }
                         },
@@ -134,37 +202,66 @@ impl<R: AtIo> Cache<R> {
         valid_len: usize,
     ) -> Result<(), CacheError> {
         loop {
-            let mut resident = self.resident.lock().unwrap();
-            match self.plan_write_touched_block(&mut resident, touched, data, valid_len)? {
+            let mut state = self.state.lock().unwrap();
+            match self.plan_write_touched_block(&mut state, touched, data, valid_len)? {
                 WriteBlockAction::Patched => return Ok(()),
                 WriteBlockAction::Wait => {
-                    drop(self.resident_changed.wait(resident).unwrap());
+                    drop(self.state_changed.wait(state).unwrap());
                 }
                 WriteBlockAction::LoadRemote {
                     block_index,
                     block_base,
                 } => {
-                    drop(resident);
+                    drop(state);
                     let mut loaded_block = vec![0u8; valid_len];
                     let read_result = self.read_right_block(block_base, &mut loaded_block);
 
-                    let mut resident = self.resident.lock().unwrap();
+                    let mut state = self.state.lock().unwrap();
                     match read_result {
                         Ok(()) => {
-                            resident.finish_remote_load(block_index, loaded_block)?;
-                            drop(resident);
-                            self.resident_changed.notify_all();
+                            state
+                                .resident
+                                .finish_remote_load(block_index, loaded_block)?;
+                            drop(state);
+                            self.state_changed.notify_all();
                             return Ok(());
                         }
-                        Err(read_error) => match resident.abort_remote_load(block_index) {
+                        Err(read_error) => match state.resident.abort_remote_load(block_index) {
                             Ok(()) => {
-                                drop(resident);
-                                self.resident_changed.notify_all();
+                                drop(state);
+                                self.state_changed.notify_all();
                                 return Err(read_error);
                             }
                             Err(rollback_error) => {
-                                drop(resident);
-                                self.resident_changed.notify_all();
+                                drop(state);
+                                self.state_changed.notify_all();
+                                return Err(rollback_error);
+                            }
+                        },
+                    }
+                }
+                WriteBlockAction::Rehydrate { block_index } => {
+                    drop(state);
+                    let mut loaded_block = vec![0u8; valid_len];
+                    let read_result = self.read_temp_block(block_index, &mut loaded_block);
+
+                    let mut state = self.state.lock().unwrap();
+                    match read_result {
+                        Ok(()) => {
+                            self.finish_rehydrate(&mut state, block_index, loaded_block)?;
+                            drop(state);
+                            self.state_changed.notify_all();
+                            return Ok(());
+                        }
+                        Err(read_error) => match state.resident.abort_remote_load(block_index) {
+                            Ok(()) => {
+                                drop(state);
+                                self.state_changed.notify_all();
+                                return Err(read_error);
+                            }
+                            Err(rollback_error) => {
+                                drop(state);
+                                self.state_changed.notify_all();
                                 return Err(rollback_error);
                             }
                         },
@@ -176,81 +273,268 @@ impl<R: AtIo> Cache<R> {
 
     fn plan_read_touched_block(
         &self,
-        resident: &mut TwoQueueResident,
+        state: &mut CacheState,
         touched: &TouchedBlock,
         buffer: &mut [u8],
         valid_len: usize,
     ) -> Result<ReadBlockAction, CacheError> {
-        match resident
+        match state
+            .resident
             .get(touched.block_index)
             .map(|entry| entry.state.load_state)
         {
             Some(LoadState::Ready) => {
-                self.copy_ready_block(resident, touched, buffer)?;
-                let _ = resident.record_hit(touched.block_index)?;
+                self.copy_ready_block(state, touched, buffer)?;
+                let _ = state.resident.record_hit(touched.block_index)?;
                 Ok(ReadBlockAction::Copied)
             }
             Some(LoadState::LoadingRemote | LoadState::Rehydrating) => Ok(ReadBlockAction::Wait),
-            None => match resident.begin_remote_load(touched.block_index, valid_len)? {
-                BeginLoadResult::Started => Ok(ReadBlockAction::LoadRemote {
-                    block_index: touched.block_index,
-                    block_base: touched.block_base,
-                }),
-                BeginLoadResult::Wait => Ok(ReadBlockAction::Wait),
-            },
+            None => {
+                self.prepare_read_miss(state, touched.block_index, touched.block_base, valid_len)
+            }
         }
     }
 
     fn plan_write_touched_block(
         &self,
-        resident: &mut TwoQueueResident,
+        state: &mut CacheState,
         touched: &TouchedBlock,
         data: &[u8],
         valid_len: usize,
     ) -> Result<WriteBlockAction, CacheError> {
         let patch_slice = self.patch_slice(touched, data)?;
-        match resident
+        match state
+            .resident
             .get(touched.block_index)
             .map(|entry| entry.state.load_state)
         {
             Some(LoadState::Ready) => {
-                resident.patch_ready_block(
+                state.resident.patch_ready_block(
                     touched.block_index,
                     touched.block_range(),
                     patch_slice,
                 )?;
-                let _ = resident.record_hit(touched.block_index)?;
+                let _ = state.resident.record_hit(touched.block_index)?;
                 Ok(WriteBlockAction::Patched)
             }
             Some(LoadState::LoadingRemote | LoadState::Rehydrating) => Ok(WriteBlockAction::Wait),
-            None => match resident.begin_remote_load(touched.block_index, valid_len)? {
-                BeginLoadResult::Started => {
-                    resident.enqueue_pending_patch(
-                        touched.block_index,
-                        touched.block_range(),
-                        patch_slice,
+            None => self.prepare_write_miss(
+                state,
+                touched.block_index,
+                touched.block_base,
+                touched.block_range(),
+                patch_slice,
+                valid_len,
+            ),
+        }
+    }
+
+    fn prepare_read_miss(
+        &self,
+        state: &mut CacheState,
+        block_index: u64,
+        block_base: u64,
+        valid_len: usize,
+    ) -> Result<ReadBlockAction, CacheError> {
+        if let Some(spilled) = state.spilled_dirty.get(&block_index).copied() {
+            match self.prepare_resident_slot_for_insert(state)? {
+                PrepareInsertResult::Reserved => {
+                    state.resident.insert_loading_placeholder(
+                        block_index,
+                        spilled.valid_len,
+                        LoadState::Rehydrating,
+                        None,
                     )?;
-                    Ok(WriteBlockAction::LoadRemote {
-                        block_index: touched.block_index,
-                        block_base: touched.block_base,
+                    Ok(ReadBlockAction::Rehydrate { block_index })
+                }
+                PrepareInsertResult::Wait => Ok(ReadBlockAction::Wait),
+            }
+        } else {
+            match self.prepare_resident_slot_for_insert(state)? {
+                PrepareInsertResult::Reserved => {
+                    state.resident.insert_loading_placeholder(
+                        block_index,
+                        valid_len,
+                        LoadState::LoadingRemote,
+                        None,
+                    )?;
+                    Ok(ReadBlockAction::LoadRemote {
+                        block_index,
+                        block_base,
                     })
                 }
-                BeginLoadResult::Wait => Ok(WriteBlockAction::Wait),
-            },
+                PrepareInsertResult::Wait => Ok(ReadBlockAction::Wait),
+            }
         }
+    }
+
+    fn prepare_write_miss(
+        &self,
+        state: &mut CacheState,
+        block_index: u64,
+        block_base: u64,
+        patch_range: std::ops::Range<usize>,
+        patch_slice: &[u8],
+        valid_len: usize,
+    ) -> Result<WriteBlockAction, CacheError> {
+        if let Some(spilled) = state.spilled_dirty.get(&block_index).copied() {
+            match self.prepare_resident_slot_for_insert(state)? {
+                PrepareInsertResult::Reserved => {
+                    state.resident.insert_loading_placeholder(
+                        block_index,
+                        spilled.valid_len,
+                        LoadState::Rehydrating,
+                        None,
+                    )?;
+                    state
+                        .resident
+                        .enqueue_pending_patch(block_index, patch_range, patch_slice)?;
+                    Ok(WriteBlockAction::Rehydrate { block_index })
+                }
+                PrepareInsertResult::Wait => Ok(WriteBlockAction::Wait),
+            }
+        } else {
+            match self.prepare_resident_slot_for_insert(state)? {
+                PrepareInsertResult::Reserved => {
+                    state.resident.insert_loading_placeholder(
+                        block_index,
+                        valid_len,
+                        LoadState::LoadingRemote,
+                        None,
+                    )?;
+                    state
+                        .resident
+                        .enqueue_pending_patch(block_index, patch_range, patch_slice)?;
+                    Ok(WriteBlockAction::LoadRemote {
+                        block_index,
+                        block_base,
+                    })
+                }
+                PrepareInsertResult::Wait => Ok(WriteBlockAction::Wait),
+            }
+        }
+    }
+
+    fn prepare_resident_slot_for_insert(
+        &self,
+        state: &mut CacheState,
+    ) -> Result<PrepareInsertResult, CacheError> {
+        let victim_block_index = match state.resident.select_insert_victim() {
+            Some(block_index) => block_index,
+            None => return Ok(PrepareInsertResult::Reserved),
+        };
+        let (load_state, has_dirty_ranges, has_active_snapshot, has_pending_patches) =
+            {
+                let entry = state.resident.get(victim_block_index).ok_or(
+                    CacheError::InvariantViolation(
+                        "resident victim missing during insert preparation",
+                    ),
+                )?;
+                (
+                    entry.state.load_state,
+                    !entry.state.dirty_ranges.is_empty(),
+                    entry.state.active_snapshot.is_some(),
+                    !entry.state.pending_patches.is_empty(),
+                )
+            };
+
+        if load_state != LoadState::Ready || has_pending_patches {
+            return Ok(PrepareInsertResult::Wait);
+        }
+
+        if !has_dirty_ranges && !has_active_snapshot {
+            let _ = state.resident.evict_block(victim_block_index)?.ok_or(
+                CacheError::InvariantViolation(
+                    "resident clean victim missing during insert eviction",
+                ),
+            )?;
+            return Ok(PrepareInsertResult::Reserved);
+        }
+
+        if !has_active_snapshot && state.temp_file_count() >= self.config.temp_max_files {
+            return Err(CacheError::TempFilesExhausted {
+                max_files: self.config.temp_max_files,
+            });
+        }
+
+        if has_dirty_ranges {
+            {
+                let entry = state.resident.get(victim_block_index).ok_or(
+                    CacheError::InvariantViolation(
+                        "resident dirty victim missing during temp spill",
+                    ),
+                )?;
+                self.temp.write_block(victim_block_index, &entry.data)?;
+            }
+            state.resident.mark_snapshot_written(victim_block_index)?;
+        }
+
+        let evicted = state.resident.evict_block(victim_block_index)?.ok_or(
+            CacheError::InvariantViolation("resident dirty victim missing during spill eviction"),
+        )?;
+        if evicted.entry.state.active_snapshot.is_none() {
+            return Err(CacheError::InvariantViolation(
+                "dirty spill eviction requires active snapshot",
+            ));
+        }
+        let replaced = state.spilled_dirty.insert(
+            victim_block_index,
+            SpilledDirty {
+                valid_len: evicted.entry.state.valid_len,
+            },
+        );
+        if replaced.is_some() {
+            return Err(CacheError::InvariantViolation(
+                "spilled dirty block already exists during spill eviction",
+            ));
+        }
+
+        Ok(PrepareInsertResult::Reserved)
+    }
+
+    fn finish_rehydrate(
+        &self,
+        state: &mut CacheState,
+        block_index: u64,
+        data: Vec<u8>,
+    ) -> Result<(), CacheError> {
+        state.resident.finish_remote_load(block_index, data)?;
+        let spilled =
+            state
+                .spilled_dirty
+                .remove(&block_index)
+                .ok_or(CacheError::InvariantViolation(
+                    "spilled dirty block missing during rehydrate completion",
+                ))?;
+        let resident_valid_len = state
+            .resident
+            .get(block_index)
+            .ok_or(CacheError::InvariantViolation(
+                "rehydrated resident block missing after load completion",
+            ))?
+            .state
+            .valid_len;
+        if spilled.valid_len != resident_valid_len {
+            return Err(CacheError::InvariantViolation(
+                "spilled dirty valid_len mismatch during rehydrate completion",
+            ));
+        }
+        state.resident.attach_active_snapshot(block_index)
     }
 
     fn copy_ready_block(
         &self,
-        resident: &TwoQueueResident,
+        state: &CacheState,
         touched: &TouchedBlock,
         buffer: &mut [u8],
     ) -> Result<(), CacheError> {
-        let entry = resident
-            .get(touched.block_index)
-            .ok_or(CacheError::InvariantViolation(
-                "resident block missing during read copy",
-            ))?;
+        let entry =
+            state
+                .resident
+                .get(touched.block_index)
+                .ok_or(CacheError::InvariantViolation(
+                    "resident block missing during read copy",
+                ))?;
         if entry.state.load_state != LoadState::Ready {
             return Err(CacheError::InvariantViolation(
                 "resident read copy requires ready block",
@@ -283,6 +567,18 @@ impl<R: AtIo> Cache<R> {
         self.right.read_at(offset, buffer)
     }
 
+    fn read_temp_block(&self, block_index: u64, buffer: &mut [u8]) -> Result<(), CacheError> {
+        let expected = self.layout.block_size_usize()?;
+        if buffer.len() != expected {
+            return Err(CacheError::InvalidBlockDataLength {
+                expected,
+                actual: buffer.len(),
+            });
+        }
+
+        self.temp.read_block(block_index, buffer)
+    }
+
     #[allow(dead_code)]
     fn write_right_block(&self, offset: u64, data: &[u8]) -> Result<(), CacheError> {
         self.layout.validate_right_io(offset, data.len())?;
@@ -292,11 +588,14 @@ impl<R: AtIo> Cache<R> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
 
-    use super::Cache;
+    use super::{Cache, SpilledDirty};
     use crate::{AtIo, CacheConfig, CacheError};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -383,6 +682,39 @@ mod tests {
         }
     }
 
+    static NEXT_TEMP_DIR_ID: AtomicU64 = AtomicU64::new(0);
+
+    #[derive(Debug)]
+    struct TestTempDir {
+        path: PathBuf,
+    }
+
+    impl TestTempDir {
+        fn new() -> Self {
+            let dir_id = NEXT_TEMP_DIR_ID.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "cache-stage6-tests-{}-{dir_id}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+
+        fn child(&self, name: &str) -> PathBuf {
+            self.path.join(name)
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
     fn test_config(block_size_bytes: u32) -> CacheConfig {
         CacheConfig {
             fifo_capacity_blocks: 2,
@@ -420,6 +752,18 @@ mod tests {
         assert_eq!(
             error,
             CacheError::InvalidConfig("fifo_capacity_blocks must be greater than 0")
+        );
+    }
+
+    #[test]
+    fn new_rejects_zero_temp_file_limit() {
+        let mut config = test_config(32);
+        config.temp_max_files = 0;
+
+        let error = Cache::new(config, MockAtIo::default()).unwrap_err();
+        assert_eq!(
+            error,
+            CacheError::InvalidConfig("temp_max_files must be greater than 0")
         );
     }
 
@@ -722,5 +1066,83 @@ mod tests {
                 length: 32
             }]
         );
+    }
+
+    #[test]
+    fn dirty_eviction_writes_temp_then_rehydrates_without_second_remote_read() {
+        let temp_dir = TestTempDir::new();
+        let right = MockAtIo::with_len(128);
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 1;
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Cache::new(config, right.clone()).unwrap();
+        let temp_path = cache.temp.path_for_block(0);
+
+        cache.write_locked(4, &[200, 201, 202]).unwrap();
+        cache.read_locked(32, &mut [0u8; 1]).unwrap();
+
+        assert!(temp_path.is_file());
+        {
+            let state = cache.state.lock().unwrap();
+            assert!(state.resident.get(0).is_none());
+            assert_eq!(
+                state.spilled_dirty.get(&0),
+                Some(&SpilledDirty { valid_len: 32 })
+            );
+        }
+
+        let mut buffer = [0u8; 8];
+        cache.read_locked(0, &mut buffer).unwrap();
+
+        assert_eq!(&buffer[..], &[0, 1, 2, 3, 200, 201, 202, 7]);
+        assert!(temp_path.is_file());
+        {
+            let state = cache.state.lock().unwrap();
+            let entry = state.resident.get(0).unwrap();
+            assert!(entry.state.active_snapshot.is_some());
+            assert!(entry.state.dirty_ranges.is_empty());
+            assert!(!state.spilled_dirty.contains_key(&0));
+        }
+        assert_eq!(
+            right.take_calls(),
+            vec![
+                IoCall::Read {
+                    offset: 0,
+                    length: 32
+                },
+                IoCall::Read {
+                    offset: 32,
+                    length: 32
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn dirty_eviction_preserves_dirty_ranges_when_temp_write_fails() {
+        let temp_dir = TestTempDir::new();
+        let right = MockAtIo::with_len(128);
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 1;
+        config.temp_dir = temp_dir.child("missing-temp-root");
+        let cache = Cache::new(config, right).unwrap();
+
+        cache.write_locked(4, &[200, 201, 202]).unwrap();
+        let error = cache.read_locked(32, &mut [0u8; 1]).unwrap_err();
+
+        match error {
+            CacheError::TempIo { kind, .. } => {
+                assert_eq!(kind, std::io::ErrorKind::NotFound);
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        let state = cache.state.lock().unwrap();
+        let entry = state.resident.get(0).unwrap();
+        assert_eq!(&entry.data[..8], &[0, 1, 2, 3, 200, 201, 202, 7]);
+        assert_eq!(entry.state.dirty_ranges, vec![4..7]);
+        assert!(entry.state.active_snapshot.is_none());
+        assert!(state.spilled_dirty.is_empty());
+        assert!(state.resident.get(1).is_none());
     }
 }

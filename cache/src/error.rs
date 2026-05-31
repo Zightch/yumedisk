@@ -1,5 +1,7 @@
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
+use std::io::ErrorKind;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CacheError {
@@ -26,6 +28,14 @@ pub enum CacheError {
         offset: u64,
         length: usize,
         block_size: usize,
+    },
+    TempIo {
+        operation: &'static str,
+        path: PathBuf,
+        kind: ErrorKind,
+    },
+    TempFilesExhausted {
+        max_files: usize,
     },
     ResidentBlockAlreadyExists {
         block_index: u64,
@@ -71,6 +81,18 @@ impl Display for CacheError {
                 f,
                 "right-side io must be block aligned: offset={offset}, length={length}, block_size={block_size}"
             ),
+            Self::TempIo {
+                operation,
+                path,
+                kind,
+            } => write!(
+                f,
+                "temp io failed while {operation}: path={}, kind={kind:?}",
+                path.display()
+            ),
+            Self::TempFilesExhausted { max_files } => {
+                write!(f, "cache temp file slots exhausted: max_files={max_files}")
+            }
             Self::ResidentBlockAlreadyExists { block_index } => {
                 write!(
                     f,

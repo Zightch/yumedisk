@@ -82,7 +82,8 @@ fn run_command_loop(host: &Arc<Mutex<CliHost>>) -> AppResult<()> {
     let stdin = io::stdin();
 
     loop {
-        reap_host_events(host);
+        reap_host_responses(host);
+        reap_host_session_notices(host);
         reap_network_data_changed(host);
         reap_dead_network_disks(host);
         print!("> ");
@@ -108,7 +109,8 @@ fn run_command_loop(host: &Arc<Mutex<CliHost>>) -> AppResult<()> {
         match execute_command(&mut host_guard, tokens[0], &tokens[1..]) {
             Ok(LoopControl::Continue) => {
                 drop(host_guard);
-                reap_host_events(host);
+                reap_host_responses(host);
+                reap_host_session_notices(host);
                 reap_network_data_changed(host);
                 reap_dead_network_disks(host);
             }
@@ -332,12 +334,14 @@ fn parse_debug_write_args(args: &[&str]) -> AppResult<DebugWriteCommand> {
 fn print_stats(host: &CliHost) -> AppResult<()> {
     let stats = host.query_backend_stats()?;
     println!(
-        "heartbeat_sent={}, command_failures={}, protocol_failures={}, events_queued={}, events_dropped={}, disk_count={}",
+        "heartbeat_sent={}, command_failures={}, protocol_failures={}, responses_queued={}, responses_dropped={}, session_notices_queued={}, session_notices_dropped={}, disk_count={}",
         stats.heartbeat_sent,
         stats.command_failures,
         stats.protocol_failures,
-        stats.events_queued,
-        stats.events_dropped,
+        stats.responses_queued,
+        stats.responses_dropped,
+        stats.session_notices_queued,
+        stats.session_notices_dropped,
         stats.disk_count
     );
     Ok(())
@@ -347,12 +351,14 @@ fn print_debug(host: &CliHost) -> AppResult<()> {
     let snapshot = host.query_debug_snapshot()?;
     println!("debug_session {}", snapshot.session_state_text);
     println!(
-        "debug_stats heartbeat_sent={}, command_failures={}, protocol_failures={}, events_queued={}, events_dropped={}, disk_count={}",
+        "debug_stats heartbeat_sent={}, command_failures={}, protocol_failures={}, responses_queued={}, responses_dropped={}, session_notices_queued={}, session_notices_dropped={}, disk_count={}",
         snapshot.stats.heartbeat_sent,
         snapshot.stats.command_failures,
         snapshot.stats.protocol_failures,
-        snapshot.stats.events_queued,
-        snapshot.stats.events_dropped,
+        snapshot.stats.responses_queued,
+        snapshot.stats.responses_dropped,
+        snapshot.stats.session_notices_queued,
+        snapshot.stats.session_notices_dropped,
         snapshot.stats.disk_count
     );
     for disk in snapshot.disks {
@@ -592,17 +598,34 @@ fn format_target_list(targets: &[u32]) -> String {
         .join(",")
 }
 
-fn reap_host_events(host: &Arc<Mutex<CliHost>>) {
+fn reap_host_responses(host: &Arc<Mutex<CliHost>>) {
     loop {
         let result = host
             .lock()
             .expect("host poisoned")
-            .poll_managed_disk_event();
+            .poll_managed_disk_response();
         match result {
-            Ok(Some(_event)) => {}
+            Ok(Some(_response)) => {}
             Ok(None) => break,
             Err(error) => {
-                eprintln!("error: host-event-poll-failed: {}", error);
+                eprintln!("error: host-response-poll-failed: {}", error);
+                break;
+            }
+        }
+    }
+}
+
+fn reap_host_session_notices(host: &Arc<Mutex<CliHost>>) {
+    loop {
+        let result = host
+            .lock()
+            .expect("host poisoned")
+            .poll_managed_session_notice();
+        match result {
+            Ok(Some(_notice)) => {}
+            Ok(None) => break,
+            Err(error) => {
+                eprintln!("error: host-session-notice-poll-failed: {}", error);
                 break;
             }
         }
@@ -644,7 +667,8 @@ fn start_dead_network_reaper(host: Arc<Mutex<CliHost>>) -> DeadNetworkReaper {
     let stop_flag = Arc::clone(&stop);
     let thread = thread::spawn(move || {
         while !stop_flag.load(Ordering::Acquire) {
-            reap_host_events(&host);
+            reap_host_responses(&host);
+            reap_host_session_notices(&host);
             reap_network_data_changed(&host);
             reap_dead_network_disks(&host);
             thread::sleep(Duration::from_millis(200));

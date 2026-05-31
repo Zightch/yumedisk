@@ -22,7 +22,7 @@ pub(crate) enum LoadState {
     Ready,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ActiveSnapshot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +53,7 @@ impl BlockEntry {
         queue_ref: QueueRef,
         load_state: LoadState,
         valid_len: usize,
+        active_snapshot: Option<ActiveSnapshot>,
     ) -> Self {
         Self {
             data: vec![0; block_size].into_boxed_slice(),
@@ -60,7 +61,7 @@ impl BlockEntry {
                 queue_ref,
                 load_state,
                 dirty_ranges: Vec::new(),
-                active_snapshot: None,
+                active_snapshot,
                 pending_patches: Vec::new(),
                 valid_len,
             },
@@ -197,16 +198,35 @@ impl TwoQueueResident {
             let _ = self.evict_fifo_head()?;
         }
 
+        self.insert_loading_placeholder(block_index, valid_len, LoadState::LoadingRemote, None)?;
+        Ok(BeginLoadResult::Started)
+    }
+
+    pub(crate) fn insert_loading_placeholder(
+        &mut self,
+        block_index: u64,
+        valid_len: usize,
+        load_state: LoadState,
+        active_snapshot: Option<ActiveSnapshot>,
+    ) -> Result<(), CacheError> {
+        self.validate_loading_insert(block_index, valid_len)?;
+        if self.fifo.len() == self.fifo_capacity {
+            return Err(CacheError::InvariantViolation(
+                "fifo must have free capacity before inserting loading placeholder",
+            ));
+        }
+
         let node = self.fifo.push_back(block_index);
         let entry = BlockEntry::new_loading(
             self.block_size,
             QueueRef::Fifo(node),
-            LoadState::LoadingRemote,
+            load_state,
             valid_len,
+            active_snapshot,
         );
         let replaced = self.blocks.insert(block_index, entry);
         debug_assert!(replaced.is_none());
-        Ok(BeginLoadResult::Started)
+        Ok(())
     }
 
     pub(crate) fn finish_remote_load(
@@ -317,6 +337,41 @@ impl TwoQueueResident {
         Ok(())
     }
 
+    pub(crate) fn mark_snapshot_written(&mut self, block_index: u64) -> Result<(), CacheError> {
+        let entry = self
+            .blocks
+            .get_mut(&block_index)
+            .ok_or(CacheError::InvariantViolation(
+                "resident block missing during snapshot activation",
+            ))?;
+        if entry.state.load_state != LoadState::Ready {
+            return Err(CacheError::InvariantViolation(
+                "snapshot activation requires ready resident block",
+            ));
+        }
+
+        entry.state.active_snapshot = Some(ActiveSnapshot);
+        entry.state.dirty_ranges.clear();
+        Ok(())
+    }
+
+    pub(crate) fn attach_active_snapshot(&mut self, block_index: u64) -> Result<(), CacheError> {
+        let entry = self
+            .blocks
+            .get_mut(&block_index)
+            .ok_or(CacheError::InvariantViolation(
+                "resident block missing during active snapshot attach",
+            ))?;
+        if entry.state.load_state != LoadState::Ready {
+            return Err(CacheError::InvariantViolation(
+                "active snapshot attach requires ready resident block",
+            ));
+        }
+
+        entry.state.active_snapshot = Some(ActiveSnapshot);
+        Ok(())
+    }
+
     pub(crate) fn record_hit(
         &mut self,
         block_index: u64,
@@ -398,6 +453,13 @@ impl TwoQueueResident {
         }
 
         self.lru.front_value()
+    }
+
+    pub(crate) fn active_snapshot_count(&self) -> usize {
+        self.blocks
+            .values()
+            .filter(|entry| entry.state.active_snapshot.is_some())
+            .count()
     }
 
     pub(crate) fn evict_block(

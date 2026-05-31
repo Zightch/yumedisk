@@ -9,6 +9,15 @@ temp 文件只服务于缓存内部，不对外暴露协议语义。
 - resident dirty flush 时承载 snapshot
 - dirty eviction 后承载 spilled dirty 的唯一副本
 
+当前 `cache/` 独立组件里，temp 文件名固定按块索引生成：
+
+- `block-<block_index>.temp`
+
+这意味着：
+
+- 同一块始终复用同一个 temp 文件
+- temp slot 数量和“当前有 temp 支撑的块数量”是一一对应的
+
 这版明确不做：
 
 - WAL
@@ -46,6 +55,12 @@ temp 上限按单盘文件数量控制，不按总字节数控制。
   - 在远端拉块前阻塞
 
 如果 cache 和 temp 都已经顶满，后续凡是还需要新 resident 或新 temp 的请求，都必须排队等待。
+
+当前独立 `cache/` crate 还没有进入这一步：
+
+- dirty eviction 需要新 temp 但 slot 已满时
+  - 当前先返回显式资源耗尽错误
+  - 阻塞和排队留到后续阶段完成
 
 ## 周期扫描优先级
 

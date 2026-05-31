@@ -1,4 +1,18 @@
 fn main() {
+    for path in [
+        "../AppKernel/include/appkernel.h",
+        "../AppKernel/src/appkernel.c",
+        "../AppKernel/src/common/ak_memory.c",
+        "../AppKernel/src/common/ak_status.c",
+        "../AppKernel/src/disk/ak_disk.c",
+        "../AppKernel/src/event/ak_event.c",
+        "../AppKernel/src/protocol/ak_protocol.c",
+        "../AppKernel/src/session/ak_session.c",
+        "../shared/yumedisk_proto.h",
+    ] {
+        println!("cargo:rerun-if-changed={}", path);
+    }
+
     cc::Build::new()
         .include("../AppKernel/include")
         .include("../AppKernel/src")

@@ -11,8 +11,11 @@ pub fn validate_session_config(session_config: &SessionConfig) -> Result<(), Bac
     if session_config.heartbeat_interval_ms == 0 {
         return Err(BackendError::InvalidHeartbeatIntervalMs);
     }
-    if session_config.initial_event_queue_capacity == 0 {
-        return Err(BackendError::InvalidInitialEventQueueCapacity);
+    if session_config.initial_response_queue_capacity == 0 {
+        return Err(BackendError::InvalidInitialResponseQueueCapacity);
+    }
+    if session_config.initial_session_notice_queue_capacity == 0 {
+        return Err(BackendError::InvalidInitialSessionNoticeQueueCapacity);
     }
     Ok(())
 }
@@ -68,7 +71,8 @@ pub(crate) fn build_ak_open_params(
 ) -> appkernel::AkOpenParams {
     appkernel::AkOpenParams {
         heartbeat_interval_ms: session_config.heartbeat_interval_ms,
-        initial_event_queue_capacity: session_config.initial_event_queue_capacity,
+        initial_response_queue_capacity: session_config.initial_response_queue_capacity,
+        initial_session_notice_queue_capacity: session_config.initial_session_notice_queue_capacity,
         log_fn,
         log_ctx,
     }

@@ -38,7 +38,12 @@ pub fn load_client_state() -> Result<RestoredClientState, ApiError> {
     let persisted_config = client_config::load_client_config().map_err(map_client_config_error)?;
     let session_config = SessionConfig {
         heartbeat_interval_ms: persisted_config.session_config.heartbeat_interval_ms,
-        initial_event_queue_capacity: persisted_config.session_config.initial_event_queue_capacity,
+        initial_response_queue_capacity: persisted_config
+            .session_config
+            .initial_response_queue_capacity,
+        initial_session_notice_queue_capacity: persisted_config
+            .session_config
+            .initial_session_notice_queue_capacity,
     };
     let disk_runtime_store = build_restored_runtime_store(persisted_config)?;
 
@@ -213,7 +218,8 @@ fn restore_disk_runtime(
 fn map_session_config(session_config: SessionConfig) -> client_config::PersistedAppSessionConfig {
     client_config::PersistedAppSessionConfig {
         heartbeat_interval_ms: session_config.heartbeat_interval_ms,
-        initial_event_queue_capacity: session_config.initial_event_queue_capacity,
+        initial_response_queue_capacity: session_config.initial_response_queue_capacity,
+        initial_session_notice_queue_capacity: session_config.initial_session_notice_queue_capacity,
     }
 }
 
@@ -508,7 +514,8 @@ mod tests {
             version: crate::state::client_config::CONFIG_VERSION,
             session_config: PersistedAppSessionConfig {
                 heartbeat_interval_ms: 1000,
-                initial_event_queue_capacity: 16,
+                initial_response_queue_capacity: 16,
+                initial_session_notice_queue_capacity: 8,
             },
             disks: vec![
                 PersistedDiskRecord {
@@ -534,8 +541,8 @@ mod tests {
             ],
         };
 
-        let runtime_store =
-            build_restored_runtime_store(config).expect("restore should succeed with invalid loser");
+        let runtime_store = build_restored_runtime_store(config)
+            .expect("restore should succeed with invalid loser");
         let snapshots = runtime_store.snapshots();
 
         assert_eq!(snapshots.len(), 2);

@@ -9,7 +9,8 @@ pub const DEFAULT_WRITE_WORKER_COUNT: u16 = 12;
 pub const DEFAULT_ACK_BATCH_MAX_RANGES: u32 = DEFAULT_QUEUE_DEPTH;
 pub const EVENT_WAIT_POLL_MS: u32 = 100;
 pub const DEFAULT_HEARTBEAT_INTERVAL_MS: u32 = 1000;
-pub const DEFAULT_INITIAL_EVENT_QUEUE_CAPACITY: u32 = 1024;
+pub const DEFAULT_INITIAL_RESPONSE_QUEUE_CAPACITY: u32 = 1024;
+pub const DEFAULT_INITIAL_SESSION_NOTICE_QUEUE_CAPACITY: u32 = 1024;
 pub const MAX_BUFFERED_LOG_LINES: usize = 256;
 
 pub const YUMEDISK_MIN_TARGET_ID: u32 = appkernel::YUMEDISK_MIN_TARGET_ID;
@@ -17,17 +18,16 @@ pub const YUMEDISK_MAX_USABLE_TARGET_ID: u32 = appkernel::YUMEDISK_MAX_USABLE_TA
 pub const YUMEDISK_MAX_TARGETS: u32 = appkernel::YUMEDISK_MAX_TARGETS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ManagedDiskEventType {
+pub enum ManagedDiskResponseType {
     DiskOnline,
     DiskRemoved,
     WriteFinalCommitted,
     WriteFinalRejected,
-    SessionBroken,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ManagedDiskEvent {
-    pub event_type: ManagedDiskEventType,
+pub struct ManagedDiskResponse {
+    pub response_type: ManagedDiskResponseType,
     pub target_id: u32,
     pub disk_runtime_id: u64,
     pub event_id: u64,
@@ -36,17 +36,31 @@ pub struct ManagedDiskEvent {
     pub status: i32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedSessionNoticeType {
+    Broken,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManagedSessionNotice {
+    pub notice_type: ManagedSessionNoticeType,
+    pub flags: u32,
+    pub status: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionConfig {
     pub heartbeat_interval_ms: u32,
-    pub initial_event_queue_capacity: u32,
+    pub initial_response_queue_capacity: u32,
+    pub initial_session_notice_queue_capacity: u32,
 }
 
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
             heartbeat_interval_ms: DEFAULT_HEARTBEAT_INTERVAL_MS,
-            initial_event_queue_capacity: DEFAULT_INITIAL_EVENT_QUEUE_CAPACITY,
+            initial_response_queue_capacity: DEFAULT_INITIAL_RESPONSE_QUEUE_CAPACITY,
+            initial_session_notice_queue_capacity: DEFAULT_INITIAL_SESSION_NOTICE_QUEUE_CAPACITY,
         }
     }
 }
@@ -95,8 +109,10 @@ pub struct BackendStatsSnapshot {
     pub heartbeat_sent: u64,
     pub command_failures: u64,
     pub protocol_failures: u64,
-    pub events_queued: u64,
-    pub events_dropped: u64,
+    pub responses_queued: u64,
+    pub responses_dropped: u64,
+    pub session_notices_queued: u64,
+    pub session_notices_dropped: u64,
     pub disk_count: u64,
 }
 

@@ -69,7 +69,8 @@ pub struct PersistedDiskRecord {
 #[serde(rename_all = "camelCase")]
 pub struct PersistedAppSessionConfig {
     pub heartbeat_interval_ms: u32,
-    pub initial_event_queue_capacity: u32,
+    pub initial_response_queue_capacity: u32,
+    pub initial_session_notice_queue_capacity: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,8 +87,10 @@ impl Default for PersistedClientConfig {
             version: CONFIG_VERSION,
             session_config: PersistedAppSessionConfig {
                 heartbeat_interval_ms: backend_rust::SessionConfig::default().heartbeat_interval_ms,
-                initial_event_queue_capacity: backend_rust::SessionConfig::default()
-                    .initial_event_queue_capacity,
+                initial_response_queue_capacity: backend_rust::SessionConfig::default()
+                    .initial_response_queue_capacity,
+                initial_session_notice_queue_capacity: backend_rust::SessionConfig::default()
+                    .initial_session_notice_queue_capacity,
             },
             disks: Vec::new(),
         }

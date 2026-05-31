@@ -7,9 +7,11 @@ use backend_rust::BackendContext;
 use backend_rust::BackendStatsSnapshot;
 use backend_rust::DebugSnapshot;
 use backend_rust::DiskConfig;
-use backend_rust::ManagedDiskEvent;
-use backend_rust::ManagedDiskEventType;
+use backend_rust::ManagedDiskResponse;
+use backend_rust::ManagedDiskResponseType;
 use backend_rust::ManagedDiskSnapshot;
+use backend_rust::ManagedSessionNotice;
+use backend_rust::ManagedSessionNoticeType;
 use backend_rust::Media;
 use backend_rust::YUMEDISK_MAX_TARGETS;
 use backend_rust::YUMEDISK_MAX_USABLE_TARGET_ID;
@@ -436,11 +438,20 @@ impl CliHost {
         Ok(changed)
     }
 
-    pub fn poll_managed_disk_event(&mut self) -> AppResult<Option<ManagedDiskEvent>> {
-        let event = self.context.poll_managed_disk_event();
-        if let Some(event) = event {
-            self.handle_host_event(&event)?;
-            return Ok(Some(event));
+    pub fn poll_managed_disk_response(&mut self) -> AppResult<Option<ManagedDiskResponse>> {
+        let response = self.context.poll_managed_disk_response();
+        if let Some(response) = response {
+            self.handle_host_response(&response)?;
+            return Ok(Some(response));
+        }
+        Ok(None)
+    }
+
+    pub fn poll_managed_session_notice(&mut self) -> AppResult<Option<ManagedSessionNotice>> {
+        let notice = self.context.poll_managed_session_notice();
+        if let Some(notice) = notice {
+            self.handle_host_session_notice(&notice)?;
+            return Ok(Some(notice));
         }
         Ok(None)
     }
@@ -469,16 +480,16 @@ impl CliHost {
             .write_bound_target_bytes(target_id, offset, data)
     }
 
-    fn handle_host_event(&mut self, event: &ManagedDiskEvent) -> AppResult<()> {
-        match event.event_type {
-            ManagedDiskEventType::DiskRemoved => {
-                self.shared_memory.unbind_target(event.target_id);
+    fn handle_host_response(&mut self, response: &ManagedDiskResponse) -> AppResult<()> {
+        match response.response_type {
+            ManagedDiskResponseType::DiskRemoved => {
+                self.shared_memory.unbind_target(response.target_id);
                 return Ok(());
             }
-            ManagedDiskEventType::WriteFinalCommitted => {}
+            ManagedDiskResponseType::WriteFinalCommitted => {}
             _ => return Ok(()),
         }
-        let Some((_smid, siblings)) = self.shared_memory.sibling_targets(event.target_id) else {
+        let Some((_smid, siblings)) = self.shared_memory.sibling_targets(response.target_id) else {
             return Ok(());
         };
         let mut first_error = None;
@@ -494,7 +505,7 @@ impl CliHost {
                 if first_error.is_none() {
                     first_error = Some(format!(
                         "notify sibling target={} from target={} failed: {}",
-                        target_id, event.target_id, error_text
+                        target_id, response.target_id, error_text
                     ));
                 }
             }
@@ -502,6 +513,12 @@ impl CliHost {
         match first_error {
             Some(error) => Err(error),
             None => Ok(()),
+        }
+    }
+
+    fn handle_host_session_notice(&mut self, notice: &ManagedSessionNotice) -> AppResult<()> {
+        match notice.notice_type {
+            ManagedSessionNoticeType::Broken => Ok(()),
         }
     }
 }

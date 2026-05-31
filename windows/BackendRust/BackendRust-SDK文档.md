@@ -40,6 +40,10 @@
 - `Media`
 - `SessionConfig`
 - `DiskConfig`
+- `ManagedDiskResponse`
+- `ManagedDiskResponseType`
+- `ManagedSessionNotice`
+- `ManagedSessionNoticeType`
 - `ManagedDiskSnapshot`
 - `BackendStatsSnapshot`
 - `DebugSnapshot`
@@ -55,7 +59,8 @@
 - `DEFAULT_WRITE_WORKER_COUNT`
 - `DEFAULT_ACK_BATCH_MAX_RANGES`
 - `DEFAULT_HEARTBEAT_INTERVAL_MS`
-- `DEFAULT_INITIAL_EVENT_QUEUE_CAPACITY`
+- `DEFAULT_INITIAL_RESPONSE_QUEUE_CAPACITY`
+- `DEFAULT_INITIAL_SESSION_NOTICE_QUEUE_CAPACITY`
 - `YUMEDISK_MIN_TARGET_ID`
 - `YUMEDISK_MAX_USABLE_TARGET_ID`
 - `YUMEDISK_MAX_TARGETS`
@@ -96,14 +101,16 @@ pub trait Media: Send + Sync + 'static {
 ```rust
 pub struct SessionConfig {
     pub heartbeat_interval_ms: u32,
-    pub initial_event_queue_capacity: u32,
+    pub initial_response_queue_capacity: u32,
+    pub initial_session_notice_queue_capacity: u32,
 }
 ```
 
 | 字段 | 默认值 | 允许值 | 说明 |
 | --- | --- | --- | --- |
 | `heartbeat_interval_ms` | `1000` | `> 0` | session 心跳周期 |
-| `initial_event_queue_capacity` | `1024` | `> 0` | 初始事件队列容量 |
+| `initial_response_queue_capacity` | `1024` | `> 0` | 初始 response 队列容量 |
+| `initial_session_notice_queue_capacity` | `1024` | `> 0` | 初始 session notice 队列容量 |
 
 `BackendContext::open()` 前可以设置；`open()` 后调用 `set_session_config()` 会被忽略并保留旧值。
 
@@ -170,11 +177,13 @@ pub struct ManagedDiskSnapshot {
 | `new()` | `BackendContext` | 创建上下文 |
 | `set_session_config()` | `Result<(), BackendError>` | 仅在 `open()` 前有效 |
 | `session_config()` | `SessionConfig` | 取当前配置副本 |
-| `open()` | `bool` | 打开 session 并启动事件线程 |
-| `close()` | `()` | 关闭 session、事件线程和所有盘 |
+| `open()` | `bool` | 打开 session 并启动 response/notice 消费线程 |
+| `close()` | `()` | 关闭 session、消费线程和所有盘 |
 | `query_session_state_text()` | `String` | 文本化 session 状态 |
 | `query_component_version_snapshot()` | `ComponentVersionSnapshot` | 查询 `AppKernel/KMDF/SCSI` 版本快照 |
 | `snapshot_log_lines()` | `Vec<String>` | 当前缓冲日志 |
+| `poll_managed_disk_response()` | `Option<ManagedDiskResponse>` | 取一条盘级 response |
+| `poll_managed_session_notice()` | `Option<ManagedSessionNotice>` | 取一条 session notice |
 | `snapshot_managed_disks()` | `Vec<ManagedDiskSnapshot>` | 当前所有管理盘 |
 | `query_backend_stats()` | `bool` | 查询统计，失败时写 `out_error_text` |
 | `query_debug_snapshot()` | `bool` | 查询完整 debug 快照 |
@@ -201,7 +210,7 @@ pub fn notify_managed_disk_data_changed(
 - 这是一条宿主显式发起的 per-disk 下行通知，只表达“该盘底层内容已被别处改动”。
 - `BackendRust` 只负责把目标盘解析到现有 runtime / `AK_DISK*`，再同步下发给 `AppKernel`。
 - 当前版本只支持单盘 `data_changed`，不承载 `smid`、共享组、sibling 集合或批量 fanout。
-- `WriteFinalCommitted` 事件线程仍只处理当前盘 staged write commit，不会隐式调用这条 API。
+- `WriteFinalCommitted` response 消费线程仍只处理当前盘 staged write commit，不会隐式调用这条 API。
 
 入口约束：
 
@@ -248,7 +257,8 @@ pub fn notify_managed_disk_data_changed(
 | 枚举 | `as_code()` | 说明 |
 | --- | --- | --- |
 | `InvalidHeartbeatIntervalMs` | `invalid-heartbeat-interval-ms` | 心跳配置非法 |
-| `InvalidInitialEventQueueCapacity` | `invalid-initial-event-queue-capacity` | 初始事件队列容量非法 |
+| `InvalidInitialResponseQueueCapacity` | `invalid-initial-response-queue-capacity` | 初始 response 队列容量非法 |
+| `InvalidInitialSessionNoticeQueueCapacity` | `invalid-initial-session-notice-queue-capacity` | 初始 session notice 队列容量非法 |
 | `InvalidTargetId` | `invalid-target-id` | target 非法 |
 | `InvalidSectorSize` | `invalid-sector-size` | 扇区大小非法 |
 | `InvalidDiskSizeBytes` | `invalid-disk-size-bytes` | 盘大小非法 |
