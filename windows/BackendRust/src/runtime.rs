@@ -1305,6 +1305,7 @@ unsafe extern "C" fn host_on_disk_event(
     _disk_ctx: *mut c_void,
     _event_record: *const appkernel::AkDiskEvent,
 ) {
+    // Eject-specific host behavior is deferred to the later eject phase.
 }
 
 const AK_DISK_OPS: appkernel::AkDiskOps = appkernel::AkDiskOps {

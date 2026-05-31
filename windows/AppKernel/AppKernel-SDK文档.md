@@ -490,6 +490,7 @@ typedef struct AK_DISK_PARAMS {
 - `ReadOnly == 0` 表示读写盘，`ReadOnly != 0` 表示只读盘
 - `disk_ops->read_bytes` 不能为空
 - `disk_ops->stage_write` 不能为空
+- `disk_ops->on_event` 不能为空
 
 字段解释：
 
@@ -511,13 +512,15 @@ typedef struct AK_DISK_PARAMS {
 2. 启动 read/write/ack worker。
 3. 先让 read slot availability 就绪。
 4. 再发送 `CREATE_DISK`。
-5. 最后入队 `AkResponseDiskOnline`。
+5. 启动该盘专属 event worker，并常驻预投 `event slot`。
+6. 最后入队 `AkResponseDiskOnline`。
 
 `AkResponseDiskOnline` 表示：
 
 - `AppKernel` 的该盘 runtime 已经跑起来。
 - 驱动侧 `CREATE_DISK` 已完成。
 - 读路径已具备 probe read 能力。
+- 该盘的 `event slot` 上行面已经开始常驻。
 - 如果 `ReadOnly != 0`，只读语义会由 `SCSI` 统一对系统宣告并拦截系统写请求。
 
 它不表示：
@@ -539,10 +542,11 @@ AK_STATUS AK_CALL AkRemoveDisk(
 
 1. 将该盘置为 `Removing`。
 2. 停止继续投新 slot。
-3. 停止并回收该盘 worker。
-4. 向驱动发送 `REMOVE_DISK`。
-5. 入队 `AkResponseDiskRemoved`。
-6. 销毁本地 runtime。
+3. 向驱动发送 `REMOVE_DISK`。
+4. 利用驱动侧 `REMOVE_DISK` 清理路径释放该盘 pending read/write/event slot。
+5. 停止并回收该盘 worker。
+6. 入队 `AkResponseDiskRemoved`。
+7. 销毁本地 runtime。
 
 返回后保证：
 
@@ -799,7 +803,7 @@ typedef struct AK_WRITE_OP {
 
 ### 8.3 并发要求
 
-这两个回调都可能被同盘并发调用。
+这三个回调都可能与同盘其他回调并发交错。
 
 宿主必须自己保证：
 
@@ -807,6 +811,7 @@ typedef struct AK_WRITE_OP {
 - staged write 记录正确
 - overlay 读视图正确
 - LBA overlap 策略正确
+- `on_event` 不和宿主自己的盘销毁/控制路径打架
 
 `AppKernel` 不帮你做这些策略层决策。
 
@@ -814,8 +819,8 @@ typedef struct AK_WRITE_OP {
 
 为了避免把 `AppKernel` worker 自己卡死，宿主回调里不要做这些事：
 
-- 不要在 `read_bytes / stage_write` 里调用 `AkClose`
-- 不要在 `read_bytes / stage_write` 里调用 `AkRemoveDisk`
+- 不要在 `read_bytes / stage_write / on_event` 里调用 `AkClose`
+- 不要在 `read_bytes / stage_write / on_event` 里调用 `AkRemoveDisk`
 - 不要在回调里长时间等待宿主自己的全局控制锁
 - 不要把磁盘文件枚举、驱动安装、CLI 交互塞进回调
 
@@ -823,6 +828,7 @@ typedef struct AK_WRITE_OP {
 
 - 介质访问
 - staged write 记录维护
+- 轻量事件转发或异步唤醒
 - 必要的轻量日志
 
 ## 9. 事件模型
@@ -914,8 +920,8 @@ typedef struct AK_DISK_EVENT {
 固定要求：
 
 - 它是单盘级驱动主动上行面，不走 response，也不走 session notice。
-- 当前最小闭环只定义事件类型，不在本轮文档里承诺完整系统弹出实现。
-- 后续 `event slot` 正式接通后，`AK_DISK_OPS.on_event` 只从这一条链接收盘级事件。
+- 当前 `event slot` 骨架已经在 `AppKernel / KMDF / SCSI` 之间接通，并且 `AK_DISK_OPS.on_event` 只从这一条链路接收盘级事件。
+- 当前最小闭环只定义事件类型和回调入口，不在本轮文档里承诺完整系统弹出策略。
 
 ## 10. 写路径真实语义
 

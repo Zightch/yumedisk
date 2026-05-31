@@ -49,6 +49,11 @@
 - `DebugSnapshot`
 - `ComponentVersionSnapshot`
 
+当前刻意不导出：
+
+- `ManagedDiskEvent`
+- `ManagedDiskEventType`
+
 ### 2.2 常量
 
 - `SECTOR_ALIGNMENT_BYTES`
@@ -195,7 +200,17 @@ pub struct ManagedDiskSnapshot {
 | `remove_managed_disk_with_media()` | `Option<Box<dyn Media>>` | 删单盘并返还 media |
 | `remove_all_managed_disks()` | `bool` | 删全部宿主持有盘 |
 
-### 7.1 `notify_managed_disk_data_changed()`
+### 7.1 当前 `AppKernel` 事件接入口径
+
+- `BackendRust` 当前已经为每个盘向 `AppKernel` 提供非空 `AK_DISK_OPS.on_event` 回调。
+- 这条回调已经和 `AppKernel` 的 per-disk `event slot` 链接通，用来保证 `AppKernel -> BackendRust` 的盘级事件入口不分叉。
+- 但在当前最小闭环里，`BackendRust` 还不会把这条回调上浮为新的 `ManagedDiskEvent` 公开类型。
+- 也就是说，当前宿主公开消费面仍然只有两条：
+  - `ManagedDiskResponse`
+  - `ManagedSessionNotice`
+- 真正的系统弹出行为会在后续 `eject` 阶段再收进 `BackendRust` 和更上层宿主。
+
+### 7.2 `notify_managed_disk_data_changed()`
 
 ```rust
 pub fn notify_managed_disk_data_changed(
@@ -244,11 +259,12 @@ pub fn notify_managed_disk_data_changed(
 4. 创建具体 `Media`
 5. 组装 `DiskConfig`
 6. `create_managed_disk()` 或 `try_create_managed_disk()`
-7. 通过 `snapshot_managed_disks()` 读取 target/lifecycle/online
-8. 如需通知某块已存在盘“底层内容已被别处改动”，调用 `notify_managed_disk_data_changed()`
-9. 执行宿主侧业务
-10. `remove_managed_disk()` 或 `remove_all_managed_disks()`
-11. `close()`
+7. 通过 `poll_managed_disk_response()` / `poll_managed_session_notice()` 持续消费当前公开事件面
+8. 通过 `snapshot_managed_disks()` 读取 target/lifecycle/online
+9. 如需通知某块已存在盘“底层内容已被别处改动”，调用 `notify_managed_disk_data_changed()`
+10. 执行宿主侧业务
+11. `remove_managed_disk()` 或 `remove_all_managed_disks()`
+12. `close()`
 
 ## 9. 错误模型
 
@@ -283,3 +299,4 @@ pub fn notify_managed_disk_data_changed(
 - 建盘成功不代表宿主需要等待系统设备路径；当前 SDK 不提供这类路径。
 - 如果宿主直接校验内存介质，应允许 staged write 到最终 commit 之间存在短暂窗口。
 - `notify_managed_disk_data_changed()` 只接单盘目标，不提供共享组或 sibling 批量语义。
+- 当前版本不要等待 `BackendRust` 给出单独的盘级 eject 公开事件；`on_event` 仍只在内部占位接线。
