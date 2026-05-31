@@ -1032,15 +1032,14 @@ impl<R> Drop for Cache<R> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex, mpsc};
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use super::{Cache, SpilledDirty};
-    use crate::test_support::{LoadStateSnapshot, QueueKindSnapshot, TestHooks};
+    use crate::test_support::{
+        LoadStateSnapshot, QueueKindSnapshot, TestHooks, TestTempDir, wait_until,
+    };
     use crate::{AtIo, CacheConfig, CacheError};
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1159,39 +1158,6 @@ mod tests {
         }
     }
 
-    static NEXT_TEMP_DIR_ID: AtomicU64 = AtomicU64::new(0);
-
-    #[derive(Debug)]
-    struct TestTempDir {
-        path: PathBuf,
-    }
-
-    impl TestTempDir {
-        fn new() -> Self {
-            let dir_id = NEXT_TEMP_DIR_ID.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "cache-stage6-tests-{}-{dir_id}",
-                std::process::id()
-            ));
-            fs::create_dir_all(&path).unwrap();
-            Self { path }
-        }
-
-        fn path(&self) -> &Path {
-            &self.path
-        }
-
-        fn child(&self, name: &str) -> PathBuf {
-            self.path.join(name)
-        }
-    }
-
-    impl Drop for TestTempDir {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
-
     fn test_config(block_size_bytes: u32) -> CacheConfig {
         CacheConfig {
             fifo_capacity_blocks: 2,
@@ -1209,21 +1175,6 @@ mod tests {
 
     fn expected_bytes(offset: usize, length: usize) -> Vec<u8> {
         (offset..offset + length).map(|index| index as u8).collect()
-    }
-
-    fn wait_until<F>(timeout: Duration, mut predicate: F)
-    where
-        F: FnMut() -> bool,
-    {
-        let deadline = Instant::now() + timeout;
-        while Instant::now() < deadline {
-            if predicate() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-
-        assert!(predicate(), "condition not reached within {timeout:?}");
     }
 
     #[test]
