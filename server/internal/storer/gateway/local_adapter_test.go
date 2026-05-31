@@ -112,6 +112,73 @@ func TestLocalAdapterDispatchesByRouteConnection(t *testing.T) {
 	}
 }
 
+func TestLocalAdapterSendNoticeClosesSessionWithAnyValidReason(t *testing.T) {
+	t.Parallel()
+
+	rwExport, roExport := newGatewayTestExports(t)
+	backend, err := NewLocalAdapter([]LocalExport{rwExport, roExport})
+	if err != nil {
+		t.Fatalf("NewLocalAdapter returned error: %v", err)
+	}
+
+	rwEntry, ok := backend.LookupRoute(rwExport.DiskID())
+	if !ok {
+		t.Fatal("expected rw route")
+	}
+	rwSessionID, err := backend.Open(10, rwEntry)
+	if err != nil {
+		t.Fatalf("open rw session: %v", err)
+	}
+
+	closeBody := proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonProtocolError)
+	if err := backend.SendNotice(rwEntry.ConnectionID, rwSessionID, proto.OpSessionCloseNotice, closeBody); err != nil {
+		t.Fatalf("send close notice: %v", err)
+	}
+
+	readStatus, _, err := backend.RoundTrip(
+		rwEntry.ConnectionID,
+		rwSessionID,
+		proto.OpReadAt,
+		proto.BuildReadBody(0, 1),
+	)
+	if err != nil {
+		t.Fatalf("read after close notice: %v", err)
+	}
+	if readStatus != proto.StatusSessionUnavailable {
+		t.Fatalf("expected closed session to be unavailable, got %d", readStatus)
+	}
+}
+
+func TestLocalAdapterBridgesRODataChangedByRouteSession(t *testing.T) {
+	t.Parallel()
+
+	rwExport, roExport := newGatewayTestExports(t)
+	backend, err := NewLocalAdapter([]LocalExport{rwExport, roExport})
+	if err != nil {
+		t.Fatalf("NewLocalAdapter returned error: %v", err)
+	}
+
+	roEntry, ok := backend.LookupRoute(roExport.DiskID())
+	if !ok {
+		t.Fatal("expected ro route")
+	}
+	roSessionID, err := backend.Open(20, roEntry)
+	if err != nil {
+		t.Fatalf("open ro session: %v", err)
+	}
+
+	handler := &recordingRouteSessionDataChangedHandler{}
+	backend.SetDataChangedHandler(handler)
+	backend.NotifySessionDataChanged(roSessionID)
+
+	if handler.routeConnectionID != roEntry.ConnectionID {
+		t.Fatalf("unexpected route connection id: got=%d want=%d", handler.routeConnectionID, roEntry.ConnectionID)
+	}
+	if handler.upstreamSessionID != roSessionID {
+		t.Fatalf("unexpected upstream session id: got=%d want=%d", handler.upstreamSessionID, roSessionID)
+	}
+}
+
 func newGatewayTestExports(t *testing.T) (*gatewayTestExport, *gatewayTestExport) {
 	t.Helper()
 
@@ -172,4 +239,14 @@ func (c *gatewayTestExport) RouteEntry(routeTarget string, connectionID uint64) 
 		ConnectionID: connectionID,
 		Connected:    true,
 	}
+}
+
+type recordingRouteSessionDataChangedHandler struct {
+	routeConnectionID uint64
+	upstreamSessionID uint64
+}
+
+func (h *recordingRouteSessionDataChangedHandler) NotifyRouteSessionDataChanged(routeConnectionID uint64, upstreamSessionID uint64) {
+	h.routeConnectionID = routeConnectionID
+	h.upstreamSessionID = upstreamSessionID
 }

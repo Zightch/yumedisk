@@ -121,6 +121,79 @@ func TestWholeRuntimeMinimalClosure(t *testing.T) {
 	}
 }
 
+func TestWholeRuntimeCloseNoticeAcceptsNonNormalReason(t *testing.T) {
+	t.Parallel()
+
+	rawPath, material := newRuntimeDisk(t)
+	cfg := config.StorerConfig{
+		Role:            config.StorerRoleWhole,
+		StorageFilePath: rawPath,
+		ClaimCodeRW:     material.ClaimCode,
+		Whole:           config.StorerWholeConfig{ListenAddr: reserveLocalAddr(t)},
+		Storer:          config.StorerRemoteConfig{GatewayAddr: config.DefaultStorerGatewayAddr},
+	}
+
+	runtime, err := NewRoleRuntime(cfg)
+	if err != nil {
+		t.Fatalf("new runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = runtime.Close() })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- runtime.Run(ctx)
+	}()
+	waitForTCP(t, cfg.Whole.ListenAddr)
+
+	conn, err := net.Dial("tcp", cfg.Whole.ListenAddr)
+	if err != nil {
+		t.Fatalf("dial server: %v", err)
+	}
+	defer conn.Close()
+	mustHello(t, conn)
+
+	requestID := uint64(1)
+	authID := authenticateConnection(t, conn, material, &requestID)
+
+	openResp := mustRoundTrip(t, conn, buildRequest(proto.OpSessionOpen, requestID, 0, proto.BuildSessionOpenRequestBody(authID)))
+	openHeader := mustParseHeader(t, openResp)
+	if openHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("session open status: %d", openHeader.StatusCode)
+	}
+	sessionID := openHeader.SessionID
+	if sessionID == 0 {
+		t.Fatal("expected non-zero session id")
+	}
+	requestID++
+
+	if err := transport.WriteFrame(conn, buildNotice(
+		proto.OpSessionCloseNotice,
+		sessionID,
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonProtocolError),
+	)); err != nil {
+		t.Fatalf("write close notice: %v", err)
+	}
+	requestID++
+
+	readAfterCloseResp := mustRoundTrip(t, conn, buildRequest(proto.OpReadAt, requestID, sessionID, proto.BuildReadBody(0, 1)))
+	if header := mustParseHeader(t, readAfterCloseResp); header.StatusCode != proto.StatusSessionUnavailable {
+		t.Fatalf("read-after-close status: %d", header.StatusCode)
+	}
+
+	cancel()
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("server run exited with error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("server did not stop in time")
+	}
+}
+
 func TestWholeRuntimeSecondClientOpenIsRejectedButAuthIDStaysValid(t *testing.T) {
 	t.Parallel()
 
