@@ -35,6 +35,8 @@ const CONN_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
 #[cfg(test)]
 const CONN_HEARTBEAT_TIMEOUT: Duration = Duration::from_millis(150);
 
+// GatewayConnection is the business-level connection that multiplexes requests,
+// responses, and notices on top of one framed transport session.
 pub struct GatewayConnection {
     endpoint: TransportEndpoint,
     transport: TransportClient,

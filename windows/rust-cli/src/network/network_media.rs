@@ -3,6 +3,7 @@ use backend_rust::Media;
 use network_core::client::DiskSession;
 use network_core::client::NetworkClientError;
 use network_core::client::SessionMetadata;
+use network_core::protocol::MAX_DATA_PLANE_RAW_BYTES;
 use std::fmt;
 use std::sync::Arc;
 
@@ -12,7 +13,6 @@ pub struct NetworkMedia {
     session: DiskSession,
     disk_size_bytes: u64,
     read_only: bool,
-    max_io_bytes: u32,
     invalidation_handler: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -24,7 +24,6 @@ impl fmt::Debug for NetworkMedia {
             .field("session_id", &self.session.session_id())
             .field("disk_size_bytes", &self.disk_size_bytes)
             .field("read_only", &self.read_only)
-            .field("max_io_bytes", &self.max_io_bytes)
             .finish()
     }
 }
@@ -42,7 +41,7 @@ impl NetworkMedia {
         if metadata.disk_size_bytes == 0 {
             return Err(NetworkClientError::InvalidArgument("disk_size_bytes"));
         }
-        if metadata.max_io_bytes == 0 {
+        if metadata.max_io_bytes != MAX_DATA_PLANE_RAW_BYTES {
             return Err(NetworkClientError::InvalidArgument("max_io_bytes"));
         }
 
@@ -51,7 +50,6 @@ impl NetworkMedia {
             session,
             disk_size_bytes: metadata.disk_size_bytes,
             read_only: metadata.read_only,
-            max_io_bytes: metadata.max_io_bytes,
             invalidation_handler: None,
         })
     }
@@ -72,10 +70,6 @@ impl NetworkMedia {
     pub fn read_only(&self) -> bool {
         self.read_only
     }
-
-    pub fn max_io_bytes(&self) -> u32 {
-        self.max_io_bytes
-    }
 }
 
 impl Media for NetworkMedia {
@@ -92,7 +86,7 @@ impl Media for NetworkMedia {
         let mut remaining = buffer;
         let mut chunk_offset = offset;
         while !remaining.is_empty() {
-            let chunk_len = remaining.len().min(self.max_io_bytes as usize);
+            let chunk_len = remaining.len().min(MAX_DATA_PLANE_RAW_BYTES as usize);
             let (chunk, rest) = remaining.split_at_mut(chunk_len);
             if let Err(error) = self.session.read_at(chunk_offset, chunk) {
                 self.handle_terminal_error(&error);
@@ -118,7 +112,7 @@ impl Media for NetworkMedia {
         let mut remaining = data;
         let mut chunk_offset = offset;
         while !remaining.is_empty() {
-            let chunk_len = remaining.len().min(self.max_io_bytes as usize);
+            let chunk_len = remaining.len().min(MAX_DATA_PLANE_RAW_BYTES as usize);
             let (chunk, rest) = remaining.split_at(chunk_len);
             if let Err(error) = self.session.write_at(chunk_offset, chunk) {
                 self.handle_terminal_error(&error);
@@ -193,6 +187,7 @@ mod tests {
     use network_core::protocol::ClientOperationCode;
     use network_core::protocol::FLAG_RESPONSE;
     use network_core::protocol::HEADER_SIZE;
+    use network_core::protocol::MAX_DATA_PLANE_RAW_BYTES;
     use network_core::protocol::PROTOCOL_VERSION;
     use network_core::protocol::ProtocolHeader;
     use network_core::protocol::ProtocolStatusCode;
@@ -220,7 +215,7 @@ mod tests {
             SessionMetadata {
                 disk_size_bytes: 2048,
                 read_only: false,
-                max_io_bytes: 1024,
+                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 backend_id: [0u8; 16],
             },
         )
@@ -229,7 +224,8 @@ mod tests {
     }
 
     #[test]
-    fn read_locked_splits_large_requests_by_max_io_bytes() {
+    fn read_locked_splits_large_requests_by_raw_limit() {
+        let split_len = MAX_DATA_PLANE_RAW_BYTES as usize;
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
         let address = listener.local_addr().expect("local addr should succeed");
 
@@ -246,8 +242,11 @@ mod tests {
             assert_eq!(&first[HEADER_SIZE..HEADER_SIZE + 8], &0u64.to_be_bytes());
             assert_eq!(
                 &first[HEADER_SIZE + 8..HEADER_SIZE + 12],
-                &4u32.to_be_bytes()
+                &MAX_DATA_PLANE_RAW_BYTES.to_be_bytes()
             );
+            let mut first_body = Vec::with_capacity(split_len + 1);
+            first_body.push(0);
+            first_body.extend(vec![b'A'; split_len]);
             let first_response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
                 header_len: HEADER_SIZE as u8,
@@ -258,7 +257,7 @@ mod tests {
                 request_id: first_header.request_id,
                 session_id: first_header.session_id,
             }
-            .encode(b"ABCD");
+            .encode(&first_body);
             write_frame(&mut stream, &first_response).expect("write first response");
 
             let second = read_frame_into(&mut stream, &mut buffer)
@@ -266,11 +265,15 @@ mod tests {
                 .to_vec();
             let second_header = parse_request_header(&second).expect("parse second");
             assert_eq!(second_header.op_code, ClientOperationCode::ReadAt);
-            assert_eq!(&second[HEADER_SIZE..HEADER_SIZE + 8], &4u64.to_be_bytes());
+            assert_eq!(
+                &second[HEADER_SIZE..HEADER_SIZE + 8],
+                &u64::from(MAX_DATA_PLANE_RAW_BYTES).to_be_bytes()
+            );
             assert_eq!(
                 &second[HEADER_SIZE + 8..HEADER_SIZE + 12],
                 &4u32.to_be_bytes()
             );
+            let second_body = [0, b'B', b'B', b'B', b'B'];
             let second_response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
                 header_len: HEADER_SIZE as u8,
@@ -281,7 +284,7 @@ mod tests {
                 request_id: second_header.request_id,
                 session_id: second_header.session_id,
             }
-            .encode(b"EFGH");
+            .encode(&second_body);
             write_frame(&mut stream, &second_response).expect("write second response");
         });
 
@@ -292,27 +295,29 @@ mod tests {
             "A1b2C3d4E5f6G7h8",
             session,
             SessionMetadata {
-                disk_size_bytes: 4096,
+                disk_size_bytes: u64::from(MAX_DATA_PLANE_RAW_BYTES) + 4,
                 read_only: false,
-                max_io_bytes: 4,
+                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 backend_id: [0u8; 16],
             },
         )
         .expect("bind should succeed");
         assert_eq!(media.disk_id(), "A1b2C3d4E5f6G7h8");
 
-        let mut buffer = [0u8; 8];
+        let mut buffer = vec![0u8; split_len + 4];
         media
             .read_locked(0, &mut buffer)
             .expect("read should succeed");
-        assert_eq!(&buffer, b"ABCDEFGH");
+        assert_eq!(&buffer[..split_len], vec![b'A'; split_len]);
+        assert_eq!(&buffer[split_len..], b"BBBB");
 
         connection.close().expect("close should succeed");
         server.join().expect("server should join");
     }
 
     #[test]
-    fn write_locked_splits_large_requests_by_max_io_bytes() {
+    fn write_locked_splits_large_requests_by_raw_limit() {
+        let split_len = MAX_DATA_PLANE_RAW_BYTES as usize;
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
         let address = listener.local_addr().expect("local addr should succeed");
 
@@ -329,9 +334,11 @@ mod tests {
             assert_eq!(&first[HEADER_SIZE..HEADER_SIZE + 8], &0u64.to_be_bytes());
             assert_eq!(
                 &first[HEADER_SIZE + 8..HEADER_SIZE + 12],
-                &4u32.to_be_bytes()
+                &MAX_DATA_PLANE_RAW_BYTES.to_be_bytes()
             );
-            assert_eq!(&first[HEADER_SIZE + 12..], b"ABCD");
+            assert_eq!(first[HEADER_SIZE + 12], 0);
+            let expected_first_chunk = vec![b'A'; split_len];
+            assert_eq!(&first[HEADER_SIZE + 13..], expected_first_chunk);
             let first_response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
                 header_len: HEADER_SIZE as u8,
@@ -350,12 +357,16 @@ mod tests {
                 .to_vec();
             let second_header = parse_request_header(&second).expect("parse second");
             assert_eq!(second_header.op_code, ClientOperationCode::WriteAt);
-            assert_eq!(&second[HEADER_SIZE..HEADER_SIZE + 8], &4u64.to_be_bytes());
+            assert_eq!(
+                &second[HEADER_SIZE..HEADER_SIZE + 8],
+                &u64::from(MAX_DATA_PLANE_RAW_BYTES).to_be_bytes()
+            );
             assert_eq!(
                 &second[HEADER_SIZE + 8..HEADER_SIZE + 12],
                 &4u32.to_be_bytes()
             );
-            assert_eq!(&second[HEADER_SIZE + 12..], b"EFGH");
+            assert_eq!(second[HEADER_SIZE + 12], 0);
+            assert_eq!(&second[HEADER_SIZE + 13..], b"BBBB");
             let second_response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
                 header_len: HEADER_SIZE as u8,
@@ -377,16 +388,18 @@ mod tests {
             "A1b2C3d4E5f6G7h8",
             session,
             SessionMetadata {
-                disk_size_bytes: 4096,
+                disk_size_bytes: u64::from(MAX_DATA_PLANE_RAW_BYTES) + 4,
                 read_only: false,
-                max_io_bytes: 4,
+                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 backend_id: [0u8; 16],
             },
         )
         .expect("bind should succeed");
 
+        let mut write_data = vec![b'A'; split_len];
+        write_data.extend_from_slice(b"BBBB");
         media
-            .write_locked(0, b"ABCDEFGH")
+            .write_locked(0, &write_data)
             .expect("write should succeed");
 
         connection.close().expect("close should succeed");
@@ -454,7 +467,7 @@ mod tests {
             SessionMetadata {
                 disk_size_bytes: 4096,
                 read_only: false,
-                max_io_bytes: 4,
+                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 backend_id: [0u8; 16],
             },
         )

@@ -72,7 +72,6 @@ pub struct NetworkMountResult {
     pub session_id: u64,
     pub disk_size_bytes: u64,
     pub read_only: bool,
-    pub max_io_bytes: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +88,6 @@ struct MountedNetworkDisk {
     session: DiskSession,
     disk_size_bytes: u64,
     read_only: bool,
-    max_io_bytes: u32,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -293,7 +291,6 @@ impl CliHost {
             session.clone(),
             metadata.disk_size_bytes,
             metadata.read_only,
-            metadata.max_io_bytes,
         );
 
         let disk_config = DiskConfig {
@@ -566,7 +563,6 @@ impl MountedNetworkDisk {
         session: DiskSession,
         disk_size_bytes: u64,
         read_only: bool,
-        max_io_bytes: u32,
     ) -> Self {
         Self {
             addr,
@@ -575,7 +571,6 @@ impl MountedNetworkDisk {
             session,
             disk_size_bytes,
             read_only,
-            max_io_bytes,
         }
     }
 
@@ -595,7 +590,6 @@ impl MountedNetworkDisk {
             session_id: self.session.session_id(),
             disk_size_bytes: self.disk_size_bytes,
             read_only: self.read_only,
-            max_io_bytes: self.max_io_bytes,
         }
     }
 }
@@ -926,7 +920,6 @@ mod tests {
                 session,
                 disk_size_bytes: 4096,
                 read_only: false,
-                max_io_bytes: 4096,
             },
             connection,
             server,
@@ -960,7 +953,6 @@ mod tests {
                 session,
                 disk_size_bytes: 4096,
                 read_only: false,
-                max_io_bytes: 4096,
             },
         )]);
 
@@ -1004,7 +996,6 @@ mod tests {
                 session_id: 99,
                 disk_size_bytes: 4096,
                 read_only: false,
-                max_io_bytes: 4096,
             }]
         );
 

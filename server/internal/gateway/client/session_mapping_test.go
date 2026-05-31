@@ -28,7 +28,7 @@ func TestGatewaySessionMappingHidesUpstreamSessionIDAndForwardsDescribe(t *testi
 		readOut:       []byte("OK"),
 		describeOut: session.Metadata{
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    1024,
+			MaxIOBytes:    session.MaxDataPlaneRawBytes,
 		},
 	}
 
@@ -147,7 +147,7 @@ func TestGatewaySessionMappingIsReleasedOnConnectionClose(t *testing.T) {
 		openSessionID: 88,
 		describeOut: session.Metadata{
 			DiskSizeBytes: 4096,
-			MaxIOBytes:    1024,
+			MaxIOBytes:    session.MaxDataPlaneRawBytes,
 		},
 	}
 

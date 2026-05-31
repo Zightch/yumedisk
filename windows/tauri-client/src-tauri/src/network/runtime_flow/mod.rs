@@ -15,15 +15,15 @@ use crate::state::disk_runtime::RemovedDiskRuntime;
 use crate::state::network_client::NetworkClientState;
 use crate::state::network_client::NetworkDiskKey;
 
+use super::NETWORK_SESSION_MISSING_REASON;
 use super::cleanup;
 use super::lock_network_client;
 use super::validation;
-use super::NETWORK_SESSION_MISSING_REASON;
 
 pub(crate) use rescan::collect_network_rescan_plans;
 pub(crate) use rescan::commit_network_rescan_resolution;
-pub(crate) use rescan::resolve_network_rescan_plan;
 pub use rescan::rescan_network_runtimes;
+pub(crate) use rescan::resolve_network_rescan_plan;
 
 pub fn mount_network_disk(
     backend: &BackendContext,
@@ -219,7 +219,7 @@ mod tests {
     fn sample_metadata() -> SessionMetadata {
         SessionMetadata {
             disk_size_bytes: 4096,
-            max_io_bytes: 4096,
+            max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
             read_only: false,
             backend_id: [0; 16],
         }

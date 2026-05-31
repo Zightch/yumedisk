@@ -128,7 +128,8 @@ impl SharedMemoryRegistry {
     }
 
     pub fn sibling_targets(&self, target_id: u32) -> Option<(u64, Vec<u32>)> {
-        let LocalBindingKind::Shared { smid } = self.target_bindings.get(&target_id).copied()? else {
+        let LocalBindingKind::Shared { smid } = self.target_bindings.get(&target_id).copied()?
+        else {
             return None;
         };
         let entry = self.shared.get(&smid)?;

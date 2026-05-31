@@ -338,11 +338,11 @@ mod tests {
     use std::net::TcpListener;
     use std::path::Path;
     use std::path::PathBuf;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::sync::Mutex;
     use std::sync::OnceLock;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::Duration;
 
@@ -350,31 +350,31 @@ mod tests {
     use network_core::client::DiskSession;
     use network_core::client::GatewayConnection;
     use network_core::client::SessionMetadata;
-    use network_core::protocol::parse_header;
-    use network_core::protocol::parse_request_header;
     use network_core::protocol::ClientOperationCode;
-    use network_core::protocol::ProtocolHeader;
-    use network_core::protocol::ProtocolStatusCode;
-    use network_core::protocol::SessionCloseNotice;
     use network_core::protocol::FLAG_NOTICE;
     use network_core::protocol::FLAG_RESPONSE;
     use network_core::protocol::HEADER_SIZE;
     use network_core::protocol::PROTOCOL_VERSION;
+    use network_core::protocol::ProtocolHeader;
+    use network_core::protocol::ProtocolStatusCode;
     use network_core::protocol::SESSION_CLOSE_REASON_NORMAL_CLOSE;
+    use network_core::protocol::SessionCloseNotice;
+    use network_core::protocol::parse_header;
+    use network_core::protocol::parse_request_header;
     use network_core::test_support::expect_client_hello;
     use network_core::test_support::stage_connection;
+    use network_core::transport::MAX_FRAME_PAYLOAD_BYTES;
+    use network_core::transport::TransportEndpoint;
     use network_core::transport::read_frame_into;
     use network_core::transport::write_frame;
-    use network_core::transport::TransportEndpoint;
-    use network_core::transport::MAX_FRAME_PAYLOAD_BYTES;
 
-    use super::add_network_draft_item;
-    use super::create_network_draft;
-    use super::dispose_network_draft;
     use super::AddNetworkDraftItemRequest;
     use super::CreateNetworkDraftRequest;
     use super::DisposeNetworkDraftRequest;
     use super::SubmitNetworkDraftRequest;
+    use super::add_network_draft_item;
+    use super::create_network_draft;
+    use super::dispose_network_draft;
     use crate::state::client_config;
     use crate::state::disk_runtime::DiskRuntime;
     use crate::state::disk_runtime::DiskRuntimeStatus;
@@ -490,7 +490,7 @@ mod tests {
     fn sample_metadata() -> SessionMetadata {
         SessionMetadata {
             disk_size_bytes: 4096,
-            max_io_bytes: 4096,
+            max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
             read_only: false,
             backend_id: [0; 16],
         }
@@ -703,9 +703,11 @@ mod tests {
             .lock()
             .expect("network client mutex should not be poisoned");
         assert!(network_client.draft("draft-1").is_some());
-        assert!(network_client
-            .opened_session(&NetworkDiskKey::new("127.0.0.1:9011", "Z9y8X7w6V5u4T3s2"))
-            .is_none());
+        assert!(
+            network_client
+                .opened_session(&NetworkDiskKey::new("127.0.0.1:9011", "Z9y8X7w6V5u4T3s2"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -805,7 +807,8 @@ mod tests {
 
             let mut describe_body = Vec::new();
             describe_body.extend_from_slice(&4096u64.to_be_bytes());
-            describe_body.extend_from_slice(&4096u32.to_be_bytes());
+            describe_body
+                .extend_from_slice(&network_core::protocol::MAX_DATA_PLANE_RAW_BYTES.to_be_bytes());
             describe_body.extend_from_slice(&0u16.to_be_bytes());
             describe_body.extend_from_slice(&0u16.to_be_bytes());
             describe_body.extend_from_slice(&[9u8; 16]);
@@ -880,9 +883,11 @@ mod tests {
             .expect("draft should remain after rejection");
         assert!(draft.items.is_empty());
         assert!(draft.connection.is_connected());
-        assert!(network_client
-            .opened_session(&NetworkDiskKey::new(&server_addr, "existing-ro"))
-            .is_some());
+        assert!(
+            network_client
+                .opened_session(&NetworkDiskKey::new(&server_addr, "existing-ro"))
+                .is_some()
+        );
 
         server.join().expect("server should join");
     }
@@ -937,9 +942,11 @@ mod tests {
             .lock()
             .expect("network client mutex should not be poisoned");
         assert!(network_client.draft("draft-1").is_some());
-        assert!(network_client
-            .opened_session(&NetworkDiskKey::new(&harness.server_addr, "live-ro"))
-            .is_some());
+        assert!(
+            network_client
+                .opened_session(&NetworkDiskKey::new(&harness.server_addr, "live-ro"))
+                .is_some()
+        );
 
         harness.shutdown();
     }

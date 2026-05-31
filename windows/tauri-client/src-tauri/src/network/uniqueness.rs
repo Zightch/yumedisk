@@ -164,7 +164,7 @@ mod tests {
             session,
             metadata: SessionMetadata {
                 disk_size_bytes: 4096,
-                max_io_bytes: 4096,
+                max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                 read_only: false,
                 backend_id: [0; 16],
             },
@@ -200,7 +200,7 @@ mod tests {
             session,
             metadata: SessionMetadata {
                 disk_size_bytes: 4096,
-                max_io_bytes: 4096,
+                max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                 read_only: false,
                 backend_id: [7; 16],
             },
@@ -229,7 +229,7 @@ mod tests {
             session,
             metadata: SessionMetadata {
                 disk_size_bytes: 4096,
-                max_io_bytes: 4096,
+                max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                 read_only: true,
                 backend_id: [9; 16],
             },
@@ -260,7 +260,7 @@ mod tests {
             session,
             metadata: SessionMetadata {
                 disk_size_bytes: 4096,
-                max_io_bytes: 4096,
+                max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                 read_only: false,
                 backend_id: [3; 16],
             },

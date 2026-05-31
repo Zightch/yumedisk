@@ -6,6 +6,7 @@ use backend_rust::Media;
 use network_core::client::DiskSession;
 use network_core::client::NetworkClientError;
 use network_core::client::SessionMetadata;
+use network_core::protocol::MAX_DATA_PLANE_RAW_BYTES;
 
 #[derive(Clone)]
 pub struct NetworkMedia {
@@ -13,7 +14,6 @@ pub struct NetworkMedia {
     session: DiskSession,
     disk_size_bytes: u64,
     read_only: bool,
-    max_io_bytes: u32,
     invalidation_handler: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -25,7 +25,6 @@ impl fmt::Debug for NetworkMedia {
             .field("session_id", &self.session.session_id())
             .field("disk_size_bytes", &self.disk_size_bytes)
             .field("read_only", &self.read_only)
-            .field("max_io_bytes", &self.max_io_bytes)
             .finish()
     }
 }
@@ -44,7 +43,7 @@ impl NetworkMedia {
         if metadata.disk_size_bytes == 0 {
             return Err(NetworkClientError::InvalidArgument("disk_size_bytes"));
         }
-        if metadata.max_io_bytes == 0 {
+        if metadata.max_io_bytes != MAX_DATA_PLANE_RAW_BYTES {
             return Err(NetworkClientError::InvalidArgument("max_io_bytes"));
         }
 
@@ -53,7 +52,6 @@ impl NetworkMedia {
             session,
             disk_size_bytes: metadata.disk_size_bytes,
             read_only: configured_read_only || metadata.read_only,
-            max_io_bytes: metadata.max_io_bytes,
             invalidation_handler: None,
         })
     }
@@ -78,7 +76,7 @@ impl Media for NetworkMedia {
         let mut remaining = buffer;
         let mut chunk_offset = offset;
         while !remaining.is_empty() {
-            let chunk_len = remaining.len().min(self.max_io_bytes as usize);
+            let chunk_len = remaining.len().min(MAX_DATA_PLANE_RAW_BYTES as usize);
             let (chunk, rest) = remaining.split_at_mut(chunk_len);
             if let Err(error) = self.session.read_at(chunk_offset, chunk) {
                 self.handle_terminal_error(&error);
@@ -105,7 +103,7 @@ impl Media for NetworkMedia {
         let mut remaining = data;
         let mut chunk_offset = offset;
         while !remaining.is_empty() {
-            let chunk_len = remaining.len().min(self.max_io_bytes as usize);
+            let chunk_len = remaining.len().min(MAX_DATA_PLANE_RAW_BYTES as usize);
             let (chunk, rest) = remaining.split_at(chunk_len);
             if let Err(error) = self.session.write_at(chunk_offset, chunk) {
                 self.handle_terminal_error(&error);
@@ -176,12 +174,13 @@ mod tests {
     use backend_rust::Media;
     use network_core::client::DiskSession;
     use network_core::client::SessionMetadata;
+    use network_core::protocol::MAX_DATA_PLANE_RAW_BYTES;
     use network_core::test_support::clear_session;
     use network_core::test_support::stage_connection;
     use network_core::transport::TransportEndpoint;
+    use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
-    use std::sync::Arc;
 
     #[test]
     fn read_locked_marks_media_invalid_when_session_is_terminal() {
@@ -196,7 +195,7 @@ mod tests {
             SessionMetadata {
                 disk_size_bytes: 4096,
                 read_only: false,
-                max_io_bytes: 4096,
+                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 backend_id: [0; 16],
             },
             false,
@@ -228,7 +227,7 @@ mod tests {
             SessionMetadata {
                 disk_size_bytes: 4096,
                 read_only: false,
-                max_io_bytes: 4096,
+                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 backend_id: [0; 16],
             },
             true,

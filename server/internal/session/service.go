@@ -25,6 +25,7 @@ type Service struct {
 }
 
 func NewService(manager Manager, storage *filestorage.Backend, metadata Metadata) *Service {
+	metadata.MaxIOBytes = MaxDataPlaneRawBytes
 	return &Service{
 		manager:  manager,
 		storage:  storage,
@@ -52,7 +53,7 @@ func (s *Service) CloseConnection(connectionID uint64) {
 }
 
 func (s *Service) MaxIOBytes() uint32 {
-	return s.metadata.MaxIOBytes
+	return MaxDataPlaneRawBytes
 }
 
 func (s *Service) Describe(sessionID uint64) (Metadata, error) {
@@ -93,7 +94,7 @@ func (s *Service) Read(sessionID uint64, offset uint64, length uint32) ([]byte, 
 		return nil, err
 	}
 	defer lease.release()
-	if length == 0 || length > record.Metadata.MaxIOBytes {
+	if length == 0 || length > MaxDataPlaneRawBytes {
 		return nil, ErrIOLimit
 	}
 	if offset > record.Metadata.DiskSizeBytes || uint64(length) > record.Metadata.DiskSizeBytes-offset {
@@ -116,7 +117,7 @@ func (s *Service) Write(sessionID uint64, offset uint64, data []byte) error {
 	if record.Metadata.ReadOnly {
 		return ErrReadOnly
 	}
-	if len(data) == 0 || uint32(len(data)) > record.Metadata.MaxIOBytes {
+	if len(data) == 0 || uint32(len(data)) > MaxDataPlaneRawBytes {
 		return ErrIOLimit
 	}
 	if offset > record.Metadata.DiskSizeBytes || uint64(len(data)) > record.Metadata.DiskSizeBytes-offset {

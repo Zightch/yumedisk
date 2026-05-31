@@ -145,12 +145,12 @@ impl DebugShell {
             }
         };
         println!(
-            "open_ok disk_id={} session_id={} disk_bytes={} read_only={} max_io_bytes={}",
+            "open_ok disk_id={} session_id={} disk_bytes={} read_only={} raw_limit_bytes={}",
             auth.disk_id(),
             session.session_id(),
             metadata.disk_size_bytes,
             metadata.read_only,
-            metadata.max_io_bytes
+            network_core::protocol::MAX_DATA_PLANE_RAW_BYTES
         );
         self.disk_id = Some(auth.disk_id().to_string());
         self.auth = None;

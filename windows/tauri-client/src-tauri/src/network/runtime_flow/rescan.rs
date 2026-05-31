@@ -10,15 +10,15 @@ use crate::state::network_client::NetworkClientState;
 use crate::state::network_client::NetworkDiskKey;
 use crate::state::network_client::OpenedNetworkDiskSession;
 
-use super::super::cleanup;
-use super::super::gateway_ops;
-use super::super::lock_network_client;
 use super::super::NETWORK_AUTH_FAILED_REASON;
 use super::super::NETWORK_AUTH_MISMATCH_REASON;
 use super::super::NETWORK_BACKEND_CONFLICT_REASON;
 use super::super::NETWORK_CONNECTION_UNAVAILABLE_REASON;
 use super::super::NETWORK_METADATA_FAILED_REASON;
 use super::super::NETWORK_OPEN_FAILED_REASON;
+use super::super::cleanup;
+use super::super::gateway_ops;
+use super::super::lock_network_client;
 
 #[derive(Debug, Clone)]
 struct NetworkRescanTask {
@@ -110,12 +110,7 @@ pub fn rescan_network_runtimes(
 
     for plan in plans {
         let resolution = resolve_network_rescan_plan(network_client_mutex, &plan);
-        commit_network_rescan_resolution(
-            backend,
-            runtime_store,
-            network_client_mutex,
-            resolution,
-        );
+        commit_network_rescan_resolution(backend, runtime_store, network_client_mutex, resolution);
     }
 }
 
@@ -529,10 +524,10 @@ fn parse_local_disk_id_number(local_disk_id: &str) -> Option<u64> {
 mod tests {
     use std::collections::HashMap;
     use std::net::TcpListener;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::Ordering;
     use std::sync::Arc;
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::Ordering;
     use std::thread;
     use std::time::Duration;
 
@@ -540,22 +535,22 @@ mod tests {
     use network_core::client::DiskSession;
     use network_core::client::GatewayConnection;
     use network_core::client::SessionMetadata;
-    use network_core::protocol::parse_header;
-    use network_core::protocol::parse_request_header;
     use network_core::protocol::ClientOperationCode;
-    use network_core::protocol::ProtocolHeader;
-    use network_core::protocol::ProtocolStatusCode;
-    use network_core::protocol::SessionCloseNotice;
     use network_core::protocol::FLAG_NOTICE;
     use network_core::protocol::FLAG_RESPONSE;
     use network_core::protocol::HEADER_SIZE;
     use network_core::protocol::PROTOCOL_VERSION;
+    use network_core::protocol::ProtocolHeader;
+    use network_core::protocol::ProtocolStatusCode;
+    use network_core::protocol::SessionCloseNotice;
+    use network_core::protocol::parse_header;
+    use network_core::protocol::parse_request_header;
     use network_core::test_support::expect_client_hello;
     use network_core::test_support::stage_connection;
+    use network_core::transport::MAX_FRAME_PAYLOAD_BYTES;
+    use network_core::transport::TransportEndpoint;
     use network_core::transport::read_frame_into;
     use network_core::transport::write_frame;
-    use network_core::transport::TransportEndpoint;
-    use network_core::transport::MAX_FRAME_PAYLOAD_BYTES;
 
     use super::rescan_network_runtimes;
     use crate::network::NETWORK_BACKEND_CONFLICT_REASON;
@@ -591,7 +586,7 @@ mod tests {
     fn sample_metadata() -> SessionMetadata {
         SessionMetadata {
             disk_size_bytes: 4096,
-            max_io_bytes: 4096,
+            max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
             read_only: false,
             backend_id: [0; 16],
         }
@@ -958,7 +953,7 @@ mod tests {
             session_id: 91,
             metadata: SessionMetadata {
                 disk_size_bytes: 8192,
-                max_io_bytes: 4096,
+                max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                 read_only: false,
                 backend_id: [2; 16],
             },
@@ -1026,7 +1021,7 @@ mod tests {
                 session_id: 201,
                 metadata: SessionMetadata {
                     disk_size_bytes: 4096,
-                    max_io_bytes: 4096,
+                    max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                     read_only: false,
                     backend_id: [5; 16],
                 },
@@ -1037,7 +1032,7 @@ mod tests {
                 session_id: 202,
                 metadata: SessionMetadata {
                     disk_size_bytes: 4096,
-                    max_io_bytes: 4096,
+                    max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                     read_only: true,
                     backend_id: [5; 16],
                 },
@@ -1092,18 +1087,22 @@ mod tests {
         let network_client = network_client_mutex
             .lock()
             .expect("network client mutex should not be poisoned");
-        assert!(network_client
-            .opened_session(&NetworkDiskKey::new(
-                &server.server_addr,
-                "A1b2C3d4E5f6G7h8"
-            ))
-            .is_none());
-        assert!(network_client
-            .opened_session(&NetworkDiskKey::new(
-                &server.server_addr,
-                "Z9y8X7w6V5u4T3s2"
-            ))
-            .is_some());
+        assert!(
+            network_client
+                .opened_session(&NetworkDiskKey::new(
+                    &server.server_addr,
+                    "A1b2C3d4E5f6G7h8"
+                ))
+                .is_none()
+        );
+        assert!(
+            network_client
+                .opened_session(&NetworkDiskKey::new(
+                    &server.server_addr,
+                    "Z9y8X7w6V5u4T3s2"
+                ))
+                .is_some()
+        );
 
         server.wait_for_closed_sessions(&[201]);
         server.shutdown();
@@ -1119,7 +1118,7 @@ mod tests {
                 session_id: 211,
                 metadata: SessionMetadata {
                     disk_size_bytes: 4096,
-                    max_io_bytes: 4096,
+                    max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                     read_only: true,
                     backend_id: [6; 16],
                 },
@@ -1130,7 +1129,7 @@ mod tests {
                 session_id: 212,
                 metadata: SessionMetadata {
                     disk_size_bytes: 4096,
-                    max_io_bytes: 4096,
+                    max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                     read_only: true,
                     backend_id: [6; 16],
                 },
@@ -1185,18 +1184,22 @@ mod tests {
         let network_client = network_client_mutex
             .lock()
             .expect("network client mutex should not be poisoned");
-        assert!(network_client
-            .opened_session(&NetworkDiskKey::new(
-                &server.server_addr,
-                "A1b2C3d4E5f6G7h8"
-            ))
-            .is_none());
-        assert!(network_client
-            .opened_session(&NetworkDiskKey::new(
-                &server.server_addr,
-                "Z9y8X7w6V5u4T3s2"
-            ))
-            .is_some());
+        assert!(
+            network_client
+                .opened_session(&NetworkDiskKey::new(
+                    &server.server_addr,
+                    "A1b2C3d4E5f6G7h8"
+                ))
+                .is_none()
+        );
+        assert!(
+            network_client
+                .opened_session(&NetworkDiskKey::new(
+                    &server.server_addr,
+                    "Z9y8X7w6V5u4T3s2"
+                ))
+                .is_some()
+        );
 
         server.wait_for_closed_sessions(&[211]);
         server.shutdown();

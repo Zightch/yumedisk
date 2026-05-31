@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use super::error::NetworkClientError;
 use super::gateway_connection::GatewayConnection;
+use super::protocol_client::MAX_DATA_PLANE_RAW_BYTES;
 use super::protocol_client::ProtocolClientError;
 use super::protocol_client::ProtocolStatusCode;
 use super::protocol_client::SessionDescribeRequest;
@@ -25,7 +26,7 @@ impl SessionMetadata {
         if disk_size_bytes == 0 {
             return Err(NetworkClientError::InvalidArgument("disk_size_bytes"));
         }
-        if max_io_bytes == 0 {
+        if max_io_bytes != MAX_DATA_PLANE_RAW_BYTES {
             return Err(NetworkClientError::InvalidArgument("max_io_bytes"));
         }
 
@@ -91,6 +92,7 @@ mod tests {
     use crate::network::FLAG_RESPONSE;
     use crate::network::GatewayConnection;
     use crate::network::HEADER_SIZE;
+    use crate::network::MAX_DATA_PLANE_RAW_BYTES;
     use crate::network::PROTOCOL_VERSION;
     use crate::network::ProtocolHeader;
     use crate::network::ProtocolStatusCode;
@@ -123,7 +125,7 @@ mod tests {
 
             let mut body = Vec::new();
             body.extend_from_slice(&4096u64.to_be_bytes());
-            body.extend_from_slice(&60_000u32.to_be_bytes());
+            body.extend_from_slice(&MAX_DATA_PLANE_RAW_BYTES.to_be_bytes());
             body.extend_from_slice(&1u16.to_be_bytes());
             body.extend_from_slice(&0u16.to_be_bytes());
             body.extend_from_slice(&[9u8; 16]);
@@ -156,7 +158,7 @@ mod tests {
             metadata,
             SessionMetadata {
                 disk_size_bytes: 4096,
-                max_io_bytes: 60_000,
+                max_io_bytes: MAX_DATA_PLANE_RAW_BYTES,
                 read_only: true,
                 backend_id: [9u8; 16],
             }

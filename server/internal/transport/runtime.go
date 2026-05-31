@@ -10,6 +10,8 @@ import (
 )
 
 const (
+	// MaxPayloadSize is the actual payload bytes carried by one framed
+	// transport packet.
 	MaxPayloadSize = 65536
 	MinPayloadSize = 1
 )

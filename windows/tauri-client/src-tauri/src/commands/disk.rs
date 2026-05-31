@@ -375,9 +375,7 @@ pub fn query_home_disk_list(state: State<'_, ClientState>) -> QueryHomeDiskListR
 }
 
 #[tauri::command]
-pub fn rescan_runtime_disks(
-    app: AppHandle,
-) -> Result<RuntimeRescanStartResponse, ApiError> {
+pub fn rescan_runtime_disks(app: AppHandle) -> Result<RuntimeRescanStartResponse, ApiError> {
     runtime_rescan::start_runtime_rescan(app).map(|result| RuntimeRescanStartResponse {
         started: result.started,
         running: result.running,

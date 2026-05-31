@@ -158,14 +158,14 @@ mod tests {
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
 
-    use backend_rust::ManagedDiskResponseType;
     use backend_rust::ManagedDiskEventType;
+    use backend_rust::ManagedDiskResponseType;
     use backend_rust::ManagedSessionNoticeType;
 
     use super::INVALID_FILE_REASON;
     use super::MEMORY_MEDIA_LOST_REASON;
-    use super::apply_disk_response;
     use super::apply_disk_event;
+    use super::apply_disk_response;
     use super::apply_session_broken;
     use super::map_session_notice_failure_text;
     use crate::state::disk_runtime::DiskRuntime;

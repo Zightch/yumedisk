@@ -14,6 +14,7 @@ use std::thread;
 
 pub const FRAME_HEADER_BYTES: usize = 2;
 pub const MIN_FRAME_PAYLOAD_BYTES: usize = 1;
+// The actual payload bytes carried by one framed transport packet.
 pub const MAX_FRAME_PAYLOAD_BYTES: usize = 65_536;
 const OUTBOUND_QUEUE_CAPACITY: usize = 64;
 

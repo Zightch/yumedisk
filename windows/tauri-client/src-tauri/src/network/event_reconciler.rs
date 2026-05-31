@@ -7,10 +7,10 @@ use crate::state::disk_runtime::DiskRuntimeStore;
 use crate::state::network_client::NetworkClientEvent;
 use crate::state::network_client::NetworkClientState;
 
-use super::cleanup;
-use super::lock_network_client;
 use super::NETWORK_CONNECTION_UNAVAILABLE_REASON;
 use super::NETWORK_SESSION_MISSING_REASON;
+use super::cleanup;
+use super::lock_network_client;
 
 pub fn sync_pending_events(
     backend: &BackendContext,
@@ -242,7 +242,7 @@ mod tests {
             session,
             metadata: SessionMetadata {
                 disk_size_bytes: 4096,
-                max_io_bytes: 4096,
+                max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                 read_only: false,
                 backend_id: [0; 16],
             },
@@ -281,7 +281,7 @@ mod tests {
             session,
             metadata: SessionMetadata {
                 disk_size_bytes: 4096,
-                max_io_bytes: 4096,
+                max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                 read_only: false,
                 backend_id: [0; 16],
             },
@@ -338,7 +338,7 @@ mod tests {
             session,
             metadata: SessionMetadata {
                 disk_size_bytes: 4096,
-                max_io_bytes: 4096,
+                max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                 read_only: false,
                 backend_id: [0; 16],
             },
@@ -396,7 +396,7 @@ mod tests {
             session,
             metadata: SessionMetadata {
                 disk_size_bytes: 4096,
-                max_io_bytes: 4096,
+                max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                 read_only: false,
                 backend_id: [0; 16],
             },
@@ -434,7 +434,7 @@ mod tests {
             session,
             metadata: SessionMetadata {
                 disk_size_bytes: 4096,
-                max_io_bytes: 4096,
+                max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                 read_only: false,
                 backend_id: [0; 16],
             },
@@ -499,7 +499,7 @@ mod tests {
             session,
             metadata: SessionMetadata {
                 disk_size_bytes: 4096,
-                max_io_bytes: 4096,
+                max_io_bytes: network_core::protocol::MAX_DATA_PLANE_RAW_BYTES,
                 read_only: false,
                 backend_id: [0; 16],
             },

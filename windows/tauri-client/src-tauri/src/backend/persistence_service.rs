@@ -473,9 +473,9 @@ mod tests {
     use crate::state::client_config::PersistedFileMediaKind;
     use crate::state::disk_runtime::DiskRuntimeStatus;
 
+    use super::DUPLICATE_FILE_REASON;
     use super::build_restored_runtime_store;
     use super::normalize_full_file_path;
-    use super::DUPLICATE_FILE_REASON;
 
     #[test]
     fn normalize_full_file_path_collapses_relative_segments() {

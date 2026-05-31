@@ -233,7 +233,7 @@ func newAuthHandler(t *testing.T, material auth.Material) (*Handler, error) {
 		DiskID:        material.DiskID,
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
-		MaxIOBytes:    60 * 1024,
+		MaxIOBytes:    session.MaxDataPlaneRawBytes,
 	})
 	backend := newTestGatewayBackend(material, sessions, storage.Size(), storage.ReadOnly())
 	handler, err := NewHandler(backend, backend)

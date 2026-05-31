@@ -21,7 +21,11 @@ pub const WRITE_AT_REQUEST_HEADER_BYTES: usize = 13;
 pub const READ_AT_RESPONSE_HEADER_BYTES: usize = 1;
 pub const SESSION_FLAG_READ_ONLY: u16 = 1 << 0;
 pub const IO_COMPRESS_RAW: u8 = 0;
-pub const ABSOLUTE_MAX_IO_BYTES: u32 = 60 * 1024;
+// Limits the business-level raw data bytes carried by a single ReadAt/WriteAt
+// message: before encoding/compression on send, and after decoding/
+// decompression on receive. Transport frame size remains independently capped
+// at 65536 bytes.
+pub const MAX_DATA_PLANE_RAW_BYTES: u32 = 60 * 1024;
 pub const SESSION_CLOSE_REASON_ROUTE_LOST: u16 = 1;
 pub const SESSION_CLOSE_REASON_GATEWAY_SHUTDOWN: u16 = 2;
 pub const SESSION_CLOSE_REASON_UPSTREAM_SESSION_CLOSED: u16 = 3;
@@ -511,7 +515,7 @@ impl SessionDescribeResponse {
         if disk_size_bytes == 0 {
             return Err(ProtocolClientError::InvalidBody("disk_size_bytes"));
         }
-        if max_io_bytes == 0 || max_io_bytes > ABSOLUTE_MAX_IO_BYTES {
+        if max_io_bytes != MAX_DATA_PLANE_RAW_BYTES {
             return Err(ProtocolClientError::InvalidBody("max_io_bytes"));
         }
         let mut backend_id = [0u8; BACKEND_ID_BYTES];
@@ -914,7 +918,7 @@ fn validate_non_zero_session_id(session_id: u64) -> Result<(), ProtocolClientErr
 }
 
 fn validate_io_length(length: u32) -> Result<(), ProtocolClientError> {
-    if length == 0 || length > ABSOLUTE_MAX_IO_BYTES {
+    if length == 0 || length > MAX_DATA_PLANE_RAW_BYTES {
         return Err(ProtocolClientError::InvalidBody("io_length"));
     }
     Ok(())
@@ -941,10 +945,12 @@ mod tests {
     use super::HEADER_LEN;
     use super::HEADER_SIZE;
     use super::IO_COMPRESS_RAW;
+    use super::MAX_DATA_PLANE_RAW_BYTES;
     use super::PROTOCOL_VERSION;
     use super::ProtocolClientError;
     use super::ProtocolHeader;
     use super::ProtocolStatusCode;
+    use super::READ_AT_REQUEST_BODY_BYTES;
     use super::ReadAtRequest;
     use super::ReadAtResponse;
     use super::SESSION_CLOSE_NOTICE_BYTES;
@@ -954,6 +960,7 @@ mod tests {
     use super::SessionDescribeResponse;
     use super::SessionOpenRequest;
     use super::SessionOpenResponse;
+    use super::WRITE_AT_REQUEST_HEADER_BYTES;
     use super::WriteAtRequest;
 
     #[test]
@@ -1068,7 +1075,7 @@ mod tests {
 
         let mut body = Vec::new();
         body.extend_from_slice(&4096u64.to_be_bytes());
-        body.extend_from_slice(&60_000u32.to_be_bytes());
+        body.extend_from_slice(&MAX_DATA_PLANE_RAW_BYTES.to_be_bytes());
         body.extend_from_slice(&1u16.to_be_bytes());
         body.extend_from_slice(&0u16.to_be_bytes());
         body.extend_from_slice(&[7u8; BACKEND_ID_BYTES]);
@@ -1087,9 +1094,34 @@ mod tests {
             .expect("decode should succeed");
         assert_eq!(response.session_id, 9);
         assert_eq!(response.disk_size_bytes, 4096);
-        assert_eq!(response.max_io_bytes, 60_000);
+        assert_eq!(response.max_io_bytes, MAX_DATA_PLANE_RAW_BYTES);
         assert!(response.read_only);
         assert_eq!(response.backend_id, [7u8; BACKEND_ID_BYTES]);
+    }
+
+    #[test]
+    fn session_describe_rejects_max_io_bytes_above_raw_limit() {
+        let mut body = Vec::new();
+        body.extend_from_slice(&4096u64.to_be_bytes());
+        body.extend_from_slice(&(MAX_DATA_PLANE_RAW_BYTES + 1).to_be_bytes());
+        body.extend_from_slice(&0u16.to_be_bytes());
+        body.extend_from_slice(&0u16.to_be_bytes());
+        body.extend_from_slice(&[7u8; BACKEND_ID_BYTES]);
+        let response_payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::SessionDescribe,
+            flags: FLAG_RESPONSE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 21,
+            session_id: 9,
+        }
+        .encode(&body);
+
+        let error = SessionDescribeResponse::decode_response(&response_payload, 21, 9)
+            .expect_err("decode should fail");
+        assert_eq!(error, ProtocolClientError::InvalidBody("max_io_bytes"));
     }
 
     #[test]
@@ -1121,6 +1153,48 @@ mod tests {
         );
         assert_eq!(write[HEADER_SIZE + 12], IO_COMPRESS_RAW);
         assert_eq!(&write[HEADER_SIZE + 13..], b"ABCD");
+    }
+
+    #[test]
+    fn data_plane_raw_length_limit_matches_60kib_semantics() {
+        let read = ReadAtRequest {
+            session_id: 5,
+            offset: 8,
+            length: MAX_DATA_PLANE_RAW_BYTES,
+        }
+        .encode_request(31)
+        .expect("read encode should succeed");
+        assert_eq!(read.len(), HEADER_SIZE + READ_AT_REQUEST_BODY_BYTES);
+
+        let write = WriteAtRequest {
+            session_id: 5,
+            offset: 8,
+            data: vec![0u8; MAX_DATA_PLANE_RAW_BYTES as usize],
+        }
+        .encode_request(32)
+        .expect("write encode should succeed");
+        assert_eq!(
+            write.len(),
+            HEADER_SIZE + WRITE_AT_REQUEST_HEADER_BYTES + MAX_DATA_PLANE_RAW_BYTES as usize
+        );
+
+        let read_error = ReadAtRequest {
+            session_id: 5,
+            offset: 8,
+            length: MAX_DATA_PLANE_RAW_BYTES + 1,
+        }
+        .encode_request(31)
+        .expect_err("read encode should fail");
+        assert_eq!(read_error, ProtocolClientError::InvalidBody("io_length"));
+
+        let write_error = WriteAtRequest {
+            session_id: 5,
+            offset: 8,
+            data: vec![0u8; MAX_DATA_PLANE_RAW_BYTES as usize + 1],
+        }
+        .encode_request(32)
+        .expect_err("write encode should fail");
+        assert_eq!(write_error, ProtocolClientError::InvalidBody("io_length"));
     }
 
     #[test]

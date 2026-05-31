@@ -20,7 +20,7 @@ const (
 	scopeTestRWRouteConnID   = uint64(101)
 	scopeTestRORouteConnID   = uint64(202)
 	scopeTestDiskSizeBytes   = uint64(4096)
-	scopeTestMaxIOBytes      = uint32(1024)
+	scopeTestMaxIOBytes      = session.MaxDataPlaneRawBytes
 	scopeTestPendingConnIDRW = uint64(9001)
 	scopeTestPendingConnIDRO = uint64(9002)
 )

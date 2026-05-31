@@ -7,8 +7,6 @@ import (
 	gatewaylink "yumedisk/server/internal/storer/gateway/link"
 )
 
-const defaultSessionMaxIO = 60 * 1024
-
 type ExportID string
 
 const (
@@ -29,7 +27,7 @@ func newRWExport(material auth.Material, storage *sharedStorage, backendID [16]b
 		DiskID:        material.DiskID,
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      false,
-		MaxIOBytes:    defaultSessionMaxIO,
+		MaxIOBytes:    session.MaxDataPlaneRawBytes,
 		BackendID:     backendID,
 	}
 	return &Export{
@@ -46,7 +44,7 @@ func newROExport(material auth.Material, storage *sharedStorage, backendID [16]b
 		DiskID:        material.DiskID,
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      true,
-		MaxIOBytes:    defaultSessionMaxIO,
+		MaxIOBytes:    session.MaxDataPlaneRawBytes,
 		BackendID:     backendID,
 	}
 	return &Export{

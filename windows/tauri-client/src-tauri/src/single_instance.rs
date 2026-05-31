@@ -10,7 +10,7 @@ mod imp {
     use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, HANDLE};
     use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
     use windows_sys::Win32::System::Threading::{
-        CreateEventW, CreateMutexW, SetEvent, WaitForSingleObject, INFINITE,
+        CreateEventW, CreateMutexW, INFINITE, SetEvent, WaitForSingleObject,
     };
 
     const SINGLE_INSTANCE_MUTEX_NAME: &str = "Local\\YumeDisk.TauriClient.Singleton";
@@ -68,17 +68,19 @@ mod imp {
         let app = app.clone();
         let wake_event_handle = guard.wake_event_handle;
 
-        thread::spawn(move || loop {
-            let wait_result =
-                unsafe { WaitForSingleObject(handle_from_raw(wake_event_handle), INFINITE) };
-            if wait_result != 0 {
-                break;
-            }
+        thread::spawn(move || {
+            loop {
+                let wait_result =
+                    unsafe { WaitForSingleObject(handle_from_raw(wake_event_handle), INFINITE) };
+                if wait_result != 0 {
+                    break;
+                }
 
-            let app_handle = app.clone();
-            let _ = app.run_on_main_thread(move || {
-                wake(&app_handle);
-            });
+                let app_handle = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    wake(&app_handle);
+                });
+            }
         });
     }
 
@@ -150,4 +152,4 @@ mod imp {
     pub fn spawn_wake_listener(_: &AppHandle, _: &SingleInstanceGuard, _: fn(&AppHandle)) {}
 }
 
-pub use imp::{initialize, spawn_wake_listener, SingleInstanceGuard, StartupAction};
+pub use imp::{SingleInstanceGuard, StartupAction, initialize, spawn_wake_listener};

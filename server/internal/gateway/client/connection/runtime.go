@@ -93,6 +93,8 @@ func ServeAcceptedConnection(
 
 	log.Printf("%s connection %d accepted from %s", logPrefix, state.ID, conn.RemoteAddr())
 
+	// The transport runtime owns packet framing for this TCP connection; the
+	// higher-level connection state and business protocol run on top of it.
 	runtime := transport.NewRuntime(conn, NewHandler(handler, state))
 	done := make(chan error, 1)
 	go func() {

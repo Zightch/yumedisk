@@ -194,14 +194,14 @@ fn execute_command(host: &mut CliHost, command: &str, args: &[&str]) -> AppResul
             let (addr, claim_code, target_id) = parse_auth_args(args)?;
             let result = host.mount_network_disk(addr, claim_code, target_id)?;
             println!(
-                "mounted target={}, addr={}, disk_id={}, session_id={}, disk_bytes={}, read_only={}, max_io_bytes={}",
+                "mounted target={}, addr={}, disk_id={}, session_id={}, disk_bytes={}, read_only={}, raw_limit_bytes={}",
                 result.target_id,
                 result.addr,
                 result.disk_id,
                 result.session_id,
                 result.disk_size_bytes,
                 bool_to_text(result.read_only),
-                result.max_io_bytes
+                network_core::protocol::MAX_DATA_PLANE_RAW_BYTES
             );
             Ok(LoopControl::Continue)
         }
@@ -376,13 +376,13 @@ fn print_debug(host: &CliHost) -> AppResult<()> {
     }
     for mount in host.network_mounts() {
         println!(
-            "debug_network_mount target={}, addr={}, disk_id={}, session_id={}, read_only={}, max_io_bytes={}",
+            "debug_network_mount target={}, addr={}, disk_id={}, session_id={}, read_only={}, raw_limit_bytes={}",
             mount.target_id,
             mount.addr,
             mount.disk_id,
             mount.session_id,
             bool_to_text(mount.read_only),
-            mount.max_io_bytes
+            network_core::protocol::MAX_DATA_PLANE_RAW_BYTES
         );
     }
     for shared in host.snapshot_shared_memory() {
@@ -619,7 +619,10 @@ fn reap_host_responses(host: &Arc<Mutex<CliHost>>) {
 
 fn reap_host_disk_events(host: &Arc<Mutex<CliHost>>) {
     loop {
-        let result = host.lock().expect("host poisoned").poll_managed_disk_event();
+        let result = host
+            .lock()
+            .expect("host poisoned")
+            .poll_managed_disk_event();
         match result {
             Ok(Some(event)) => {
                 eprintln!(

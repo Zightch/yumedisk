@@ -22,10 +22,10 @@ pub mod client {
 
 pub mod protocol {
     pub use crate::protocol_client::{
-        ABSOLUTE_MAX_IO_BYTES, AuthFinishRequest, AuthFinishResponse, AuthStartRequest,
-        AuthStartResponse, ClientOperationCode, ConnHeartbeatRequest, ConnHeartbeatResponse,
-        FLAG_NOTICE, FLAG_RESPONSE, HEADER_SIZE, PROTOCOL_VERSION, ProtocolClientError,
-        ProtocolHeader, ProtocolStatusCode, ReadAtRequest, ReadAtResponse,
+        AuthFinishRequest, AuthFinishResponse, AuthStartRequest, AuthStartResponse,
+        ClientOperationCode, ConnHeartbeatRequest, ConnHeartbeatResponse, FLAG_NOTICE,
+        FLAG_RESPONSE, HEADER_SIZE, MAX_DATA_PLANE_RAW_BYTES, PROTOCOL_VERSION,
+        ProtocolClientError, ProtocolHeader, ProtocolStatusCode, ReadAtRequest, ReadAtResponse,
         SESSION_CLOSE_REASON_CLIENT_CONNECTION_REPLACED, SESSION_CLOSE_REASON_GATEWAY_SHUTDOWN,
         SESSION_CLOSE_REASON_NORMAL_CLOSE, SESSION_CLOSE_REASON_PROTOCOL_ERROR,
         SESSION_CLOSE_REASON_ROUTE_LOST, SESSION_CLOSE_REASON_UPSTREAM_SESSION_CLOSED,
@@ -85,10 +85,10 @@ mod network {
     };
     pub(crate) use crate::hello_client::expect_client_hello;
     pub use crate::protocol::{
-        ABSOLUTE_MAX_IO_BYTES, AuthFinishRequest, AuthFinishResponse, AuthStartRequest,
-        AuthStartResponse, ClientOperationCode, ConnHeartbeatRequest, ConnHeartbeatResponse,
-        FLAG_NOTICE, FLAG_RESPONSE, HEADER_SIZE, PROTOCOL_VERSION, ProtocolClientError,
-        ProtocolHeader, ProtocolStatusCode, ReadAtRequest, ReadAtResponse,
+        AuthFinishRequest, AuthFinishResponse, AuthStartRequest, AuthStartResponse,
+        ClientOperationCode, ConnHeartbeatRequest, ConnHeartbeatResponse, FLAG_NOTICE,
+        FLAG_RESPONSE, HEADER_SIZE, MAX_DATA_PLANE_RAW_BYTES, PROTOCOL_VERSION,
+        ProtocolClientError, ProtocolHeader, ProtocolStatusCode, ReadAtRequest, ReadAtResponse,
         SESSION_CLOSE_REASON_CLIENT_CONNECTION_REPLACED, SESSION_CLOSE_REASON_GATEWAY_SHUTDOWN,
         SESSION_CLOSE_REASON_NORMAL_CLOSE, SESSION_CLOSE_REASON_PROTOCOL_ERROR,
         SESSION_CLOSE_REASON_ROUTE_LOST, SESSION_CLOSE_REASON_UPSTREAM_SESSION_CLOSED,

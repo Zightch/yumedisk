@@ -33,7 +33,7 @@ func TestReadAndWriteKeepSessionOpen(t *testing.T) {
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
-		MaxIOBytes:    1024,
+		MaxIOBytes:    MaxDataPlaneRawBytes,
 	})
 	desc, err := service.Open(1)
 	if err != nil {
@@ -81,7 +81,7 @@ func TestCloseMakesSessionUnavailable(t *testing.T) {
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
-		MaxIOBytes:    1024,
+		MaxIOBytes:    MaxDataPlaneRawBytes,
 	})
 	desc, err := service.Open(1)
 	if err != nil {
@@ -123,7 +123,7 @@ func TestOpenRejectsWhileSessionIsLive(t *testing.T) {
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
-		MaxIOBytes:    1024,
+		MaxIOBytes:    MaxDataPlaneRawBytes,
 	})
 	first, err := service.Open(1)
 	if err != nil {
@@ -164,7 +164,7 @@ func TestServiceCloseKeepsWriterSlotOccupiedUntilInflightIODrains(t *testing.T) 
 		DiskID:        "A1b2C3d4E5f6G7h8",
 		DiskSizeBytes: storage.Size(),
 		ReadOnly:      storage.ReadOnly(),
-		MaxIOBytes:    1024,
+		MaxIOBytes:    MaxDataPlaneRawBytes,
 	})
 	desc, err := service.Open(1)
 	if err != nil {
@@ -202,5 +202,85 @@ func TestServiceCloseKeepsWriterSlotOccupiedUntilInflightIODrains(t *testing.T) 
 	}
 	if _, err := service.Open(2); err != nil {
 		t.Fatalf("expected reopen after drain to succeed, got %v", err)
+	}
+}
+
+func TestServiceAllowsMaxRawIoBytesButRejectsLargerRead(t *testing.T) {
+	tempDir := t.TempDir()
+	storagePath := filepath.Join(tempDir, "disk.img")
+	file, err := os.Create(storagePath)
+	if err != nil {
+		t.Fatalf("create storage file: %v", err)
+	}
+	if err := file.Truncate(128 * 1024); err != nil {
+		_ = file.Close()
+		t.Fatalf("truncate storage file: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close storage file: %v", err)
+	}
+
+	storage, err := filestorage.Open(storagePath, false)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+
+	service := NewService(NewExclusiveManager(), storage, Metadata{
+		DiskID:        "A1b2C3d4E5f6G7h8",
+		DiskSizeBytes: storage.Size(),
+		ReadOnly:      storage.ReadOnly(),
+		MaxIOBytes:    MaxDataPlaneRawBytes,
+	})
+	desc, err := service.Open(1)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	if _, err := service.Read(desc.ID, 0, MaxDataPlaneRawBytes); err != nil {
+		t.Fatalf("read at raw limit: %v", err)
+	}
+	if _, err := service.Read(desc.ID, 0, MaxDataPlaneRawBytes+1); err != ErrIOLimit {
+		t.Fatalf("expected read above raw limit to fail with ErrIOLimit, got %v", err)
+	}
+}
+
+func TestServiceAllowsMaxRawIoBytesButRejectsLargerWrite(t *testing.T) {
+	tempDir := t.TempDir()
+	storagePath := filepath.Join(tempDir, "disk.img")
+	file, err := os.Create(storagePath)
+	if err != nil {
+		t.Fatalf("create storage file: %v", err)
+	}
+	if err := file.Truncate(128 * 1024); err != nil {
+		_ = file.Close()
+		t.Fatalf("truncate storage file: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("close storage file: %v", err)
+	}
+
+	storage, err := filestorage.Open(storagePath, false)
+	if err != nil {
+		t.Fatalf("open storage: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+
+	service := NewService(NewExclusiveManager(), storage, Metadata{
+		DiskID:        "A1b2C3d4E5f6G7h8",
+		DiskSizeBytes: storage.Size(),
+		ReadOnly:      storage.ReadOnly(),
+		MaxIOBytes:    MaxDataPlaneRawBytes,
+	})
+	desc, err := service.Open(1)
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	if err := service.Write(desc.ID, 0, make([]byte, MaxDataPlaneRawBytes)); err != nil {
+		t.Fatalf("write at raw limit: %v", err)
+	}
+	if err := service.Write(desc.ID, 0, make([]byte, MaxDataPlaneRawBytes+1)); err != ErrIOLimit {
+		t.Fatalf("expected write above raw limit to fail with ErrIOLimit, got %v", err)
 	}
 }

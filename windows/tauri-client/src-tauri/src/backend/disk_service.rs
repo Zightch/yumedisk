@@ -742,19 +742,19 @@ mod tests {
 
     use backend_rust::BackendContext;
 
-    use super::create_file_disk;
-    use super::create_new_file_disk;
-    use super::rescan_local_runtime_disks;
     use super::CreateFileDiskRequest;
     use super::CreateFileFormat;
     use super::CreateNewFileDiskRequest;
-    use super::update_disk;
     use super::UpdateDiskRequest;
+    use super::create_file_disk;
+    use super::create_new_file_disk;
+    use super::rescan_local_runtime_disks;
+    use super::update_disk;
     use crate::backend::persistence_service;
-    use crate::state::disk_runtime::DiskRuntimeStatus;
-    use crate::state::disk_runtime::FileMediaKind;
     use crate::state::disk_runtime::DiskRuntime;
+    use crate::state::disk_runtime::DiskRuntimeStatus;
     use crate::state::disk_runtime::DiskRuntimeStore;
+    use crate::state::disk_runtime::FileMediaKind;
 
     #[test]
     fn update_disk_rejects_configured_read_only_change_when_source_is_locked() {
