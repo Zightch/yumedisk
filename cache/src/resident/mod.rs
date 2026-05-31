@@ -48,6 +48,25 @@ pub(crate) struct BlockEntry {
 }
 
 impl BlockEntry {
+    fn new_loading(
+        block_size: usize,
+        queue_ref: QueueRef,
+        load_state: LoadState,
+        valid_len: usize,
+    ) -> Self {
+        Self {
+            data: vec![0; block_size].into_boxed_slice(),
+            state: BlockState {
+                queue_ref,
+                load_state,
+                dirty_ranges: Vec::new(),
+                active_snapshot: None,
+                pending_patches: Vec::new(),
+                valid_len,
+            },
+        }
+    }
+
     fn new_ready(data: Vec<u8>, queue_ref: QueueRef, valid_len: usize) -> Self {
         Self {
             data: data.into_boxed_slice(),
@@ -72,6 +91,12 @@ pub(crate) struct EvictedBlock {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InsertResult {
     pub(crate) evicted: Option<EvictedBlock>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BeginLoadResult {
+    Started,
+    Wait,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,14 +182,103 @@ impl TwoQueueResident {
         Ok(InsertResult { evicted })
     }
 
+    pub(crate) fn begin_remote_load(
+        &mut self,
+        block_index: u64,
+        valid_len: usize,
+    ) -> Result<BeginLoadResult, CacheError> {
+        self.validate_loading_insert(block_index, valid_len)?;
+
+        if self.fifo.len() == self.fifo_capacity {
+            if !self.can_evict_fifo_head_for_insert()? {
+                return Ok(BeginLoadResult::Wait);
+            }
+
+            let _ = self.evict_fifo_head()?;
+        }
+
+        let node = self.fifo.push_back(block_index);
+        let entry = BlockEntry::new_loading(
+            self.block_size,
+            QueueRef::Fifo(node),
+            LoadState::LoadingRemote,
+            valid_len,
+        );
+        let replaced = self.blocks.insert(block_index, entry);
+        debug_assert!(replaced.is_none());
+        Ok(BeginLoadResult::Started)
+    }
+
+    pub(crate) fn finish_remote_load(
+        &mut self,
+        block_index: u64,
+        data: Vec<u8>,
+    ) -> Result<(), CacheError> {
+        if data.len() != self.block_size {
+            return Err(CacheError::InvalidBlockDataLength {
+                expected: self.block_size,
+                actual: data.len(),
+            });
+        }
+
+        let entry = self
+            .blocks
+            .get_mut(&block_index)
+            .ok_or(CacheError::InvariantViolation(
+                "loading resident block missing during load completion",
+            ))?;
+        if !matches!(
+            entry.state.load_state,
+            LoadState::LoadingRemote | LoadState::Rehydrating
+        ) {
+            return Err(CacheError::InvariantViolation(
+                "resident block load completion requires loading state",
+            ));
+        }
+
+        entry.data = data.into_boxed_slice();
+        entry.state.load_state = LoadState::Ready;
+        Ok(())
+    }
+
+    pub(crate) fn abort_remote_load(&mut self, block_index: u64) -> Result<(), CacheError> {
+        let load_state = self
+            .blocks
+            .get(&block_index)
+            .map(|entry| entry.state.load_state)
+            .ok_or(CacheError::InvariantViolation(
+                "loading resident block missing during load rollback",
+            ))?;
+        if !matches!(
+            load_state,
+            LoadState::LoadingRemote | LoadState::Rehydrating
+        ) {
+            return Err(CacheError::InvariantViolation(
+                "resident block load rollback requires loading state",
+            ));
+        }
+
+        let _ = self
+            .evict_block(block_index)?
+            .ok_or(CacheError::InvariantViolation(
+                "loading resident block missing during queue rollback",
+            ))?;
+        Ok(())
+    }
+
     pub(crate) fn record_hit(
         &mut self,
         block_index: u64,
     ) -> Result<Option<TouchResult>, CacheError> {
-        let queue_ref = match self.blocks.get(&block_index) {
-            Some(entry) => entry.state.queue_ref,
+        let (queue_ref, load_state) = match self.blocks.get(&block_index) {
+            Some(entry) => (entry.state.queue_ref, entry.state.load_state),
             None => return Ok(None),
         };
+        if load_state != LoadState::Ready {
+            return Err(CacheError::InvariantViolation(
+                "resident hit recorded before block became ready",
+            ));
+        }
 
         match queue_ref {
             QueueRef::Fifo(node) => {
@@ -297,6 +411,22 @@ impl TwoQueueResident {
             });
         }
 
+        self.validate_valid_len(valid_len)
+    }
+
+    fn validate_loading_insert(
+        &self,
+        block_index: u64,
+        valid_len: usize,
+    ) -> Result<(), CacheError> {
+        if self.blocks.contains_key(&block_index) {
+            return Err(CacheError::ResidentBlockAlreadyExists { block_index });
+        }
+
+        self.validate_valid_len(valid_len)
+    }
+
+    fn validate_valid_len(&self, valid_len: usize) -> Result<(), CacheError> {
         if valid_len == 0 || valid_len > self.block_size {
             return Err(CacheError::InvalidValidLength {
                 valid_len,
@@ -305,6 +435,25 @@ impl TwoQueueResident {
         }
 
         Ok(())
+    }
+
+    fn can_evict_fifo_head_for_insert(&self) -> Result<bool, CacheError> {
+        let block_index = self
+            .fifo
+            .front_value()
+            .ok_or(CacheError::InvariantViolation(
+                "fifo missing head while insert path reports full",
+            ))?;
+        let entry = self
+            .blocks
+            .get(&block_index)
+            .ok_or(CacheError::InvariantViolation(
+                "resident block missing for fifo insert victim",
+            ))?;
+        Ok(entry.state.load_state == LoadState::Ready
+            && entry.state.dirty_ranges.is_empty()
+            && entry.state.active_snapshot.is_none()
+            && entry.state.pending_patches.is_empty())
     }
 
     fn evict_fifo_head(&mut self) -> Result<Option<EvictedBlock>, CacheError> {
@@ -340,7 +489,7 @@ impl TwoQueueResident {
 
 #[cfg(test)]
 mod tests {
-    use super::{LoadState, QueueRef, TwoQueueResident};
+    use super::{BeginLoadResult, LoadState, QueueRef, TwoQueueResident};
 
     fn resident(fifo_capacity: usize, lru_capacity: usize) -> TwoQueueResident {
         TwoQueueResident::new(fifo_capacity, lru_capacity, 8).unwrap()
@@ -455,5 +604,56 @@ mod tests {
         assert!(resident.get(5).is_none());
         assert!(resident.fifo_values().is_empty());
         assert!(resident.lru_values().is_empty());
+    }
+
+    #[test]
+    fn begin_remote_load_inserts_loading_placeholder_into_fifo() {
+        let mut resident = resident(2, 2);
+
+        let result = resident.begin_remote_load(11, 8).unwrap();
+
+        assert_eq!(result, BeginLoadResult::Started);
+        assert_eq!(resident.fifo_values(), vec![11]);
+        let entry = resident.get(11).unwrap();
+        assert_eq!(entry.state.load_state, LoadState::LoadingRemote);
+        assert!(matches!(entry.state.queue_ref, QueueRef::Fifo(_)));
+    }
+
+    #[test]
+    fn begin_remote_load_waits_when_fifo_head_is_still_loading() {
+        let mut resident = resident(1, 2);
+        assert_eq!(
+            resident.begin_remote_load(1, 8).unwrap(),
+            BeginLoadResult::Started
+        );
+
+        let result = resident.begin_remote_load(2, 8).unwrap();
+
+        assert_eq!(result, BeginLoadResult::Wait);
+        assert_eq!(resident.fifo_values(), vec![1]);
+        assert!(resident.get(2).is_none());
+    }
+
+    #[test]
+    fn finish_remote_load_marks_placeholder_ready() {
+        let mut resident = resident(2, 2);
+        resident.begin_remote_load(4, 8).unwrap();
+
+        resident.finish_remote_load(4, block(4)).unwrap();
+
+        let entry = resident.get(4).unwrap();
+        assert_eq!(entry.state.load_state, LoadState::Ready);
+        assert_eq!(&entry.data[..], &[4; 8]);
+    }
+
+    #[test]
+    fn abort_remote_load_removes_loading_placeholder() {
+        let mut resident = resident(2, 2);
+        resident.begin_remote_load(6, 8).unwrap();
+
+        resident.abort_remote_load(6).unwrap();
+
+        assert!(resident.get(6).is_none());
+        assert!(resident.fifo_values().is_empty());
     }
 }
