@@ -43,7 +43,7 @@ BackendRust
 
 它明确不负责：
 
-- `32 KiB` 对齐
+- 按配置块大小的对齐
 - 请求拼接和裁剪
 - dirty 状态管理
 - temp 文件管理
@@ -54,7 +54,7 @@ BackendRust
 
 `cache` 是整个设计的核心。
 
-它左侧面对 `BackendRust`，接受任意 offset 和任意长度；右侧面对 `DiskSession`，只产出 `32 KiB` 对齐固定块。
+它左侧面对 `BackendRust`，接受任意 offset 和任意长度；右侧面对 `DiskSession`，只产出按当前配置块大小对齐的固定块。
 
 它的职责包括：
 
@@ -120,4 +120,3 @@ worker 只做后台脏数据推进，不做前台命中路径。
 - 普通读命中
 - 普通写命中
 - 主动淘汰 clean 块
-

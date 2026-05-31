@@ -31,7 +31,7 @@
 `rw` 读请求的模型是：
 
 1. `BackendRust` 传入任意 offset 和长度
-2. `cache` 判断触达了哪些 `32 KiB` 逻辑块
+2. `cache` 判断触达了哪些当前配置块大小的逻辑块
 3. 对每个块优先查 resident
 4. resident miss 再查 `spilled_dirty`
 5. 两边都没有才向 `DiskSession` 发 aligned read
@@ -47,7 +47,7 @@
 `rw` 写请求的模型是：
 
 1. `BackendRust` 传入任意 offset 和长度
-2. `cache` 判断触达了哪些 `32 KiB` 逻辑块
+2. `cache` 判断触达了哪些当前配置块大小的逻辑块
 3. 命中 resident 时，直接在 resident 块上打 patch
 4. miss 时，先拿到完整块视图，再应用 patch
 5. patch 完成后只修改 resident 数据和脏位
@@ -81,4 +81,3 @@
 - 远端已经确认这次写
 
 这也是当前缓存模型和原始直通模型最大的语义区别。
-

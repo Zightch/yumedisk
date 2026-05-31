@@ -11,6 +11,13 @@ enum ReadBlockAction {
     Wait,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteBlockAction {
+    Patched,
+    LoadRemote { block_index: u64, block_base: u64 },
+    Wait,
+}
+
 #[derive(Debug)]
 pub struct Cache<R> {
     config: CacheConfig,
@@ -56,8 +63,15 @@ impl<R: AtIo> Cache<R> {
         Ok(())
     }
 
-    pub fn write_locked(&self, _offset: u64, _data: &[u8]) -> Result<(), CacheError> {
-        Err(CacheError::NotImplemented)
+    pub fn write_locked(&self, offset: u64, data: &[u8]) -> Result<(), CacheError> {
+        let touched_blocks = self.layout.touched_blocks(offset, data.len())?;
+        let block_size = self.layout.block_size_usize()?;
+
+        for touched in touched_blocks {
+            self.write_touched_block(&touched, data, block_size)?;
+        }
+
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -113,6 +127,53 @@ impl<R: AtIo> Cache<R> {
         }
     }
 
+    fn write_touched_block(
+        &self,
+        touched: &TouchedBlock,
+        data: &[u8],
+        valid_len: usize,
+    ) -> Result<(), CacheError> {
+        loop {
+            let mut resident = self.resident.lock().unwrap();
+            match self.plan_write_touched_block(&mut resident, touched, data, valid_len)? {
+                WriteBlockAction::Patched => return Ok(()),
+                WriteBlockAction::Wait => {
+                    drop(self.resident_changed.wait(resident).unwrap());
+                }
+                WriteBlockAction::LoadRemote {
+                    block_index,
+                    block_base,
+                } => {
+                    drop(resident);
+                    let mut loaded_block = vec![0u8; valid_len];
+                    let read_result = self.read_right_block(block_base, &mut loaded_block);
+
+                    let mut resident = self.resident.lock().unwrap();
+                    match read_result {
+                        Ok(()) => {
+                            resident.finish_remote_load(block_index, loaded_block)?;
+                            drop(resident);
+                            self.resident_changed.notify_all();
+                            return Ok(());
+                        }
+                        Err(read_error) => match resident.abort_remote_load(block_index) {
+                            Ok(()) => {
+                                drop(resident);
+                                self.resident_changed.notify_all();
+                                return Err(read_error);
+                            }
+                            Err(rollback_error) => {
+                                drop(resident);
+                                self.resident_changed.notify_all();
+                                return Err(rollback_error);
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    }
+
     fn plan_read_touched_block(
         &self,
         resident: &mut TwoQueueResident,
@@ -140,6 +201,45 @@ impl<R: AtIo> Cache<R> {
         }
     }
 
+    fn plan_write_touched_block(
+        &self,
+        resident: &mut TwoQueueResident,
+        touched: &TouchedBlock,
+        data: &[u8],
+        valid_len: usize,
+    ) -> Result<WriteBlockAction, CacheError> {
+        let patch_slice = self.patch_slice(touched, data)?;
+        match resident
+            .get(touched.block_index)
+            .map(|entry| entry.state.load_state)
+        {
+            Some(LoadState::Ready) => {
+                resident.patch_ready_block(
+                    touched.block_index,
+                    touched.block_range(),
+                    patch_slice,
+                )?;
+                let _ = resident.record_hit(touched.block_index)?;
+                Ok(WriteBlockAction::Patched)
+            }
+            Some(LoadState::LoadingRemote | LoadState::Rehydrating) => Ok(WriteBlockAction::Wait),
+            None => match resident.begin_remote_load(touched.block_index, valid_len)? {
+                BeginLoadResult::Started => {
+                    resident.enqueue_pending_patch(
+                        touched.block_index,
+                        touched.block_range(),
+                        patch_slice,
+                    )?;
+                    Ok(WriteBlockAction::LoadRemote {
+                        block_index: touched.block_index,
+                        block_base: touched.block_base,
+                    })
+                }
+                BeginLoadResult::Wait => Ok(WriteBlockAction::Wait),
+            },
+        }
+    }
+
     fn copy_ready_block(
         &self,
         resident: &TwoQueueResident,
@@ -158,6 +258,23 @@ impl<R: AtIo> Cache<R> {
         }
 
         touched.copy_from_block(&entry.data, buffer)
+    }
+
+    fn patch_slice<'a>(
+        &self,
+        touched: &TouchedBlock,
+        data: &'a [u8],
+    ) -> Result<&'a [u8], CacheError> {
+        let range = touched.buffer_range();
+        if data.len() < range.end {
+            return Err(CacheError::BufferTooSmall {
+                context: "request write buffer",
+                expected: range.end,
+                actual: data.len(),
+            });
+        }
+
+        Ok(&data[range])
     }
 
     #[allow(dead_code)]
@@ -431,6 +548,78 @@ mod tests {
     }
 
     #[test]
+    fn write_locked_patches_resident_hit_without_backend_write() {
+        let right = MockAtIo::with_len(128);
+        let cache = Cache::new(test_config(32), right.clone()).unwrap();
+        let mut warm = [0u8; 1];
+        let mut buffer = [0u8; 8];
+
+        cache.read_locked(0, &mut warm).unwrap();
+        cache.write_locked(4, &[200, 201, 202]).unwrap();
+        cache.read_locked(0, &mut buffer).unwrap();
+
+        assert_eq!(&buffer[..], &[0, 1, 2, 3, 200, 201, 202, 7]);
+        assert_eq!(
+            right.take_calls(),
+            vec![IoCall::Read {
+                offset: 0,
+                length: 32
+            }]
+        );
+    }
+
+    #[test]
+    fn write_locked_miss_reads_full_block_once_and_patches_resident() {
+        let right = MockAtIo::with_len(128);
+        let cache = Cache::new(test_config(32), right.clone()).unwrap();
+        let mut buffer = [0u8; 10];
+
+        cache.write_locked(5, &[90, 91, 92]).unwrap();
+        cache.read_locked(0, &mut buffer).unwrap();
+
+        assert_eq!(&buffer[..], &[0, 1, 2, 3, 4, 90, 91, 92, 8, 9]);
+        assert_eq!(
+            right.take_calls(),
+            vec![IoCall::Read {
+                offset: 0,
+                length: 32
+            }]
+        );
+    }
+
+    #[test]
+    fn write_locked_spans_multiple_blocks_without_backend_write() {
+        let right = MockAtIo::with_len(160);
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 4;
+        let cache = Cache::new(config, right.clone()).unwrap();
+        let patch = vec![0xAB; 40];
+        let mut buffer = [0u8; 40];
+
+        cache.write_locked(28, &patch).unwrap();
+        cache.read_locked(28, &mut buffer).unwrap();
+
+        assert_eq!(&buffer[..], &patch[..]);
+        assert_eq!(
+            right.take_calls(),
+            vec![
+                IoCall::Read {
+                    offset: 0,
+                    length: 32
+                },
+                IoCall::Read {
+                    offset: 32,
+                    length: 32
+                },
+                IoCall::Read {
+                    offset: 64,
+                    length: 32
+                }
+            ]
+        );
+    }
+
+    #[test]
     fn concurrent_same_block_miss_loads_backend_once() {
         let right = MockAtIo::with_delay(128, Duration::from_millis(100));
         let cache = Arc::new(Cache::new(test_config(32), right.clone()).unwrap());
@@ -453,6 +642,79 @@ mod tests {
 
         assert_eq!(first.join().unwrap(), expected_bytes(3, 16));
         assert_eq!(second.join().unwrap(), expected_bytes(5, 8));
+        assert_eq!(
+            right.take_calls(),
+            vec![IoCall::Read {
+                offset: 0,
+                length: 32
+            }]
+        );
+    }
+
+    #[test]
+    fn concurrent_same_block_write_miss_loads_backend_once() {
+        let right = MockAtIo::with_delay(128, Duration::from_millis(100));
+        let cache = Arc::new(Cache::new(test_config(32), right.clone()).unwrap());
+
+        let first_cache = Arc::clone(&cache);
+        let first = thread::spawn(move || {
+            first_cache.write_locked(3, &[200, 201, 202, 203]).unwrap();
+        });
+
+        thread::sleep(Duration::from_millis(20));
+
+        let second_cache = Arc::clone(&cache);
+        let second = thread::spawn(move || {
+            second_cache.write_locked(10, &[150, 151, 152]).unwrap();
+        });
+
+        first.join().unwrap();
+        second.join().unwrap();
+
+        let mut buffer = [0u8; 16];
+        cache.read_locked(0, &mut buffer).unwrap();
+
+        assert_eq!(
+            &buffer[..],
+            &[
+                0, 1, 2, 200, 201, 202, 203, 7, 8, 9, 150, 151, 152, 13, 14, 15
+            ]
+        );
+        assert_eq!(
+            right.take_calls(),
+            vec![IoCall::Read {
+                offset: 0,
+                length: 32
+            }]
+        );
+    }
+
+    #[test]
+    fn write_locked_waits_for_read_load_without_second_backend_read() {
+        let right = MockAtIo::with_delay(128, Duration::from_millis(100));
+        let cache = Arc::new(Cache::new(test_config(32), right.clone()).unwrap());
+
+        let first_cache = Arc::clone(&cache);
+        let first = thread::spawn(move || {
+            let mut buffer = vec![0u8; 8];
+            first_cache.read_locked(2, &mut buffer).unwrap();
+            buffer
+        });
+
+        thread::sleep(Duration::from_millis(20));
+
+        let second_cache = Arc::clone(&cache);
+        let second = thread::spawn(move || {
+            second_cache.write_locked(6, &[222, 223, 224]).unwrap();
+        });
+
+        assert_eq!(first.join().unwrap(), expected_bytes(2, 8));
+        second.join().unwrap();
+
+        let mut buffer = [0u8; 12];
+        cache.read_locked(0, &mut buffer).unwrap();
+
+        assert_eq!(&buffer[..], &[0, 1, 2, 3, 4, 5, 222, 223, 224, 9, 10, 11]);
         assert_eq!(
             right.take_calls(),
             vec![IoCall::Read {

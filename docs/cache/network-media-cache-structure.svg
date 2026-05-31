@@ -32,7 +32,7 @@
   <rect id="svg_19" rx="28" stroke-width="5" stroke="#f97316" fill="#fff7ed" class="cache-box" height="255" width="310" y="322.69231" x="794.23077"/>
   <text id="svg_20" font-weight="700" font-size="22px" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" fill="#0f172a" class="label" y="360.38461" x="817.38462">cache</text>
   <text id="svg_21" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="428" x="803.76923">左侧接任意 offset / len</text>
-  <text id="svg_22" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="507.61539" x="900.46154">右侧只产出 32 KiB 对齐块</text>
+  <text id="svg_22" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="507.61539" x="865">右侧只产出按配置对齐块</text>
   <text id="svg_23" font-weight="600" font-size="15px" fill="#475569" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="small" y="568.76923" x="865.92308">2Q / dirty / temp / flush</text>
   <rect id="svg_24" rx="18" stroke-width="4" stroke="#4f46e5" fill="#eef2ff" class="temp-box" height="120" width="220" y="41.53847" x="890"/>
   <text id="svg_25" font-weight="700" font-size="22px" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" fill="#0f172a" class="label" y="71.84616" x="905.69231">temp 文件</text>
@@ -58,7 +58,7 @@
   <rect id="svg_45" rx="12" stroke-width="2" stroke="#cbd5e1" fill="#f8fafc" class="legend-box" height="150" width="1660" y="865" x="70"/>
   <text id="svg_46" font-weight="700" font-size="22px" fill="#0f172a" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="label" y="915" x="105">说明</text>
   <text id="svg_47" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="955" x="105">1. mux 只做路径复用，不做对齐、拼接、裁剪。</text>
-  <text id="svg_48" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="988" x="105">2. cache 左侧保持字节语义，右侧统一为 32 KiB 对齐固定块。</text>
+  <text id="svg_48" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="988" x="105">2. cache 左侧保持字节语义，右侧统一为按配置块大小对齐固定块。</text>
   <text id="svg_49" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="955" x="880">3. temp 文件只归 cache 管，承载 snapshot 和 spilled dirty。</text>
   <text id="svg_50" font-weight="600" font-size="17px" fill="#334155" font-family="Segoe UI, Microsoft YaHei, Arial, sans-serif" class="body" y="988" x="880">4. DiskSession 继续只是远端 I/O 通道，不感知上层缓存细节。</text>
  </g>

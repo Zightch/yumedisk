@@ -237,8 +237,59 @@ impl TwoQueueResident {
         }
 
         entry.data = data.into_boxed_slice();
+        Self::apply_pending_patches(entry)?;
         entry.state.load_state = LoadState::Ready;
         Ok(())
+    }
+
+    pub(crate) fn enqueue_pending_patch(
+        &mut self,
+        block_index: u64,
+        range: Range<usize>,
+        data: &[u8],
+    ) -> Result<(), CacheError> {
+        let entry = self
+            .blocks
+            .get_mut(&block_index)
+            .ok_or(CacheError::InvariantViolation(
+                "loading resident block missing during pending patch enqueue",
+            ))?;
+        if !matches!(
+            entry.state.load_state,
+            LoadState::LoadingRemote | LoadState::Rehydrating
+        ) {
+            return Err(CacheError::InvariantViolation(
+                "pending patch enqueue requires loading state",
+            ));
+        }
+
+        Self::validate_patch(&range, data.len(), entry.data.len())?;
+        entry.state.pending_patches.push(PendingPatch {
+            range,
+            data: data.to_vec(),
+        });
+        Ok(())
+    }
+
+    pub(crate) fn patch_ready_block(
+        &mut self,
+        block_index: u64,
+        range: Range<usize>,
+        data: &[u8],
+    ) -> Result<(), CacheError> {
+        let entry = self
+            .blocks
+            .get_mut(&block_index)
+            .ok_or(CacheError::InvariantViolation(
+                "ready resident block missing during patch",
+            ))?;
+        if entry.state.load_state != LoadState::Ready {
+            return Err(CacheError::InvariantViolation(
+                "resident block patch requires ready state",
+            ));
+        }
+
+        Self::apply_patch(entry, range, data)
     }
 
     pub(crate) fn abort_remote_load(&mut self, block_index: u64) -> Result<(), CacheError> {
@@ -282,6 +333,15 @@ impl TwoQueueResident {
 
         match queue_ref {
             QueueRef::Fifo(node) => {
+                if self.lru.len() == self.lru_capacity
+                    && !self.can_evict_lru_head_for_promotion()?
+                {
+                    return Ok(Some(TouchResult {
+                        promoted: false,
+                        evicted: None,
+                    }));
+                }
+
                 let removed = self
                     .fifo
                     .remove(node)
@@ -456,6 +516,25 @@ impl TwoQueueResident {
             && entry.state.pending_patches.is_empty())
     }
 
+    fn can_evict_lru_head_for_promotion(&self) -> Result<bool, CacheError> {
+        let block_index = self
+            .lru
+            .front_value()
+            .ok_or(CacheError::InvariantViolation(
+                "lru missing head while promotion path reports full",
+            ))?;
+        let entry = self
+            .blocks
+            .get(&block_index)
+            .ok_or(CacheError::InvariantViolation(
+                "resident block missing for lru promotion victim",
+            ))?;
+        Ok(entry.state.load_state == LoadState::Ready
+            && entry.state.dirty_ranges.is_empty()
+            && entry.state.active_snapshot.is_none()
+            && entry.state.pending_patches.is_empty())
+    }
+
     fn evict_fifo_head(&mut self) -> Result<Option<EvictedBlock>, CacheError> {
         let block_index = match self.fifo.pop_front() {
             Some(block_index) => block_index,
@@ -484,6 +563,44 @@ impl TwoQueueResident {
                 "resident block missing after lru head eviction",
             ))?;
         Ok(Some(EvictedBlock { block_index, entry }))
+    }
+
+    fn apply_pending_patches(entry: &mut BlockEntry) -> Result<(), CacheError> {
+        let pending_patches = std::mem::take(&mut entry.state.pending_patches);
+        for patch in pending_patches {
+            Self::apply_patch(entry, patch.range, &patch.data)?;
+        }
+        Ok(())
+    }
+
+    fn apply_patch(
+        entry: &mut BlockEntry,
+        range: Range<usize>,
+        data: &[u8],
+    ) -> Result<(), CacheError> {
+        Self::validate_patch(&range, data.len(), entry.data.len())?;
+        entry.data[range.clone()].copy_from_slice(data);
+        entry.state.dirty_ranges.push(range);
+        Ok(())
+    }
+
+    fn validate_patch(
+        range: &Range<usize>,
+        data_len: usize,
+        block_len: usize,
+    ) -> Result<(), CacheError> {
+        if range.start > range.end || range.end > block_len {
+            return Err(CacheError::InvariantViolation(
+                "resident patch range exceeds block bounds",
+            ));
+        }
+        if data_len != range.end - range.start {
+            return Err(CacheError::InvariantViolation(
+                "resident patch data length does not match range",
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -582,6 +699,26 @@ mod tests {
     }
 
     #[test]
+    fn fifo_hit_does_not_evict_dirty_lru_head() {
+        let mut resident = resident(2, 1);
+        resident.insert_ready(1, block(1), 8).unwrap();
+        resident.record_hit(1).unwrap();
+        resident.patch_ready_block(1, 0..1, &[9]).unwrap();
+        resident.insert_ready(2, block(2), 8).unwrap();
+
+        let result = resident.record_hit(2).unwrap().unwrap();
+
+        assert!(!result.promoted);
+        assert!(result.evicted.is_none());
+        assert_eq!(resident.fifo_values(), vec![2]);
+        assert_eq!(resident.lru_values(), vec![1]);
+        assert_eq!(
+            &resident.get(1).unwrap().data[..],
+            &[9, 1, 1, 1, 1, 1, 1, 1]
+        );
+    }
+
+    #[test]
     fn promotion_does_not_copy_block_data() {
         let mut resident = resident(2, 2);
         resident.insert_ready(9, block(9), 8).unwrap();
@@ -644,6 +781,35 @@ mod tests {
         let entry = resident.get(4).unwrap();
         assert_eq!(entry.state.load_state, LoadState::Ready);
         assert_eq!(&entry.data[..], &[4; 8]);
+    }
+
+    #[test]
+    fn finish_remote_load_applies_pending_patches_and_marks_dirty() {
+        let mut resident = resident(2, 2);
+        resident.begin_remote_load(4, 8).unwrap();
+        resident.enqueue_pending_patch(4, 2..5, &[9, 8, 7]).unwrap();
+
+        resident.finish_remote_load(4, block(4)).unwrap();
+
+        let entry = resident.get(4).unwrap();
+        assert_eq!(entry.state.load_state, LoadState::Ready);
+        assert_eq!(&entry.data[..], &[4, 4, 9, 8, 7, 4, 4, 4]);
+        assert_eq!(entry.state.dirty_ranges, vec![2..5]);
+        assert!(entry.state.pending_patches.is_empty());
+    }
+
+    #[test]
+    fn patch_ready_block_updates_data_without_copying_resident() {
+        let mut resident = resident(2, 2);
+        resident.insert_ready(3, block(3), 8).unwrap();
+        let before_ptr = resident.get(3).unwrap().data.as_ptr();
+
+        resident.patch_ready_block(3, 1..4, &[7, 8, 9]).unwrap();
+
+        let entry = resident.get(3).unwrap();
+        assert_eq!(before_ptr, entry.data.as_ptr());
+        assert_eq!(&entry.data[..], &[3, 7, 8, 9, 3, 3, 3, 3]);
+        assert_eq!(entry.state.dirty_ranges, vec![1..4]);
     }
 
     #[test]

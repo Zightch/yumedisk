@@ -21,7 +21,7 @@ BackendRust <-> NetworkMedia <-> DiskSession
 
 - `mux` 只负责复用和分流，不负责对齐、拼接、裁剪
 - `cache` 左侧面对 `BackendRust`，接受任意起始字节和任意长度
-- `cache` 右侧面对 `DiskSession`，只产出 `32 KiB` 对齐、固定块大小的 `read_at/write_at`
+- `cache` 右侧面对 `DiskSession`，只产出按当前配置块大小对齐、固定块大小的 `read_at/write_at`
 - `DiskSession` 继续只负责远端块 I/O
 
 ## 文档目录
@@ -34,7 +34,7 @@ BackendRust <-> NetworkMedia <-> DiskSession
 ## 当前固定口径
 
 - 只缓存 `rw`；`ro` 继续直通
-- 块大小固定为 `32 KiB`
+- 块大小由 `CacheConfig.block_size_bytes` 配置；当前上层建议值可以设为 `32 KiB`
 - resident 使用 `2Q = FIFO + LRU`
 - dirty 数据离开 resident 前，必须先落 temp
 - 同一块同一时刻只允许一个 active flush snapshot

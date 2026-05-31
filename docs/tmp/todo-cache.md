@@ -318,19 +318,21 @@ resident block 主表固定按：
 
 任务：
 
-- [ ] resident hit 直接 patch
-- [ ] resident miss 先补整块再 patch
-- [ ] dirty 标记先建立最小可用模型
-- [ ] 写命中更新 2Q
-- [ ] 同块 loading 期间的后续写不重复补块
-- [ ] 先建立 pending patch 骨架
+- [x] resident hit 直接 patch
+- [x] resident miss 先补整块再 patch
+- [x] dirty 标记先建立最小可用模型
+- [x] 写命中更新 2Q
+- [x] 同块 loading 期间的后续写不重复补块
+- [x] 先建立 pending patch 骨架
 
 测试重点：
 
-- [ ] resident hit 写入
-- [ ] write miss 补整块再 patch
-- [ ] partial write 不会把右侧写成非整块
-- [ ] 多次 patch 后 resident 数据正确
+- [x] resident hit 写入
+- [x] write miss 补整块再 patch
+- [x] partial write 不会把右侧写成非整块
+- [x] 多次 patch 后 resident 数据正确
+
+当前这一步已经完成。
 
 ## 5.6 第六阶段：temp 文件和 dirty 基础状态
 
