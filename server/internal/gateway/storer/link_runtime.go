@@ -132,6 +132,12 @@ func (r *linkRuntime) serveFrames() error {
 					return err
 				}
 				switch header.OpCode {
+				case proto.OpSessionCloseNotice:
+					if _, err := proto.ParseSessionCloseNoticeBody(payload[proto.HeaderSize:]); err != nil {
+						return err
+					}
+					r.registry.NotifyRouteSessionClosed(r.connection.id, header.SessionID, payload[proto.HeaderSize:])
+					continue
 				case proto.OpSessionDataChangedNotice:
 					if len(payload[proto.HeaderSize:]) != 0 {
 						return fmt.Errorf("session data changed notice body must be empty")

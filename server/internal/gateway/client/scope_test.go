@@ -165,8 +165,12 @@ func TestGatewayRORouteDisconnectOnlyAffectsROSessions(t *testing.T) {
 		roSessionTwo: {},
 	}
 	for _, record := range notifier.snapshot() {
-		if record.reason != proto.SessionCloseReasonRouteLost {
-			t.Fatalf("unexpected close reason: %d", record.reason)
+		reason, err := proto.ParseSessionCloseNoticeBody(record.body)
+		if err != nil {
+			t.Fatalf("parse route-lost close body: %v", err)
+		}
+		if reason != proto.SessionCloseReasonRouteLost {
+			t.Fatalf("unexpected close reason: %d", reason)
 		}
 		if _, ok := closedIDs[record.sessionID]; !ok {
 			t.Fatalf("unexpected closed session id: %d", record.sessionID)
@@ -226,6 +230,13 @@ func TestGatewayRWRouteDisconnectOnlyAffectsRWSessions(t *testing.T) {
 	record := notifier.last()
 	if record.sessionID != rwSession {
 		t.Fatalf("unexpected closed rw session id: %d", record.sessionID)
+	}
+	reason, err := proto.ParseSessionCloseNoticeBody(record.body)
+	if err != nil {
+		t.Fatalf("parse route-lost close body: %v", err)
+	}
+	if reason != proto.SessionCloseReasonRouteLost {
+		t.Fatalf("unexpected close reason: %d", reason)
 	}
 
 	if _, status, ok := handler.grants.Lookup(pendingRW, scopeTestPendingConnIDRW); ok || status != proto.StatusAuthIDInvalid {

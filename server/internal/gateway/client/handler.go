@@ -103,7 +103,7 @@ func (h *Handler) CloseRouteConnection(routeConnectionID uint64, diskIDs []strin
 	}
 	h.emitSessionClosed(
 		h.sessionOpener.CloseRouteConnection(routeConnectionID),
-		proto.SessionCloseReasonRouteLost,
+		proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonRouteLost),
 	)
 }
 
@@ -127,6 +127,14 @@ func (h *Handler) NotifyRouteSessionDataChanged(routeConnectionID uint64, upstre
 	h.emitSessionDataChanged(record)
 }
 
+func (h *Handler) NotifyRouteSessionClosed(routeConnectionID uint64, upstreamSessionID uint64, body []byte) {
+	record, ok := h.sessionOpener.CloseRouteSession(routeConnectionID, upstreamSessionID)
+	if !ok {
+		return
+	}
+	h.emitSessionClosed([]clientsession.Record{record}, body)
+}
+
 func (h *Handler) closeRouteConnectionSessions(routeConnectionID uint64, diskIDs []string) []clientsession.Record {
 	for _, diskID := range diskIDs {
 		h.grants.CloseDisk(diskID)
@@ -134,7 +142,7 @@ func (h *Handler) closeRouteConnectionSessions(routeConnectionID uint64, diskIDs
 	return h.sessionOpener.CloseRouteConnection(routeConnectionID)
 }
 
-func (h *Handler) emitSessionClosed(records []clientsession.Record, reason uint16) {
+func (h *Handler) emitSessionClosed(records []clientsession.Record, body []byte) {
 	if len(records) == 0 {
 		return
 	}
@@ -146,7 +154,7 @@ func (h *Handler) emitSessionClosed(records []clientsession.Record, reason uint1
 		return
 	}
 	for _, record := range records {
-		notifier.NotifySessionClosed(record.ID, record.ClientConnectionID, reason)
+		notifier.NotifySessionClosed(record.ID, record.ClientConnectionID, body)
 	}
 }
 

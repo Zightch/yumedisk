@@ -63,6 +63,7 @@ func NewWholeRuntime(cfg config.StorerConfig, core *Core) (*WholeRuntime, error)
 		clientConns: make(map[uint64]*wholeClientConnection),
 	}
 	gatewayHandler.SetSessionDataChangedNotifier(runtime)
+	gatewayHandler.SetSessionCloseNotifier(runtime)
 	return runtime, nil
 }
 
@@ -111,6 +112,24 @@ func (r *WholeRuntime) NotifySessionDataChanged(sessionID uint64, clientConnecti
 	}
 
 	payload := proto.BuildNotice(proto.OpSessionDataChangedNotice, sessionID, nil)
+
+	client.write.Lock()
+	err := transport.WriteFrame(client.conn, payload)
+	client.write.Unlock()
+	if err != nil {
+		_ = client.conn.Close()
+	}
+}
+
+func (r *WholeRuntime) NotifySessionClosed(sessionID uint64, clientConnectionID uint64, body []byte) {
+	r.clientConnMu.RLock()
+	client := r.clientConns[clientConnectionID]
+	r.clientConnMu.RUnlock()
+	if client == nil {
+		return
+	}
+
+	payload := proto.BuildNotice(proto.OpSessionCloseNotice, sessionID, body)
 
 	client.write.Lock()
 	err := transport.WriteFrame(client.conn, payload)

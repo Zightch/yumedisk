@@ -89,6 +89,25 @@ func (r *registry) LookupRouteSession(routeConnectionID uint64, upstreamSessionI
 	return record, true
 }
 
+func (r *registry) CloseRouteSession(routeConnectionID uint64, upstreamSessionID uint64) (Record, bool) {
+	r.mu.Lock()
+	owned := r.byUpstream[routeConnectionID]
+	id, ok := owned[upstreamSessionID]
+	if !ok {
+		r.mu.Unlock()
+		return Record{}, false
+	}
+	record, ok := r.items[id]
+	if ok {
+		delete(r.items, id)
+		r.removeClientIndex(record.ClientConnectionID, id)
+		r.removeRouteIndex(record.RouteConnectionID, id)
+		r.removeUpstreamIndex(record.RouteConnectionID, record.UpstreamSessionID)
+	}
+	r.mu.Unlock()
+	return record, ok
+}
+
 func (r *registry) Close(id uint64) (Record, bool) {
 	r.mu.Lock()
 	record, ok := r.items[id]

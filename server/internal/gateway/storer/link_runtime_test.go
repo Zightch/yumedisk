@@ -1,6 +1,7 @@
 package storer
 
 import (
+	"bytes"
 	"context"
 	"net"
 	"testing"
@@ -109,6 +110,50 @@ func TestLinkRuntimeRejectsWrongPhaseRequests(t *testing.T) {
 	<-done
 }
 
+func TestLinkRuntimeForwardsSessionCloseNotice(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	recorder := &routeCloseRecorder{events: make(chan routeCloseEvent, 1)}
+	registry.SetCloseHandler(recorder)
+
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	runtime := newLinkRuntime(12, serverConn, registry, "expected-token", time.Hour, time.Hour)
+	done := make(chan error, 1)
+	go func() {
+		done <- runtime.Serve(context.Background())
+	}()
+
+	registerAndExpectStatus(t, clientConn, "expected-token", "DISK000000000001", proto.StatusOK)
+
+	closeBody := proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonGatewayShutdown)
+	if err := transport.WriteFrame(clientConn, proto.BuildNotice(proto.OpSessionCloseNotice, 99, closeBody)); err != nil {
+		t.Fatalf("write session close notice: %v", err)
+	}
+
+	select {
+	case event := <-recorder.events:
+		if event.routeConnectionID != 12 {
+			t.Fatalf("unexpected route connection id: %d", event.routeConnectionID)
+		}
+		if event.upstreamSessionID != 99 {
+			t.Fatalf("unexpected upstream session id: %d", event.upstreamSessionID)
+		}
+		if !bytes.Equal(event.body, closeBody) {
+			t.Fatalf("unexpected close body: got=%v want=%v", event.body, closeBody)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for close notice forwarding")
+	}
+
+	_ = clientConn.Close()
+	_ = serverConn.Close()
+	<-done
+}
+
 func registerAndExpectStatus(t *testing.T, conn net.Conn, gatewayToken string, diskID string, want uint16) {
 	t.Helper()
 
@@ -147,4 +192,22 @@ func mustParseStorerHeader(t *testing.T, payload []byte) proto.Header {
 		t.Fatalf("parse header: %v", err)
 	}
 	return header
+}
+
+type routeCloseRecorder struct {
+	events chan routeCloseEvent
+}
+
+type routeCloseEvent struct {
+	routeConnectionID uint64
+	upstreamSessionID uint64
+	body              []byte
+}
+
+func (r *routeCloseRecorder) NotifyRouteSessionClosed(routeConnectionID uint64, upstreamSessionID uint64, body []byte) {
+	r.events <- routeCloseEvent{
+		routeConnectionID: routeConnectionID,
+		upstreamSessionID: upstreamSessionID,
+		body:              bytes.Clone(body),
+	}
 }

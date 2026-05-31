@@ -160,6 +160,10 @@ func (o *Opener) LookupRouteSession(routeConnectionID uint64, upstreamSessionID 
 	return o.registry.LookupRouteSession(routeConnectionID, upstreamSessionID)
 }
 
+func (o *Opener) CloseRouteSession(routeConnectionID uint64, upstreamSessionID uint64) (Record, bool) {
+	return o.registry.CloseRouteSession(routeConnectionID, upstreamSessionID)
+}
+
 func (o *Opener) handleProxyRoundTrip(header proto.Header, body []byte, record Record) []byte {
 	status, responseBody, err := o.sessions.RoundTrip(
 		record.RouteConnectionID,

@@ -50,6 +50,7 @@ func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
 	clientHandler.SetSessionCloseNotifier(runtime)
 	clientHandler.SetSessionDataChangedNotifier(runtime)
 	storerRoutes.SetDisconnectHandler(clientHandler)
+	storerRoutes.SetCloseHandler(clientHandler)
 	storerRoutes.SetDataChangedHandler(clientHandler)
 	return runtime, nil
 }
@@ -139,7 +140,7 @@ func (r *Runtime) serveClientConnection(ctx context.Context, connectionID uint64
 	})
 }
 
-func (r *Runtime) NotifySessionClosed(sessionID uint64, clientConnectionID uint64, reason uint16) {
+func (r *Runtime) NotifySessionClosed(sessionID uint64, clientConnectionID uint64, body []byte) {
 	r.clientConnMu.RLock()
 	client := r.clientConns[clientConnectionID]
 	r.clientConnMu.RUnlock()
@@ -147,8 +148,7 @@ func (r *Runtime) NotifySessionClosed(sessionID uint64, clientConnectionID uint6
 		return
 	}
 
-	payload := make([]byte, proto.HeaderSize+proto.SessionCloseNoticeSize)
-	copy(payload, proto.BuildNotice(proto.OpSessionCloseNotice, sessionID, proto.BuildSessionCloseNoticeBody(reason)))
+	payload := proto.BuildNotice(proto.OpSessionCloseNotice, sessionID, body)
 
 	client.write.Lock()
 	err := transport.WriteFrame(client.conn, payload)

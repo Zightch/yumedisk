@@ -102,6 +102,18 @@ func (r *LinkRuntime) NotifySessionDataChanged(sessionID uint64) {
 	}
 }
 
+func (r *LinkRuntime) NotifySessionClosed(sessionID uint64, body []byte) {
+	r.activeRuntimeMu.RLock()
+	runtime := r.activeRuntime
+	r.activeRuntimeMu.RUnlock()
+	if runtime == nil {
+		return
+	}
+	if err := runtime.WritePayload(proto.BuildNotice(proto.OpSessionCloseNotice, sessionID, body)); err != nil {
+		_ = runtime.Close()
+	}
+}
+
 func (r *LinkRuntime) setActiveRuntime(runtime *transport.Runtime) {
 	r.activeRuntimeMu.Lock()
 	r.activeRuntime = runtime

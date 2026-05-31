@@ -224,8 +224,12 @@ func TestGatewayRouteDisconnectClosesClientSessionAndRevokesGrant(t *testing.T) 
 		t.Fatalf("expected one route-lost notice, got %d", notifier.count())
 	}
 	record := notifier.last()
-	if record.reason != proto.SessionCloseReasonRouteLost {
-		t.Fatalf("unexpected close reason: %d", record.reason)
+	reason, err := proto.ParseSessionCloseNoticeBody(record.body)
+	if err != nil {
+		t.Fatalf("parse route-lost close body: %v", err)
+	}
+	if reason != proto.SessionCloseReasonRouteLost {
+		t.Fatalf("unexpected close reason: %d", reason)
 	}
 	if record.sessionID != openHeader.SessionID {
 		t.Fatalf("unexpected closed session id: %d", record.sessionID)
@@ -235,6 +239,111 @@ func TestGatewayRouteDisconnectClosesClientSessionAndRevokesGrant(t *testing.T) 
 	}
 	if _, status, ok := handler.grants.Lookup(pendingAuthID, state.ConnectionID()); ok || status != proto.StatusAuthIDInvalid {
 		t.Fatalf("expected notifier path to revoke auth grant, ok=%v status=%d", ok, status)
+	}
+}
+
+func TestGatewayRouteCloseNoticePreservesBodyAndReleasesSession(t *testing.T) {
+	t.Parallel()
+
+	const diskID = "DISK000000000001"
+	routes := &mappingRouteSource{
+		entry: route.Entry{
+			DiskID:       diskID,
+			RouteTarget:  "storer://conn-21",
+			ConnectionID: 21,
+			Connected:    true,
+		},
+	}
+	dataPlane := &mappingDataPlane{
+		openSessionID: 123,
+		readOut:       []byte("OK"),
+	}
+
+	handler, err := NewHandler(routes, dataPlane)
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	notifier := &recordingSessionCloseNotifier{}
+	handler.SetSessionCloseNotifier(notifier)
+	state := handler.NewConnectionState(90)
+	authID := handler.grants.Issue(state.ConnectionID(), diskID, time.Now().Add(time.Minute))
+
+	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, proto.BuildSessionOpenRequestBody(authID)))
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	openHeader := mustParseGatewayHeader(t, openResp)
+	if openHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected open status: %d", openHeader.StatusCode)
+	}
+
+	closeBody := proto.BuildSessionCloseNoticeBody(proto.SessionCloseReasonGatewayShutdown)
+	handler.NotifyRouteSessionClosed(routes.entry.ConnectionID, dataPlane.openSessionID, closeBody)
+
+	if notifier.count() != 1 {
+		t.Fatalf("expected one upstream close notice, got %d", notifier.count())
+	}
+	record := notifier.last()
+	if record.sessionID != openHeader.SessionID {
+		t.Fatalf("unexpected closed session id: %d", record.sessionID)
+	}
+	if record.clientConnectionID != state.ConnectionID() {
+		t.Fatalf("unexpected closed client connection id: %d", record.clientConnectionID)
+	}
+	if !bytes.Equal(record.body, closeBody) {
+		t.Fatalf("unexpected close body: got=%v want=%v", record.body, closeBody)
+	}
+
+	readResp, err := handler.HandlePayload(state, buildRequest(proto.OpReadAt, 2, openHeader.SessionID, proto.BuildReadBody(0, 1)))
+	if err != nil {
+		t.Fatalf("read after upstream close: %v", err)
+	}
+	if header := mustParseGatewayHeader(t, readResp); header.StatusCode != proto.StatusSessionUnavailable {
+		t.Fatalf("unexpected read-after-upstream-close status: %d", header.StatusCode)
+	}
+}
+
+func TestGatewayRoundTripPassesThroughUnknownStatusCode(t *testing.T) {
+	t.Parallel()
+
+	const diskID = "DISK000000000001"
+	routes := &mappingRouteSource{
+		entry: route.Entry{
+			DiskID:       diskID,
+			RouteTarget:  "storer://conn-31",
+			ConnectionID: 31,
+			Connected:    true,
+		},
+	}
+	dataPlane := &mappingDataPlane{
+		openSessionID: 144,
+		statusByOp: map[uint8]uint16{
+			proto.OpReadAt: 0x7E01,
+		},
+	}
+
+	handler, err := NewHandler(routes, dataPlane)
+	if err != nil {
+		t.Fatalf("new handler: %v", err)
+	}
+	state := handler.NewConnectionState(91)
+	authID := handler.grants.Issue(state.ConnectionID(), diskID, time.Now().Add(time.Minute))
+
+	openResp, err := handler.HandlePayload(state, buildRequest(proto.OpSessionOpen, 1, 0, proto.BuildSessionOpenRequestBody(authID)))
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+	openHeader := mustParseGatewayHeader(t, openResp)
+	if openHeader.StatusCode != proto.StatusOK {
+		t.Fatalf("unexpected open status: %d", openHeader.StatusCode)
+	}
+
+	readResp, err := handler.HandlePayload(state, buildRequest(proto.OpReadAt, 2, openHeader.SessionID, proto.BuildReadBody(0, 1)))
+	if err != nil {
+		t.Fatalf("read with extension status: %v", err)
+	}
+	if header := mustParseGatewayHeader(t, readResp); header.StatusCode != 0x7E01 {
+		t.Fatalf("unexpected passthrough status: %d", header.StatusCode)
 	}
 }
 
@@ -314,15 +423,15 @@ type recordingSessionCloseNotifier struct {
 type sessionCloseRecord struct {
 	sessionID          uint64
 	clientConnectionID uint64
-	reason             uint16
+	body               []byte
 }
 
-func (n *recordingSessionCloseNotifier) NotifySessionClosed(sessionID uint64, clientConnectionID uint64, reason uint16) {
+func (n *recordingSessionCloseNotifier) NotifySessionClosed(sessionID uint64, clientConnectionID uint64, body []byte) {
 	n.mu.Lock()
 	n.records = append(n.records, sessionCloseRecord{
 		sessionID:          sessionID,
 		clientConnectionID: clientConnectionID,
-		reason:             reason,
+		body:               bytes.Clone(body),
 	})
 	n.mu.Unlock()
 }

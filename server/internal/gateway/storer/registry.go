@@ -1,6 +1,7 @@
 package storer
 
 import (
+	"bytes"
 	"net"
 	"sync"
 
@@ -11,6 +12,10 @@ type DisconnectHandler interface {
 	CloseRouteConnection(routeConnectionID uint64, diskIDs []string)
 }
 
+type CloseHandler interface {
+	NotifyRouteSessionClosed(routeConnectionID uint64, upstreamSessionID uint64, body []byte)
+}
+
 type DataChangedHandler interface {
 	NotifyRouteSessionDataChanged(routeConnectionID uint64, upstreamSessionID uint64)
 }
@@ -19,6 +24,8 @@ type Registry struct {
 	routes *route.Registry
 
 	links              *activeLinks
+	closeMu            sync.RWMutex
+	closeHandler       CloseHandler
 	dataChangedMu      sync.RWMutex
 	dataChangedHandler DataChangedHandler
 }
@@ -32,6 +39,12 @@ func NewRegistry() *Registry {
 
 func (r *Registry) SetDisconnectHandler(handler DisconnectHandler) {
 	r.links.SetDisconnectHandler(handler)
+}
+
+func (r *Registry) SetCloseHandler(handler CloseHandler) {
+	r.closeMu.Lock()
+	r.closeHandler = handler
+	r.closeMu.Unlock()
 }
 
 func (r *Registry) SetDataChangedHandler(handler DataChangedHandler) {
@@ -55,6 +68,16 @@ func (r *Registry) AttachConnection(connectionID uint64, conn net.Conn) *connect
 func (r *Registry) DisconnectConnection(connectionID uint64) {
 	disconnected := r.routes.DisconnectConnection(connectionID)
 	r.links.Disconnect(connectionID, collectDiskIDs(disconnected))
+}
+
+func (r *Registry) NotifyRouteSessionClosed(routeConnectionID uint64, upstreamSessionID uint64, body []byte) {
+	r.closeMu.RLock()
+	handler := r.closeHandler
+	r.closeMu.RUnlock()
+	if handler == nil {
+		return
+	}
+	handler.NotifyRouteSessionClosed(routeConnectionID, upstreamSessionID, bytes.Clone(body))
 }
 
 func (r *Registry) NotifyRouteSessionDataChanged(routeConnectionID uint64, upstreamSessionID uint64) {
