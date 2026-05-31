@@ -139,6 +139,7 @@
     <ClInclude Include="queue\debug\debug.h" />
     <ClInclude Include="queue\event\event.h" />
     <ClInclude Include="queue\lifecycle\lifecycle.h" />
+    <ClInclude Include="queue\internal.h" />
     <ClInclude Include="queue\queue.h" />
     <ClInclude Include="queue\read\read.h" />
     <ClInclude Include="queue\slot\slot.h" />

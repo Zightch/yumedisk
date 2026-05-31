@@ -139,6 +139,9 @@
     <ClInclude Include="core\protocol.h">
       <Filter>Header Files\Core</Filter>
     </ClInclude>
+    <ClInclude Include="queue\internal.h">
+      <Filter>Header Files\Queue</Filter>
+    </ClInclude>
     <ClInclude Include="queue\queue.h">
       <Filter>Header Files\Queue</Filter>
     </ClInclude>
