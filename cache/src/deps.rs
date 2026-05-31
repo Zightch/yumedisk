@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use crate::temp::TempStore;
+#[cfg(any(test, feature = "test-hooks"))]
+use crate::test_support::TempFailureController;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CacheDeps {
@@ -29,6 +31,12 @@ impl CacheDeps {
     #[cfg(any(test, feature = "test-hooks"))]
     pub(crate) fn with_test_hooks(mut self, hooks: crate::test_support::TestHooks) -> Self {
         self.hooks = hooks;
+        self
+    }
+
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub(crate) fn with_temp_failures(mut self, failures: TempFailureController) -> Self {
+        self.temp = self.temp.with_failures(failures);
         self
     }
 

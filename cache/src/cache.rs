@@ -8,7 +8,9 @@ use crate::deps::CacheDeps;
 use crate::resident::{LoadState, TwoQueueResident};
 use crate::temp::TempStore;
 #[cfg(any(test, feature = "test-hooks"))]
-use crate::test_support::{CacheSnapshot, HookPoint, SpilledDirtySnapshot, TestHooks};
+use crate::test_support::{
+    CacheSnapshot, HookPoint, SpilledDirtySnapshot, TempFailureController, TestHooks,
+};
 use crate::{AtIo, CacheConfig, CacheError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +91,19 @@ impl<R: AtIo + 'static> Cache<R> {
         hooks: TestHooks,
     ) -> Result<Self, CacheError> {
         let deps = CacheDeps::new(config.temp_dir.clone()).with_test_hooks(hooks);
+        Self::build(config, right, deps)
+    }
+
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn new_for_test_with_temp_failures(
+        config: CacheConfig,
+        right: R,
+        hooks: TestHooks,
+        temp_failures: TempFailureController,
+    ) -> Result<Self, CacheError> {
+        let deps = CacheDeps::new(config.temp_dir.clone())
+            .with_test_hooks(hooks)
+            .with_temp_failures(temp_failures);
         Self::build(config, right, deps)
     }
 
@@ -1038,7 +1053,9 @@ mod tests {
 
     use super::{Cache, SpilledDirty};
     use crate::test_support::{
-        LoadStateSnapshot, QueueKindSnapshot, TestHooks, TestTempDir, wait_until,
+        IoFailureController, IoOperation, IoTimings, LoadStateSnapshot, MemoryAtIo,
+        QueueKindSnapshot, TempFailureController, TempFaultOperation, TestHooks, TestTempDir,
+        wait_until,
     };
     use crate::{AtIo, CacheConfig, CacheError};
 
@@ -1297,6 +1314,34 @@ mod tests {
         assert!(!block.has_active_snapshot);
         assert_eq!(block.pending_patch_count, 0);
         assert_eq!(block.valid_len, 32);
+    }
+
+    #[test]
+    fn right_read_failure_aborts_placeholder_and_allows_retry() {
+        let temp_dir = TestTempDir::with_prefix("cache-right-read-fault");
+        let failures = IoFailureController::new();
+        failures.fail_once(IoOperation::Read, Some(0), CacheError::NotImplemented);
+        let right = MemoryAtIo::with_failures(32, test_bytes(128), IoTimings::default(), failures);
+        let mut config = test_config(32);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Cache::new(config, right.clone()).unwrap();
+
+        let error = cache.read_locked(0, &mut [0u8; 8]).unwrap_err();
+        assert_eq!(error, CacheError::NotImplemented);
+        assert!(cache.state.lock().unwrap().resident.get(0).is_none());
+
+        let mut buffer = [0u8; 8];
+        cache.read_locked(0, &mut buffer).unwrap();
+
+        assert_eq!(&buffer[..], &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(
+            right
+                .take_log()
+                .into_iter()
+                .map(|entry| entry.result)
+                .collect::<Vec<_>>(),
+            vec![Err(CacheError::NotImplemented), Ok(())]
+        );
     }
 
     #[test]
@@ -1598,18 +1643,30 @@ mod tests {
     fn dirty_eviction_preserves_dirty_ranges_when_temp_write_fails() {
         let temp_dir = TestTempDir::new();
         let right = MockAtIo::with_len(128);
+        let temp_failures = TempFailureController::new();
+        temp_failures.fail_once(
+            TempFaultOperation::Write,
+            Some(0),
+            std::io::ErrorKind::PermissionDenied,
+        );
         let mut config = test_config(32);
         config.fifo_capacity_blocks = 1;
         config.dirty_scan_interval = Duration::from_secs(60);
-        config.temp_dir = temp_dir.child("missing-temp-root");
-        let cache = Cache::new(config, right).unwrap();
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Cache::new_for_test_with_temp_failures(
+            config,
+            right,
+            TestHooks::default(),
+            temp_failures,
+        )
+        .unwrap();
 
         cache.write_locked(4, &[200, 201, 202]).unwrap();
         let error = cache.read_locked(32, &mut [0u8; 1]).unwrap_err();
 
         match error {
             CacheError::TempIo { kind, .. } => {
-                assert_eq!(kind, std::io::ErrorKind::NotFound);
+                assert_eq!(kind, std::io::ErrorKind::PermissionDenied);
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -1621,6 +1678,60 @@ mod tests {
         assert!(entry.state.active_snapshot.is_none());
         assert!(state.spilled_dirty.is_empty());
         assert!(state.resident.get(1).is_none());
+    }
+
+    #[test]
+    fn spilled_rehydrate_keeps_dirty_state_when_temp_read_fails() {
+        let temp_dir = TestTempDir::with_prefix("cache-temp-read-fault");
+        let right = MemoryAtIo::from_bytes(32, test_bytes(128));
+        let temp_failures = TempFailureController::new();
+        let rule_id = temp_failures.fail_persistently(
+            TempFaultOperation::Read,
+            Some(0),
+            std::io::ErrorKind::Interrupted,
+        );
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 1;
+        config.dirty_scan_interval = Duration::from_secs(60);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Cache::new_for_test_with_temp_failures(
+            config,
+            right,
+            TestHooks::default(),
+            temp_failures.clone(),
+        )
+        .unwrap();
+
+        cache.write_locked(4, &[200, 201, 202]).unwrap();
+        cache.read_locked(32, &mut [0u8; 1]).unwrap();
+
+        let error = cache.read_locked(0, &mut [0u8; 8]).unwrap_err();
+        assert_eq!(
+            error,
+            CacheError::TempIo {
+                operation: "read temp file",
+                path: cache.temp_store().path_for_block(0),
+                kind: std::io::ErrorKind::Interrupted,
+            }
+        );
+        {
+            let state = cache.state.lock().unwrap();
+            assert_eq!(
+                state.spilled_dirty.get(&0),
+                Some(&SpilledDirty { valid_len: 32 })
+            );
+            assert!(state.resident.get(0).is_none());
+            assert!(!state.active_temp_blocks.contains(&0));
+        }
+
+        assert!(temp_failures.clear_rule(rule_id));
+        let mut buffer = [0u8; 8];
+        cache.read_locked(0, &mut buffer).unwrap();
+
+        assert_eq!(&buffer[..], &[0, 1, 2, 3, 200, 201, 202, 7]);
+        let state = cache.state.lock().unwrap();
+        assert!(state.spilled_dirty.get(&0).is_none());
+        assert!(state.resident.get(0).is_some());
     }
 
     #[test]
@@ -2002,6 +2113,91 @@ mod tests {
             })
             .count();
         assert_eq!(write_count, 2);
+    }
+
+    #[test]
+    fn worker_retries_after_temp_delete_failure_and_clears_snapshot() {
+        let temp_dir = TestTempDir::with_prefix("cache-temp-delete-worker");
+        let right = MemoryAtIo::from_bytes(32, test_bytes(128));
+        let temp_failures = TempFailureController::new();
+        let rule_id = temp_failures.fail_persistently(
+            TempFaultOperation::Delete,
+            Some(0),
+            std::io::ErrorKind::PermissionDenied,
+        );
+        let mut config = test_config(32);
+        config.dirty_scan_interval = Duration::from_millis(20);
+        config.temp_dir = temp_dir.path().to_path_buf();
+        let cache = Cache::new_for_test_with_temp_failures(
+            config,
+            right.clone(),
+            TestHooks::default(),
+            temp_failures.clone(),
+        )
+        .unwrap();
+        let temp_path = cache.temp_store().path_for_block(0);
+
+        cache.write_locked(4, &[200, 201, 202]).unwrap();
+
+        wait_until(Duration::from_secs(2), || {
+            let state = cache.state.lock().unwrap();
+            let entry = match state.resident.get(0) {
+                Some(entry) => entry,
+                None => return false,
+            };
+            entry.state.active_snapshot.is_some()
+                && entry.state.dirty_ranges.is_empty()
+                && temp_path.is_file()
+                && right.storage_slice(0, 8) == vec![0, 1, 2, 3, 200, 201, 202, 7]
+        });
+
+        assert!(cache.temp_store().path_for_block(0).exists());
+        assert!(
+            cache
+                .state
+                .lock()
+                .unwrap()
+                .resident
+                .get(0)
+                .unwrap()
+                .state
+                .active_snapshot
+                .is_some()
+        );
+        assert!(
+            cache
+                .state
+                .lock()
+                .unwrap()
+                .resident
+                .get(0)
+                .unwrap()
+                .state
+                .dirty_ranges
+                .is_empty()
+        );
+        assert!(temp_failures.clear_rule(rule_id));
+
+        wait_until(Duration::from_secs(2), || {
+            let state = cache.state.lock().unwrap();
+            let entry = match state.resident.get(0) {
+                Some(entry) => entry,
+                None => return false,
+            };
+            entry.state.active_snapshot.is_none()
+                && entry.state.dirty_ranges.is_empty()
+                && !temp_path.exists()
+                && right.storage_slice(0, 8) == vec![0, 1, 2, 3, 200, 201, 202, 7]
+        });
+
+        let write_count = right
+            .take_log()
+            .into_iter()
+            .filter(|entry| {
+                entry.operation == IoOperation::Write && entry.offset == 0 && entry.length == 32
+            })
+            .count();
+        assert!(write_count >= 2);
     }
 
     #[test]

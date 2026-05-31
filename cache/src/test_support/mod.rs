@@ -1,9 +1,11 @@
+mod faults;
 mod hooks;
 mod io;
 mod quiesce;
 mod snapshot;
 mod temp_dir;
 
+pub use faults::{FailureRuleId, IoFailureController, TempFailureController, TempFaultOperation};
 pub use hooks::{GateHook, HookPoint, ManualGateController, StateDumpHook, TestHooks};
 pub use io::{FileBackedAtIo, IoLogEntry, IoOperation, IoTimings, MemoryAtIo, TestAtIo};
 pub use quiesce::{QuiesceTimeout, wait_for_quiesce, wait_until};

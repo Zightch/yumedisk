@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use super::faults::IoFailureController;
 use crate::{AtIo, CacheError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +94,7 @@ struct MemoryAtIoInner {
     recorder: IoRecorder,
     storage: Mutex<Vec<u8>>,
     timings: IoTimings,
+    failures: IoFailureController,
 }
 
 #[derive(Debug, Clone)]
@@ -106,11 +108,26 @@ impl MemoryAtIo {
     }
 
     pub fn with_timings(block_size_bytes: u32, storage: Vec<u8>, timings: IoTimings) -> Self {
+        Self::with_failures(
+            block_size_bytes,
+            storage,
+            timings,
+            IoFailureController::default(),
+        )
+    }
+
+    pub fn with_failures(
+        block_size_bytes: u32,
+        storage: Vec<u8>,
+        timings: IoTimings,
+        failures: IoFailureController,
+    ) -> Self {
         Self {
             inner: Arc::new(MemoryAtIoInner {
                 recorder: IoRecorder::new(block_size_bytes),
                 storage: Mutex::new(storage),
                 timings,
+                failures,
             }),
         }
     }
@@ -184,16 +201,20 @@ impl MemoryAtIo {
             thread::sleep(delay);
         }
 
-        let result = {
-            let mut storage = self.inner.storage.lock().unwrap();
-            f(&mut storage)
+        let block_index = self.inner.recorder.block_index(offset);
+        let result = match self.inner.failures.maybe_fail(operation, block_index) {
+            Some(error) => Err(error),
+            None => {
+                let mut storage = self.inner.storage.lock().unwrap();
+                f(&mut storage)
+            }
         };
         self.inner.recorder.finish_call(IoLogEntry {
             sequence,
             operation,
             offset,
             length,
-            block_index: self.inner.recorder.block_index(offset),
+            block_index,
             result: result.clone(),
         });
         result
@@ -205,6 +226,7 @@ struct FileBackedAtIoInner {
     recorder: IoRecorder,
     path: PathBuf,
     timings: IoTimings,
+    failures: IoFailureController,
 }
 
 #[derive(Debug, Clone)]
@@ -227,6 +249,22 @@ impl FileBackedAtIo {
         storage: &[u8],
         timings: IoTimings,
     ) -> std::io::Result<Self> {
+        Self::create_with_failures(
+            path,
+            block_size_bytes,
+            storage,
+            timings,
+            IoFailureController::default(),
+        )
+    }
+
+    pub fn create_with_failures(
+        path: impl AsRef<Path>,
+        block_size_bytes: u32,
+        storage: &[u8],
+        timings: IoTimings,
+        failures: IoFailureController,
+    ) -> std::io::Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -237,6 +275,7 @@ impl FileBackedAtIo {
                 recorder: IoRecorder::new(block_size_bytes),
                 path,
                 timings,
+                failures,
             }),
         })
     }
@@ -332,13 +371,17 @@ impl FileBackedAtIo {
             thread::sleep(delay);
         }
 
-        let result = f(&self.inner.path);
+        let block_index = self.inner.recorder.block_index(offset);
+        let result = match self.inner.failures.maybe_fail(operation, block_index) {
+            Some(error) => Err(error),
+            None => f(&self.inner.path),
+        };
         self.inner.recorder.finish_call(IoLogEntry {
             sequence,
             operation,
             offset,
             length,
-            block_index: self.inner.recorder.block_index(offset),
+            block_index,
             result: result.clone(),
         });
         result
@@ -381,9 +424,10 @@ fn map_file_error(operation: &'static str, path: &Path, error: std::io::Error) -
 
 #[cfg(test)]
 mod tests {
-    use super::{FileBackedAtIo, IoLogEntry, IoOperation, MemoryAtIo};
+    use super::{FileBackedAtIo, IoLogEntry, IoOperation, IoTimings, MemoryAtIo};
     use crate::AtIo;
-    use crate::test_support::TestTempDir;
+    use crate::CacheError;
+    use crate::test_support::{IoFailureController, TestTempDir};
 
     fn test_bytes(length: usize) -> Vec<u8> {
         (0..length).map(|index| index as u8).collect()
@@ -469,5 +513,99 @@ mod tests {
             ]
         );
         assert_eq!(io.in_flight_count(), 0);
+    }
+
+    #[test]
+    fn memory_at_io_injects_nth_matching_read_failure_and_recovers() {
+        let failures = IoFailureController::new();
+        failures.fail_matching_call(IoOperation::Read, Some(1), 2, CacheError::NotImplemented);
+        let io = MemoryAtIo::with_failures(32, test_bytes(128), IoTimings::default(), failures);
+        let mut first = [0u8; 16];
+        let mut second = [0u8; 16];
+        let mut third = [0u8; 16];
+
+        io.read_at(32, &mut first).unwrap();
+        let error = io.read_at(32, &mut second).unwrap_err();
+        io.read_at(32, &mut third).unwrap();
+
+        assert_eq!(error, CacheError::NotImplemented);
+        assert_eq!(first.to_vec(), test_bytes(128)[32..48].to_vec());
+        assert_eq!(third.to_vec(), test_bytes(128)[32..48].to_vec());
+        assert_eq!(
+            io.take_log(),
+            vec![
+                IoLogEntry {
+                    sequence: 1,
+                    operation: IoOperation::Read,
+                    offset: 32,
+                    length: 16,
+                    block_index: 1,
+                    result: Ok(()),
+                },
+                IoLogEntry {
+                    sequence: 2,
+                    operation: IoOperation::Read,
+                    offset: 32,
+                    length: 16,
+                    block_index: 1,
+                    result: Err(CacheError::NotImplemented),
+                },
+                IoLogEntry {
+                    sequence: 3,
+                    operation: IoOperation::Read,
+                    offset: 32,
+                    length: 16,
+                    block_index: 1,
+                    result: Ok(()),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn file_backed_at_io_persistent_write_failure_can_be_cleared() {
+        let dir = TestTempDir::with_prefix("cache-file-io-fault");
+        let path = dir.child("backing.bin");
+        let failures = IoFailureController::new();
+        let rule_id =
+            failures.fail_persistently(IoOperation::Write, Some(2), CacheError::NotImplemented);
+        let io = FileBackedAtIo::create_with_failures(
+            &path,
+            32,
+            &test_bytes(128),
+            IoTimings::default(),
+            failures.clone(),
+        )
+        .unwrap();
+
+        let error = io.write_at(64, &[220, 221, 222]).unwrap_err();
+        assert_eq!(error, CacheError::NotImplemented);
+        assert_eq!(io.storage_slice(64, 4).unwrap(), vec![64, 65, 66, 67]);
+
+        assert!(failures.clear_rule(rule_id));
+        io.write_at(64, &[220, 221, 222]).unwrap();
+
+        assert_eq!(io.storage_slice(64, 4).unwrap(), vec![220, 221, 222, 67]);
+        assert_eq!(
+            io.log_snapshot(),
+            vec![
+                IoLogEntry {
+                    sequence: 1,
+                    operation: IoOperation::Write,
+                    offset: 64,
+                    length: 3,
+                    block_index: 2,
+                    result: Err(CacheError::NotImplemented),
+                },
+                IoLogEntry {
+                    sequence: 2,
+                    operation: IoOperation::Write,
+                    offset: 64,
+                    length: 3,
+                    block_index: 2,
+                    result: Ok(()),
+                },
+            ]
+        );
     }
 }
