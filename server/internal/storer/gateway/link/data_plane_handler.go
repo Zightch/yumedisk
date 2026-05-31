@@ -139,7 +139,7 @@ func (h *dataPlaneHandler) handleRead(header proto.Header, body []byte) ([]byte,
 	if err != nil {
 		return h.mapSessionError(header, err), nil
 	}
-	return proto.BuildSuccessResponse(header, data), nil
+	return proto.BuildSuccessResponse(header, proto.BuildReadResponseBody(data)), nil
 }
 
 func (h *dataPlaneHandler) handleWrite(header proto.Header, body []byte) ([]byte, error) {

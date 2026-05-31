@@ -45,7 +45,7 @@ func TestDataPlaneHandlerOpenReadWriteAndClose(t *testing.T) {
 	if readHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected read status: %d", readHeader.StatusCode)
 	}
-	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("YUME")) {
+	if !bytes.Equal(readResp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("YUME"))) {
 		t.Fatalf("unexpected read payload: %q", string(readResp[proto.HeaderSize:]))
 	}
 

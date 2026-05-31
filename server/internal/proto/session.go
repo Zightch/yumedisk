@@ -11,7 +11,10 @@ const (
 	SessionFlagReadOnly         = 1 << 0
 	LinkHeartbeatBodySize       = 8
 	SessionCloseNoticeSize      = 2
-	ReadWriteHeaderSize         = 12
+	ReadBodySize                = 12
+	WriteBodyHeaderSize         = 13
+	ReadResponseHeaderSize      = 1
+	CompressRaw                 = 0
 )
 
 var ErrSessionBody = errors.New("session body invalid")
@@ -97,23 +100,26 @@ func ParseSessionCloseNoticeBody(body []byte) (uint16, error) {
 }
 
 func ParseReadWriteBody(body []byte) (offset uint64, length uint32, data []byte, err error) {
-	if len(body) < ReadWriteHeaderSize {
+	if len(body) < WriteBodyHeaderSize {
 		return 0, 0, nil, ErrSessionBody
 	}
 
 	offset = binary.BigEndian.Uint64(body[0:8])
 	length = binary.BigEndian.Uint32(body[8:12])
-	if uint64(len(body)) != uint64(ReadWriteHeaderSize)+uint64(length) {
+	if body[12] != CompressRaw {
+		return 0, 0, nil, ErrSessionBody
+	}
+	if uint64(len(body)) != uint64(WriteBodyHeaderSize)+uint64(length) {
 		return 0, 0, nil, ErrSessionBody
 	}
 
 	data = make([]byte, length)
-	copy(data, body[12:])
+	copy(data, body[13:])
 	return offset, length, data, nil
 }
 
 func ParseReadBody(body []byte) (offset uint64, length uint32, err error) {
-	if len(body) != ReadWriteHeaderSize {
+	if len(body) != ReadBodySize {
 		return 0, 0, ErrSessionBody
 	}
 	offset = binary.BigEndian.Uint64(body[0:8])
@@ -122,15 +128,39 @@ func ParseReadBody(body []byte) (offset uint64, length uint32, err error) {
 }
 
 func BuildReadBody(offset uint64, length uint32) []byte {
-	body := make([]byte, ReadWriteHeaderSize)
+	body := make([]byte, ReadBodySize)
 	binary.BigEndian.PutUint64(body[0:8], offset)
 	binary.BigEndian.PutUint32(body[8:12], length)
 	return body
 }
 
+func BuildReadResponseBody(data []byte) []byte {
+	body := make([]byte, ReadResponseHeaderSize+len(data))
+	body[0] = CompressRaw
+	copy(body[ReadResponseHeaderSize:], data)
+	return body
+}
+
+func ParseReadResponseBody(body []byte, expectedLength uint32) ([]byte, error) {
+	if len(body) < ReadResponseHeaderSize {
+		return nil, ErrSessionBody
+	}
+	if body[0] != CompressRaw {
+		return nil, ErrSessionBody
+	}
+	if len(body) != ReadResponseHeaderSize+int(expectedLength) {
+		return nil, ErrSessionBody
+	}
+
+	data := make([]byte, int(expectedLength))
+	copy(data, body[ReadResponseHeaderSize:])
+	return data, nil
+}
+
 func BuildReadWriteBody(offset uint64, length uint32) []byte {
-	body := make([]byte, ReadWriteHeaderSize)
+	body := make([]byte, WriteBodyHeaderSize)
 	binary.BigEndian.PutUint64(body[0:8], offset)
 	binary.BigEndian.PutUint32(body[8:12], length)
+	body[12] = CompressRaw
 	return body
 }

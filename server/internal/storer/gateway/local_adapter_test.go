@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -94,8 +95,8 @@ func TestLocalAdapterDispatchesByRouteConnection(t *testing.T) {
 	if readStatus != proto.StatusOK {
 		t.Fatalf("unexpected ro read status: %d", readStatus)
 	}
-	if string(data) != "YUME" {
-		t.Fatalf("unexpected ro read payload: %q", string(data))
+	if !bytes.Equal(data, proto.BuildReadResponseBody([]byte("YUME"))) {
+		t.Fatalf("unexpected ro read payload: got=%v want=%v", data, proto.BuildReadResponseBody([]byte("YUME")))
 	}
 
 	roWriteStatus, _, err := backend.RoundTrip(

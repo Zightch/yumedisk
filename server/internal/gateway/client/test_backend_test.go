@@ -78,7 +78,7 @@ func (b *testGatewayBackend) RoundTrip(routeConnectionID uint64, sessionID uint6
 		if err != nil {
 			return mapTestSessionErrorStatus(err), nil, nil
 		}
-		return proto.StatusOK, data, nil
+		return proto.StatusOK, proto.BuildReadResponseBody(data), nil
 	case proto.OpWriteAt:
 		if sessionID == 0 {
 			return proto.StatusBadHeader, nil, nil

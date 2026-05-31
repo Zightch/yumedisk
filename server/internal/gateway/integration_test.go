@@ -140,7 +140,7 @@ func TestGatewayAndStorerMinimalClosure(t *testing.T) {
 	if readHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("read status: %d", readHeader.StatusCode)
 	}
-	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("D123")) {
+	if !bytes.Equal(readResp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("D123"))) {
 		t.Fatalf("unexpected read payload: %q", string(readResp[proto.HeaderSize:]))
 	}
 	requestID++
@@ -334,7 +334,7 @@ func TestGatewayAndStorerSupportsReadOnlyExportDataPlane(t *testing.T) {
 	if readHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("ro read status: %d", readHeader.StatusCode)
 	}
-	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("BOOT")) {
+	if !bytes.Equal(readResp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("BOOT"))) {
 		t.Fatalf("unexpected ro read payload: %q", string(readResp[proto.HeaderSize:]))
 	}
 	roRequestID++
@@ -366,7 +366,7 @@ func TestGatewayAndStorerSupportsReadOnlyExportDataPlane(t *testing.T) {
 	if readHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("ro read after notice status: %d", readHeader.StatusCode)
 	}
-	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("SYNC")) {
+	if !bytes.Equal(readResp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("SYNC"))) {
 		t.Fatalf("unexpected ro read-after-notice payload: %q", string(readResp[proto.HeaderSize:]))
 	}
 	roRequestID++

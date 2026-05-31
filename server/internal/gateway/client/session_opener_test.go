@@ -53,7 +53,7 @@ func TestSessionOpenDescribeReadWriteAndClose(t *testing.T) {
 	if readHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected read status: %d", readHeader.StatusCode)
 	}
-	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("ABCD")) {
+	if !bytes.Equal(readResp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("ABCD"))) {
 		t.Fatalf("unexpected read payload: %q", string(readResp[proto.HeaderSize:]))
 	}
 

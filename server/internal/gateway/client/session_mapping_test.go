@@ -89,8 +89,9 @@ func TestGatewaySessionMappingHidesUpstreamSessionIDAndForwardsDescribe(t *testi
 	if header := mustParseGatewayHeader(t, readResp); header.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected read status: %d", header.StatusCode)
 	}
-	if !bytes.Equal(readResp[proto.HeaderSize:], dataPlane.readOut) {
-		t.Fatalf("unexpected read body bytes: got=%v want=%v", readResp[proto.HeaderSize:], dataPlane.readOut)
+	expectedReadBody := proto.BuildReadResponseBody(dataPlane.readOut)
+	if !bytes.Equal(readResp[proto.HeaderSize:], expectedReadBody) {
+		t.Fatalf("unexpected read body bytes: got=%v want=%v", readResp[proto.HeaderSize:], expectedReadBody)
 	}
 	if dataPlane.lastReadSessionID != dataPlane.openSessionID {
 		t.Fatalf("read used wrong upstream session id: %d", dataPlane.lastReadSessionID)
@@ -506,7 +507,7 @@ func (p *mappingDataPlane) RoundTrip(routeConnectionID uint64, sessionID uint64,
 		), nil
 	case proto.OpReadAt:
 		p.lastReadSessionID = sessionID
-		return proto.StatusOK, bytes.Clone(p.readOut), nil
+		return proto.StatusOK, proto.BuildReadResponseBody(bytes.Clone(p.readOut)), nil
 	case proto.OpWriteAt:
 		p.lastWriteSessionID = sessionID
 		p.lastWriteBody = bytes.Clone(body)

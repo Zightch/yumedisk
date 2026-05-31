@@ -91,7 +91,7 @@ func TestWholeRuntimeMinimalClosure(t *testing.T) {
 	if readHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("read status: %d", readHeader.StatusCode)
 	}
-	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("YUME")) {
+	if !bytes.Equal(readResp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("YUME"))) {
 		t.Fatalf("unexpected read payload: %q", string(readResp[proto.HeaderSize:]))
 	}
 	requestID++
@@ -442,7 +442,7 @@ func TestWholeRuntimeSupportsRWAndROSessionsTogether(t *testing.T) {
 	if roReadHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("ro read status: %d", roReadHeader.StatusCode)
 	}
-	if !bytes.Equal(roReadResp[proto.HeaderSize:], []byte("SHRD")) {
+	if !bytes.Equal(roReadResp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("SHRD"))) {
 		t.Fatalf("unexpected ro read payload: %q", string(roReadResp[proto.HeaderSize:]))
 	}
 	roRequestIDOne++
@@ -565,7 +565,7 @@ func TestStorerRuntimeServesDataPlaneWithoutClientAuth(t *testing.T) {
 	if readHeader.StatusCode != proto.StatusOK {
 		t.Fatalf("read status: %d", readHeader.StatusCode)
 	}
-	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("DATA")) {
+	if !bytes.Equal(readResp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("DATA"))) {
 		t.Fatalf("unexpected read payload: %q", string(readResp[proto.HeaderSize:]))
 	}
 

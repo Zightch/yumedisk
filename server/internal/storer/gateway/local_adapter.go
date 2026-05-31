@@ -119,7 +119,7 @@ func (b *LocalAdapter) RoundTrip(routeConnectionID uint64, sessionID uint64, opC
 		if err != nil {
 			return mapSessionErrorStatus(err), nil, nil
 		}
-		return proto.StatusOK, data, nil
+		return proto.StatusOK, proto.BuildReadResponseBody(data), nil
 	case proto.OpWriteAt:
 		if sessionID == 0 {
 			return proto.StatusBadHeader, nil, nil

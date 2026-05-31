@@ -16,9 +16,12 @@ pub const AUTH_ALGO_VERSION_V1: u8 = 1;
 pub const AUTH_FINISH_RESPONSE_BYTES: usize = 8;
 pub const SESSION_DESCRIBE_RESPONSE_BYTES: usize = 32;
 pub const SESSION_CLOSE_NOTICE_BYTES: usize = 2;
-pub const READ_WRITE_FIXED_BODY_BYTES: usize = 12;
+pub const READ_AT_REQUEST_BODY_BYTES: usize = 12;
+pub const WRITE_AT_REQUEST_HEADER_BYTES: usize = 13;
+pub const READ_AT_RESPONSE_HEADER_BYTES: usize = 1;
 pub const SESSION_FLAG_READ_ONLY: u16 = 1 << 0;
-pub const ABSOLUTE_MAX_IO_BYTES: u32 = 65_500;
+pub const IO_COMPRESS_RAW: u8 = 0;
+pub const ABSOLUTE_MAX_IO_BYTES: u32 = 60 * 1024;
 pub const SESSION_CLOSE_REASON_ROUTE_LOST: u16 = 1;
 pub const SESSION_CLOSE_REASON_GATEWAY_SHUTDOWN: u16 = 2;
 pub const SESSION_CLOSE_REASON_UPSTREAM_SESSION_CLOSED: u16 = 3;
@@ -529,7 +532,7 @@ impl ReadAtRequest {
         validate_non_zero_session_id(self.session_id)?;
         validate_io_length(self.length)?;
 
-        let mut body = [0u8; READ_WRITE_FIXED_BODY_BYTES];
+        let mut body = [0u8; READ_AT_REQUEST_BODY_BYTES];
         body[0..8].copy_from_slice(&self.offset.to_be_bytes());
         body[8..12].copy_from_slice(&self.length.to_be_bytes());
         Ok(
@@ -552,13 +555,19 @@ impl ReadAtResponse {
             expected_request_id,
             Some(expected_session_id),
         )?;
+        if body.len() < READ_AT_RESPONSE_HEADER_BYTES {
+            return Err(ProtocolClientError::InvalidBody("read_response_body"));
+        }
+        if body[0] != IO_COMPRESS_RAW {
+            return Err(ProtocolClientError::InvalidBody("read_response_compress"));
+        }
 
-        if body.len() != expected_length as usize {
+        if body.len() != READ_AT_RESPONSE_HEADER_BYTES + expected_length as usize {
             return Err(ProtocolClientError::InvalidBody("read_response_length"));
         }
 
         Ok(Self {
-            data: body.to_vec(),
+            data: body[READ_AT_RESPONSE_HEADER_BYTES..].to_vec(),
         })
     }
 }
@@ -570,10 +579,11 @@ impl WriteAtRequest {
             .map_err(|_| ProtocolClientError::InvalidBody("write_length"))?;
         validate_io_length(length)?;
 
-        let mut body = vec![0u8; READ_WRITE_FIXED_BODY_BYTES + self.data.len()];
+        let mut body = vec![0u8; WRITE_AT_REQUEST_HEADER_BYTES + self.data.len()];
         body[0..8].copy_from_slice(&self.offset.to_be_bytes());
         body[8..12].copy_from_slice(&length.to_be_bytes());
-        body[12..].copy_from_slice(&self.data);
+        body[12] = IO_COMPRESS_RAW;
+        body[13..].copy_from_slice(&self.data);
         Ok(
             ProtocolHeader::new_request(ClientOperationCode::WriteAt, request_id, self.session_id)?
                 .encode(&body),
@@ -930,6 +940,7 @@ mod tests {
     use super::FLAG_RESPONSE;
     use super::HEADER_LEN;
     use super::HEADER_SIZE;
+    use super::IO_COMPRESS_RAW;
     use super::PROTOCOL_VERSION;
     use super::ProtocolClientError;
     use super::ProtocolHeader;
@@ -1108,7 +1119,30 @@ mod tests {
             &write[HEADER_SIZE + 8..HEADER_SIZE + 12],
             &4u32.to_be_bytes()
         );
-        assert_eq!(&write[HEADER_SIZE + 12..], b"ABCD");
+        assert_eq!(write[HEADER_SIZE + 12], IO_COMPRESS_RAW);
+        assert_eq!(&write[HEADER_SIZE + 13..], b"ABCD");
+    }
+
+    #[test]
+    fn read_response_requires_raw_compress_during_phase_two() {
+        let payload = ProtocolHeader {
+            protocol_version: PROTOCOL_VERSION,
+            header_len: HEADER_LEN,
+            op_code: ClientOperationCode::ReadAt,
+            flags: FLAG_RESPONSE,
+            status_code: ProtocolStatusCode::Ok,
+            reserved: 0,
+            request_id: 41,
+            session_id: 9,
+        }
+        .encode(&[1, b'D', b'A', b'T', b'A']);
+
+        let error =
+            ReadAtResponse::decode_response(&payload, 41, 9, 4).expect_err("decode should fail");
+        assert_eq!(
+            error,
+            ProtocolClientError::InvalidBody("read_response_compress")
+        );
     }
 
     #[test]

@@ -68,7 +68,7 @@ func TestGatewayCloseConnectionOnlyClosesThatClientROSession(t *testing.T) {
 	if header := mustParseGatewayHeader(t, resp); header.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected peer read status: %d", header.StatusCode)
 	}
-	if !bytes.Equal(resp[proto.HeaderSize:], []byte("ROOK")) {
+	if !bytes.Equal(resp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("ROOK"))) {
 		t.Fatalf("unexpected peer read payload: %q", string(resp[proto.HeaderSize:]))
 	}
 }
@@ -105,7 +105,7 @@ func TestGatewayWriterConnectionCloseReleasesWriterAndLeavesROSessionsLive(t *te
 	if header := mustParseGatewayHeader(t, readResp); header.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected ro read status: %d", header.StatusCode)
 	}
-	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("W001")) {
+	if !bytes.Equal(readResp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("W001"))) {
 		t.Fatalf("unexpected ro read payload: %q", string(readResp[proto.HeaderSize:]))
 	}
 
@@ -127,7 +127,7 @@ func TestGatewayWriterConnectionCloseReleasesWriterAndLeavesROSessionsLive(t *te
 	if header := mustParseGatewayHeader(t, readResp); header.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected ro read-after-second-writer status: %d", header.StatusCode)
 	}
-	if !bytes.Equal(readResp[proto.HeaderSize:], []byte("W002")) {
+	if !bytes.Equal(readResp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("W002"))) {
 		t.Fatalf("unexpected ro read-after-second-writer payload: %q", string(readResp[proto.HeaderSize:]))
 	}
 }
@@ -295,7 +295,7 @@ func TestGatewaySessionUnavailableDoesNotEscalateToRouteFailure(t *testing.T) {
 	if header := mustParseGatewayHeader(t, resp); header.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected peer session status: %d", header.StatusCode)
 	}
-	if !bytes.Equal(resp[proto.HeaderSize:], []byte("LIVE")) {
+	if !bytes.Equal(resp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("LIVE"))) {
 		t.Fatalf("unexpected peer read payload: %q", string(resp[proto.HeaderSize:]))
 	}
 
@@ -342,7 +342,7 @@ func TestGatewayOpenRejectDoesNotClearExistingROSession(t *testing.T) {
 	if header := mustParseGatewayHeader(t, resp); header.StatusCode != proto.StatusOK {
 		t.Fatalf("unexpected ro read status: %d", header.StatusCode)
 	}
-	if !bytes.Equal(resp[proto.HeaderSize:], []byte("SAFE")) {
+	if !bytes.Equal(resp[proto.HeaderSize:], proto.BuildReadResponseBody([]byte("SAFE"))) {
 		t.Fatalf("unexpected ro read payload: %q", string(resp[proto.HeaderSize:]))
 	}
 	if len(backend.closeCalls()) != 0 {
@@ -496,7 +496,7 @@ func (b *scopeTestBackend) RoundTrip(routeConnectionID uint64, sessionID uint64,
 		if err != nil {
 			return mapScopeSessionErrorStatus(err), nil, nil
 		}
-		return proto.StatusOK, data, nil
+		return proto.StatusOK, proto.BuildReadResponseBody(data), nil
 	case proto.OpWriteAt:
 		if sessionID == 0 {
 			return proto.StatusBadHeader, nil, nil

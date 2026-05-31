@@ -334,7 +334,7 @@ mod tests {
                 request_id: read_header.request_id,
                 session_id: read_header.session_id,
             }
-            .encode(b"YUME");
+            .encode(&[0, b'Y', b'U', b'M', b'E']);
             write_frame(&mut stream, &read_response).expect("write read response");
 
             let write_request = read_frame_into(&mut stream, &mut buffer)
@@ -351,7 +351,8 @@ mod tests {
                 &write_request[HEADER_SIZE + 8..HEADER_SIZE + 12],
                 &4u32.to_be_bytes()
             );
-            assert_eq!(&write_request[HEADER_SIZE + 12..], b"DISK");
+            assert_eq!(write_request[HEADER_SIZE + 12], 0);
+            assert_eq!(&write_request[HEADER_SIZE + 13..], b"DISK");
 
             let write_response = ProtocolHeader {
                 protocol_version: PROTOCOL_VERSION,
