@@ -258,23 +258,23 @@ resident block 主表固定按：
 
 任务：
 
-- [ ] 实现通用双向链表骨架
+- [x] 实现通用双向链表骨架
   - `push_back`
   - `pop_front`
   - `remove(node)`
   - `move_to_back(node)`
-- [ ] 实现 `FIFO`
-- [ ] 实现 `LRU`
-- [ ] 实现 resident block 表
-- [ ] 定义 resident 最小状态结构
-- [ ] 定义 `QueueRef`
+- [x] 实现 `FIFO`
+- [x] 实现 `LRU`
+- [x] 实现 resident block 表
+- [x] 定义 resident 最小状态结构
+- [x] 定义 `QueueRef`
   - `Fifo(node)`
   - `Lru(node)`
-- [ ] 实现 2Q 基础策略
+- [x] 实现 2Q 基础策略
   - 新块首次进入 FIFO
   - FIFO 再命中提升到 LRU
   - LRU 命中移到尾部
-- [ ] 实现 victim 选择骨架
+- [x] 实现 victim 选择骨架
 
 验收标准：
 
@@ -282,6 +282,8 @@ resident block 主表固定按：
 - FIFO/LRU 状态不会分叉
 - FIFO -> LRU 提升不发生块数据内存拷贝
 - 不保存可以由唯一真状态直接推导出的派生字段
+
+当前这一步已经完成。
 
 ## 5.4 第四阶段：最小读闭环
 

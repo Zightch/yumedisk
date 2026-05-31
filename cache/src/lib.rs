@@ -3,6 +3,7 @@ mod cache;
 mod config;
 mod error;
 mod io;
+mod resident;
 
 pub use cache::Cache;
 pub use config::CacheConfig;

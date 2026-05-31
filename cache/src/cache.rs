@@ -1,20 +1,30 @@
+use std::sync::Mutex;
+
 use crate::block::BlockLayout;
+use crate::resident::TwoQueueResident;
 use crate::{AtIo, CacheConfig, CacheError};
 
 #[derive(Debug)]
 pub struct Cache<R> {
     config: CacheConfig,
     layout: BlockLayout,
+    #[allow(dead_code)]
+    resident: Mutex<TwoQueueResident>,
     right: R,
 }
 
 impl<R: AtIo> Cache<R> {
     pub fn new(config: CacheConfig, right: R) -> Result<Self, CacheError> {
-        config.validate()?;
         let layout = BlockLayout::new(config.block_size_bytes)?;
+        let resident = Mutex::new(TwoQueueResident::new(
+            config.fifo_capacity_blocks,
+            config.lru_capacity_blocks,
+            layout.block_size_usize()?,
+        )?);
         Ok(Self {
             config,
             layout,
+            resident,
             right,
         })
     }
@@ -116,6 +126,18 @@ mod tests {
         assert_eq!(
             error,
             CacheError::InvalidConfig("block_size_bytes must be greater than 0")
+        );
+    }
+
+    #[test]
+    fn new_rejects_zero_fifo_capacity() {
+        let mut config = test_config(32);
+        config.fifo_capacity_blocks = 0;
+
+        let error = Cache::new(config, MockAtIo::default()).unwrap_err();
+        assert_eq!(
+            error,
+            CacheError::InvalidConfig("fifo_capacity_blocks must be greater than 0")
         );
     }
 
