@@ -70,9 +70,12 @@ cc fifo=1 lru=1 temp=1 block=98304 scan=30000
 
 ```powershell
 pktmon filter remove
-pktmon filter add yume9736 -t TCP -p 9736
-pktmon start --capture --pkt-size 0 --file-name C:\Users\Zightch\Desktop\driver\tmp\pktmon-9736.etl --log-mode memory
+pktmon filter add yume9736 -i 192.168.86.0/24 -t TCP -p 9736
+pktmon start --capture --comp 15 --pkt-size 0 --file-name C:\Users\Zightch\Desktop\driver\tmp\pktmon-9736.etl --log-mode memory
 ```
+
+当前本机 `VMware Network Adapter VMnet1` 的 `pktmon` 组件 ID 是 `15`。
+如果后续网卡枚举顺序变化，先执行一次 `pktmon list` 再更新 `--comp`。
 
 结束后导出：
 
