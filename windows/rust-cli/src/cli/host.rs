@@ -323,23 +323,20 @@ impl CliHost {
     }
 
     pub fn remove_disk(&mut self, target_id: u32) -> AppResult<()> {
-        let mut session_closed = false;
-        if let Some(mounted) = self.network_mounts.mounted(target_id) {
-            session_closed = mounted.close_for_remove();
-        }
-
         let mut error_text = String::new();
         let media = self
             .context
             .remove_managed_disk_with_media(target_id, Some(&mut error_text));
-        let Some(_media) = media else {
+        let Some(media) = media else {
             if error_text.is_empty() {
                 error_text = "remove-failed".to_string();
             }
             return Err(error_text);
         };
+        drop(media);
 
         if let Some(mounted) = self.network_mounts.take(target_id) {
+            let session_closed = close_session_for_cleanup(&mounted.session);
             if session_closed {
                 self.network_mounts
                     .release_connection_after_session_close(mounted.session.connection());
@@ -391,9 +388,10 @@ impl CliHost {
 
         for target_id in target_ids {
             let mut error_text = String::new();
-            let _ = self
+            let media = self
                 .context
                 .remove_managed_disk_with_media(target_id, Some(&mut error_text));
+            drop(media);
             if let Some(mounted) = self.network_mounts.take(target_id) {
                 mounted.shutdown();
             }
@@ -574,10 +572,6 @@ impl MountedNetworkDisk {
         }
     }
 
-    fn close_for_remove(&self) -> bool {
-        close_session_for_cleanup(&self.session)
-    }
-
     fn shutdown(&self) {
         let _ = self.session.connection().close();
     }
@@ -601,15 +595,6 @@ impl NetworkMountRegistry {
             .expect("network_mount_state poisoned")
             .mounted
             .insert(target_id, mounted);
-    }
-
-    fn mounted(&self, target_id: u32) -> Option<MountedNetworkDisk> {
-        self.state
-            .lock()
-            .expect("network_mount_state poisoned")
-            .mounted
-            .get(&target_id)
-            .cloned()
     }
 
     fn take(&self, target_id: u32) -> Option<MountedNetworkDisk> {

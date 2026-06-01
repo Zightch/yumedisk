@@ -7,6 +7,7 @@ mod worker;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use self::state::{
     CacheState, PrepareInsertResult, ReadBlockAction, SpilledDirty, WaitReason, WriteBlockAction,
@@ -110,6 +111,39 @@ impl<R: AtIo + 'static> Cache<R> {
 
     pub fn right(&self) -> &R {
         self.right.as_ref()
+    }
+
+    pub fn wait_for_quiesce(&self, timeout: Duration) -> Result<(), CacheError> {
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or(CacheError::TimedOut {
+                operation: "cache quiesce",
+                timeout,
+            })?;
+        let mut state = self.state.lock().unwrap();
+        loop {
+            if state.is_quiescent() {
+                return Ok(());
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                return Err(CacheError::TimedOut {
+                    operation: "cache quiesce",
+                    timeout,
+                });
+            }
+
+            let remaining = deadline.saturating_duration_since(now);
+            let wait_result = self.state_changed.wait_timeout(state, remaining).unwrap();
+            state = wait_result.0;
+            if wait_result.1.timed_out() && !state.is_quiescent() {
+                return Err(CacheError::TimedOut {
+                    operation: "cache quiesce",
+                    timeout,
+                });
+            }
+        }
     }
 
     pub fn read_locked(&self, offset: u64, buffer: &mut [u8]) -> Result<(), CacheError> {

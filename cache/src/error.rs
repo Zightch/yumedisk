@@ -2,6 +2,13 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::io::ErrorKind;
 use std::path::PathBuf;
+use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RightIoErrorKind {
+    InvalidInput,
+    Unavailable,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CacheError {
@@ -33,6 +40,15 @@ pub enum CacheError {
         operation: &'static str,
         path: PathBuf,
         kind: ErrorKind,
+    },
+    RightIo {
+        operation: &'static str,
+        kind: RightIoErrorKind,
+        detail: String,
+    },
+    TimedOut {
+        operation: &'static str,
+        timeout: Duration,
     },
     ResidentBlockAlreadyExists {
         block_index: u64,
@@ -88,6 +104,17 @@ impl Display for CacheError {
                 "temp io failed while {operation}: path={}, kind={kind:?}",
                 path.display()
             ),
+            Self::RightIo {
+                operation,
+                kind,
+                detail,
+            } => write!(
+                f,
+                "right io failed while {operation}: kind={kind:?}, detail={detail}"
+            ),
+            Self::TimedOut { operation, timeout } => {
+                write!(f, "{operation} timed out after {timeout:?}")
+            }
             Self::ResidentBlockAlreadyExists { block_index } => {
                 write!(
                     f,

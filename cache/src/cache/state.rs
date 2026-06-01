@@ -54,4 +54,16 @@ impl CacheState {
     pub(super) fn temp_file_count(&self) -> usize {
         self.spilled_dirty.len() + self.resident.active_snapshot_count()
     }
+
+    pub(super) fn is_quiescent(&self) -> bool {
+        if self.stop_requested
+            || !self.spilled_dirty.is_empty()
+            || !self.active_temp_blocks.is_empty()
+            || self.foreground_dirty_eviction_waiters != 0
+        {
+            return false;
+        }
+
+        self.resident.is_quiescent()
+    }
 }

@@ -166,6 +166,15 @@ impl TwoQueueResident {
         self.blocks.get_mut(&block_index)
     }
 
+    pub(crate) fn is_quiescent(&self) -> bool {
+        self.blocks.values().all(|entry| {
+            entry.state.load_state == LoadState::Ready
+                && entry.state.dirty_ranges.is_empty()
+                && entry.state.active_snapshot.is_none()
+                && entry.state.pending_patches.is_empty()
+        })
+    }
+
     pub(crate) fn insert_ready(
         &mut self,
         block_index: u64,

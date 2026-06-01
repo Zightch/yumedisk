@@ -76,9 +76,6 @@ pub fn invalidate_runtime_by_key(
         let mut network_client = lock_network_client(network_client_mutex);
         network_client.remove_opened_session(key)
     };
-    if let Some(opened_session) = opened_session {
-        let _ = close_session_for_cleanup(&opened_session.session);
-    }
 
     for runtime in runtime_store.runtimes_mut() {
         let matches_key = runtime.server_addr() == Some(key.server_addr.as_str())
@@ -96,6 +93,10 @@ pub fn invalidate_runtime_by_key(
             }
         }
         runtime.set_network_invalid(reason.to_string());
+    }
+
+    if let Some(opened_session) = opened_session {
+        let _ = close_session_for_cleanup(&opened_session.session);
     }
 }
 

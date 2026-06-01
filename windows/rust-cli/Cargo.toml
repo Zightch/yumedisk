@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 backend_rust = { path = "../BackendRust" }
+cache = { path = "../../cache" }
 network_core = { path = "../network-core" }
 
 [dev-dependencies]

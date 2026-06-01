@@ -14,4 +14,5 @@ pub mod test_support;
 pub use cache::Cache;
 pub use config::CacheConfig;
 pub use error::CacheError;
+pub use error::RightIoErrorKind;
 pub use io::AtIo;
