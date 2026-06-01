@@ -4,11 +4,11 @@ use std::ffi::OsString;
 pub enum CliCommand {
     Shell,
     Help,
-    Network(PlannedNetworkCommand),
+    Runtime(PlannedCommand),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PlannedNetworkCommand {
+pub struct PlannedCommand {
     pub name: &'static str,
     pub args: Vec<String>,
 }
@@ -35,8 +35,12 @@ where
     match command.as_str() {
         "shell" => Ok(CliCommand::Shell),
         "help" | "--help" | "-h" => Ok(CliCommand::Help),
-        "auth" => Ok(CliCommand::Network(PlannedNetworkCommand {
+        "auth" => Ok(CliCommand::Runtime(PlannedCommand {
             name: "auth",
+            args: args.collect(),
+        })),
+        "cc" => Ok(CliCommand::Runtime(PlannedCommand {
+            name: "cc",
             args: args.collect(),
         })),
         _ => Err(format!("unknown command: {}", command)),
@@ -56,7 +60,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_network_command_without_leaking_cli_layer() {
+    fn parses_runtime_command_without_leaking_cli_layer() {
         let command = parse_args(vec![
             OsString::from("rust-cli"),
             OsString::from("auth"),
@@ -66,9 +70,28 @@ mod tests {
         .expect("parse should succeed");
 
         match command {
-            CliCommand::Network(planned) => {
+            CliCommand::Runtime(planned) => {
                 assert_eq!(planned.name, "auth");
                 assert_eq!(planned.args, vec!["127.0.0.1:9000", "claim"]);
+            }
+            other => panic!("unexpected command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_cache_config_runtime_command() {
+        let command = parse_args(vec![
+            OsString::from("rust-cli"),
+            OsString::from("cc"),
+            OsString::from("fifo=16"),
+            OsString::from("block=65536"),
+        ])
+        .expect("parse should succeed");
+
+        match command {
+            CliCommand::Runtime(planned) => {
+                assert_eq!(planned.name, "cc");
+                assert_eq!(planned.args, vec!["fifo=16", "block=65536"]);
             }
             other => panic!("unexpected command: {:?}", other),
         }

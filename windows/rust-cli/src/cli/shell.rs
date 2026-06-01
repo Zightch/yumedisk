@@ -15,6 +15,10 @@ use super::host::CreateLocalDiskRequest;
 use super::host::CreateLocalDiskSource;
 use super::host::RemoveSharedMemorySelector;
 use super::host::RemoveTargetSelector;
+use crate::NetworkCacheDefaults;
+
+const CACHE_CONFIG_USAGE: &str =
+    "cc requires [fifo=<blocks>] [lru=<blocks>] [temp=<files>] [block=<bytes>]";
 
 enum LoopControl {
     Continue,
@@ -39,9 +43,7 @@ pub fn run_shell() -> AppResult<()> {
     loop_result
 }
 
-pub fn run_shell_with_startup_command(
-    planned: super::command::PlannedNetworkCommand,
-) -> AppResult<()> {
+pub fn run_shell_with_startup_command(planned: super::command::PlannedCommand) -> AppResult<()> {
     let host = Arc::new(Mutex::new(CliHost::open()?));
     let reaper = start_dead_network_reaper(Arc::clone(&host));
     println!("state=ready(rust-cli)");
@@ -205,6 +207,19 @@ fn execute_command(host: &mut CliHost, command: &str, args: &[&str]) -> AppResul
             );
             Ok(LoopControl::Continue)
         }
+        "cc" => {
+            let command = parse_cache_config_args(args, host.network_cache_defaults())?;
+            match command {
+                CacheConfigCommand::Show => {
+                    print_cache_config("cache_config", host.network_cache_defaults());
+                }
+                CacheConfigCommand::Update(defaults) => {
+                    host.set_network_cache_defaults(defaults);
+                    print_cache_config("cache_config_updated", defaults);
+                }
+            }
+            Ok(LoopControl::Continue)
+        }
         "rm" => {
             let selector = parse_remove_args(args)?;
             match selector {
@@ -227,6 +242,12 @@ fn execute_command(host: &mut CliHost, command: &str, args: &[&str]) -> AppResul
 enum RemoveCommand {
     Target(RemoveTargetSelector),
     SharedMemory(RemoveSharedMemorySelector),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CacheConfigCommand {
+    Show,
+    Update(NetworkCacheDefaults),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,6 +354,69 @@ fn parse_debug_write_args(args: &[&str]) -> AppResult<DebugWriteCommand> {
     })
 }
 
+fn parse_cache_config_args(
+    args: &[&str],
+    current: NetworkCacheDefaults,
+) -> AppResult<CacheConfigCommand> {
+    if args.is_empty() {
+        return Ok(CacheConfigCommand::Show);
+    }
+
+    let mut next = current;
+    let mut fifo_seen = false;
+    let mut lru_seen = false;
+    let mut temp_seen = false;
+    let mut block_seen = false;
+
+    for token in args {
+        let (key, value) = split_key_value(token)?;
+        match key {
+            "fifo" => {
+                if fifo_seen {
+                    return Err("duplicate fifo".to_string());
+                }
+                next.fifo_capacity_blocks = parse_nonzero_usize_value(value, "fifo")?;
+                fifo_seen = true;
+            }
+            "lru" => {
+                if lru_seen {
+                    return Err("duplicate lru".to_string());
+                }
+                next.lru_capacity_blocks = parse_nonzero_usize_value(value, "lru")?;
+                lru_seen = true;
+            }
+            "temp" => {
+                if temp_seen {
+                    return Err("duplicate temp".to_string());
+                }
+                next.temp_max_files = parse_nonzero_usize_value(value, "temp")?;
+                temp_seen = true;
+            }
+            "block" => {
+                if block_seen {
+                    return Err("duplicate block".to_string());
+                }
+                next.block_size_bytes = parse_nonzero_u32_value(value, "block")?;
+                block_seen = true;
+            }
+            _ => return Err(CACHE_CONFIG_USAGE.to_string()),
+        }
+    }
+
+    Ok(CacheConfigCommand::Update(next))
+}
+
+fn print_cache_config(prefix: &str, defaults: NetworkCacheDefaults) {
+    println!(
+        "{} fifo_blocks={}, lru_blocks={}, temp_max_files={}, block_size_bytes={}, future_mounts_only=true",
+        prefix,
+        defaults.fifo_capacity_blocks,
+        defaults.lru_capacity_blocks,
+        defaults.temp_max_files,
+        defaults.block_size_bytes
+    );
+}
+
 fn print_stats(host: &CliHost) -> AppResult<()> {
     let stats = host.query_backend_stats()?;
     println!(
@@ -417,6 +501,10 @@ pub fn print_runtime_help() {
     println!("  help                               show this help");
     println!("  query                              print AppKernel session state");
     println!("  auth <addr> <claim_code> [target]  authenticate and mount one network disk");
+    println!("  cc [fifo=<n>] [lru=<n>] [temp=<n>] [block=<bytes>]");
+    println!(
+        "                                     show or update default cache config for future network mounts"
+    );
     println!("  sm <size-mib>                      create one shared memory area");
     println!("  ct size=<mib> [ro=<true|false>] [target=<id>]");
     println!("                                     create one denseMem disk");
@@ -522,6 +610,28 @@ fn parse_u64_value(text: Option<&str>, name: &str) -> AppResult<u64> {
     };
     text.parse::<u64>()
         .map_err(|_| format!("invalid {}: {}", name, text))
+}
+
+fn parse_usize_value(text: &str, name: &str) -> AppResult<usize> {
+    let value = parse_u64_value(Some(text), name)?;
+    usize::try_from(value).map_err(|_| format!("{} too large: {}", name, text))
+}
+
+fn parse_nonzero_usize_value(text: &str, name: &str) -> AppResult<usize> {
+    let value = parse_usize_value(text, name)?;
+    if value == 0 {
+        return Err(format!("{} must be greater than 0", name));
+    }
+    Ok(value)
+}
+
+fn parse_nonzero_u32_value(text: &str, name: &str) -> AppResult<u32> {
+    let value = parse_u64_value(Some(text), name)?;
+    let value = u32::try_from(value).map_err(|_| format!("{} too large: {}", name, text))?;
+    if value == 0 {
+        return Err(format!("{} must be greater than 0", name));
+    }
+    Ok(value)
 }
 
 fn parse_bool_value(text: &str) -> AppResult<bool> {
@@ -709,6 +819,7 @@ fn stop_dead_network_reaper(reaper: DeadNetworkReaper) {
 
 #[cfg(test)]
 mod tests {
+    use super::CacheConfigCommand;
     use super::CreateLocalDiskSource;
     use super::DebugReadCommand;
     use super::DebugWriteCommand;
@@ -716,10 +827,12 @@ mod tests {
     use super::RemoveSharedMemorySelector;
     use super::RemoveTargetSelector;
     use super::parse_auth_args;
+    use super::parse_cache_config_args;
     use super::parse_create_local_disk_args;
     use super::parse_debug_read_args;
     use super::parse_debug_write_args;
     use super::parse_remove_args;
+    use crate::NetworkCacheDefaults;
 
     #[test]
     fn parse_auth_args_accepts_optional_target() {
@@ -775,6 +888,47 @@ mod tests {
             }
             _ => panic!("unexpected remove shared selector"),
         }
+    }
+
+    #[test]
+    fn parse_cache_config_args_shows_current_config_when_empty() {
+        let parsed = parse_cache_config_args(&[], NetworkCacheDefaults::default())
+            .expect("parse should succeed");
+        assert_eq!(parsed, CacheConfigCommand::Show);
+    }
+
+    #[test]
+    fn parse_cache_config_args_updates_partial_fields() {
+        let parsed =
+            parse_cache_config_args(&["fifo=16", "block=65536"], NetworkCacheDefaults::default())
+                .expect("parse should succeed");
+
+        match parsed {
+            CacheConfigCommand::Update(defaults) => {
+                assert_eq!(defaults.fifo_capacity_blocks, 16);
+                assert_eq!(defaults.lru_capacity_blocks, 64);
+                assert_eq!(defaults.temp_max_files, 64);
+                assert_eq!(defaults.block_size_bytes, 65536);
+            }
+            other => panic!("unexpected cache config command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_cache_config_args_rejects_invalid_values() {
+        let error = parse_cache_config_args(&["temp=0"], NetworkCacheDefaults::default())
+            .expect_err("parse should fail");
+        assert_eq!(error, "temp must be greater than 0");
+    }
+
+    #[test]
+    fn parse_cache_config_args_rejects_unknown_keys() {
+        let error = parse_cache_config_args(&["mode=fifo"], NetworkCacheDefaults::default())
+            .expect_err("parse should fail");
+        assert_eq!(
+            error,
+            "cc requires [fifo=<blocks>] [lru=<blocks>] [temp=<files>] [block=<bytes>]"
+        );
     }
 
     #[test]

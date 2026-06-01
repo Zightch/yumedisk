@@ -20,6 +20,25 @@ const CACHE_TEMP_MAX_FILES: usize = 64;
 const CACHE_QUIESCE_TIMEOUT: Duration = Duration::from_secs(5);
 const CACHE_TEMP_ROOT_NAME: &str = "yumedisk-network-media";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NetworkCacheDefaults {
+    pub fifo_capacity_blocks: usize,
+    pub lru_capacity_blocks: usize,
+    pub block_size_bytes: u32,
+    pub temp_max_files: usize,
+}
+
+impl Default for NetworkCacheDefaults {
+    fn default() -> Self {
+        Self {
+            fifo_capacity_blocks: CACHE_FIFO_CAPACITY_BLOCKS,
+            lru_capacity_blocks: CACHE_LRU_CAPACITY_BLOCKS,
+            block_size_bytes: CACHE_BLOCK_SIZE_BYTES,
+            temp_max_files: CACHE_TEMP_MAX_FILES,
+        }
+    }
+}
+
 pub struct NetworkMedia {
     disk_id: String,
     disk_size_bytes: u64,
@@ -70,6 +89,7 @@ impl NetworkMedia {
         disk_id: impl Into<String>,
         session: DiskSession,
         metadata: SessionMetadata,
+        cache_defaults: NetworkCacheDefaults,
     ) -> Result<Self, NetworkClientError> {
         let disk_id = disk_id.into();
         if disk_id.is_empty() {
@@ -86,7 +106,7 @@ impl NetworkMedia {
         } else {
             let temp_dir = prepare_cache_temp_dir(&session, &disk_id)
                 .map_err(|_| NetworkClientError::InvalidState("cache_temp_dir"))?;
-            let config = default_cache_config(temp_dir.clone());
+            let config = default_cache_config(cache_defaults, temp_dir.clone());
             let right = DiskSessionAtIo::new(
                 session.clone(),
                 metadata.disk_size_bytes,
@@ -129,6 +149,22 @@ impl NetworkMedia {
 
     pub fn read_only(&self) -> bool {
         self.read_only
+    }
+
+    #[cfg(test)]
+    fn cache_defaults(&self) -> Option<NetworkCacheDefaults> {
+        match self.path.as_ref().expect("network media path should exist") {
+            MediaPath::BypassRo { .. } => None,
+            MediaPath::CachedRw { cache, .. } => {
+                let config = cache.config();
+                Some(NetworkCacheDefaults {
+                    fifo_capacity_blocks: config.fifo_capacity_blocks,
+                    lru_capacity_blocks: config.lru_capacity_blocks,
+                    block_size_bytes: config.block_size_bytes,
+                    temp_max_files: config.temp_max_files,
+                })
+            }
+        }
     }
 
     fn read_direct(
@@ -319,13 +355,13 @@ impl AtIo for DiskSessionAtIo {
     }
 }
 
-fn default_cache_config(temp_dir: PathBuf) -> CacheConfig {
+fn default_cache_config(cache_defaults: NetworkCacheDefaults, temp_dir: PathBuf) -> CacheConfig {
     CacheConfig {
-        fifo_capacity_blocks: CACHE_FIFO_CAPACITY_BLOCKS,
-        lru_capacity_blocks: CACHE_LRU_CAPACITY_BLOCKS,
-        block_size_bytes: CACHE_BLOCK_SIZE_BYTES,
+        fifo_capacity_blocks: cache_defaults.fifo_capacity_blocks,
+        lru_capacity_blocks: cache_defaults.lru_capacity_blocks,
+        block_size_bytes: cache_defaults.block_size_bytes,
         dirty_scan_interval: CACHE_DIRTY_SCAN_INTERVAL,
-        temp_max_files: CACHE_TEMP_MAX_FILES,
+        temp_max_files: cache_defaults.temp_max_files,
         temp_dir,
     }
 }
@@ -566,6 +602,7 @@ fn is_terminal_media_error(error: &NetworkClientError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::DiskSessionAtIo;
+    use super::NetworkCacheDefaults;
     use super::NetworkMedia;
     use super::map_network_error_to_backend_error;
     use backend_rust::BackendError;
@@ -615,13 +652,22 @@ mod tests {
         output
     }
 
+    fn default_cache_defaults() -> NetworkCacheDefaults {
+        NetworkCacheDefaults::default()
+    }
+
     #[test]
     fn bind_requires_explicit_disk_id_and_metadata() {
         let connection = stage_connection(TransportEndpoint::new("127.0.0.1:9000"), 7);
         let session = DiskSession::new(connection, 7).expect("session should build");
 
-        let error = NetworkMedia::bind("", session, sample_metadata(2048, false))
-            .expect_err("bind should fail");
+        let error = NetworkMedia::bind(
+            "",
+            session,
+            sample_metadata(2048, false),
+            default_cache_defaults(),
+        )
+        .expect_err("bind should fail");
         assert_eq!(error.to_string(), "invalid-argument: disk_id");
     }
 
@@ -697,6 +743,7 @@ mod tests {
             "A1b2C3d4E5f6G7h8",
             session,
             sample_metadata(u64::from(MAX_DATA_PLANE_RAW_BYTES) + 4, true),
+            default_cache_defaults(),
         )
         .expect("bind should succeed");
         assert_eq!(media.disk_id(), "A1b2C3d4E5f6G7h8");
@@ -793,6 +840,7 @@ mod tests {
             "A1b2C3d4E5f6G7h8",
             session,
             sample_metadata(block_size as u64, false),
+            default_cache_defaults(),
         )
         .expect("bind should succeed");
 
@@ -951,6 +999,51 @@ mod tests {
     }
 
     #[test]
+    fn network_media_keeps_cache_defaults_per_instance() {
+        let defaults_a = NetworkCacheDefaults {
+            fifo_capacity_blocks: 16,
+            lru_capacity_blocks: 32,
+            block_size_bytes: 48 * 1024,
+            temp_max_files: 8,
+        };
+        let defaults_b = NetworkCacheDefaults {
+            fifo_capacity_blocks: 4,
+            lru_capacity_blocks: 12,
+            block_size_bytes: 96 * 1024,
+            temp_max_files: 3,
+        };
+
+        let session_a = DiskSession::new(
+            stage_connection(TransportEndpoint::new("127.0.0.1:9000"), 7),
+            7,
+        )
+        .expect("session should build");
+        let media_a = NetworkMedia::bind(
+            "A1b2C3d4E5f6G7h8",
+            session_a,
+            sample_metadata(4096, false),
+            defaults_a,
+        )
+        .expect("bind should succeed");
+
+        let session_b = DiskSession::new(
+            stage_connection(TransportEndpoint::new("127.0.0.1:9001"), 8),
+            8,
+        )
+        .expect("session should build");
+        let media_b = NetworkMedia::bind(
+            "H8g7F6e5D4c3B2a1",
+            session_b,
+            sample_metadata(4096, false),
+            defaults_b,
+        )
+        .expect("bind should succeed");
+
+        assert_eq!(media_a.cache_defaults(), Some(defaults_a));
+        assert_eq!(media_b.cache_defaults(), Some(defaults_b));
+    }
+
+    #[test]
     fn network_media_calls_invalidation_handler_on_cached_path_session_loss() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind should succeed");
         let address = listener.local_addr().expect("local addr should succeed");
@@ -983,11 +1076,16 @@ mod tests {
         connection.connect().expect("connect should succeed");
         let session = DiskSession::new(connection.clone(), 77).expect("session should build");
         let (invalidate_tx, invalidate_rx) = mpsc::channel();
-        let media = NetworkMedia::bind("A1b2C3d4E5f6G7h8", session, sample_metadata(4096, false))
-            .expect("bind should succeed")
-            .with_invalidation_handler(Arc::new(move || {
-                let _ = invalidate_tx.send(());
-            }));
+        let media = NetworkMedia::bind(
+            "A1b2C3d4E5f6G7h8",
+            session,
+            sample_metadata(4096, false),
+            default_cache_defaults(),
+        )
+        .expect("bind should succeed")
+        .with_invalidation_handler(Arc::new(move || {
+            let _ = invalidate_tx.send(());
+        }));
 
         let mut buffer = [0u8; 4];
         let error = media
@@ -1009,14 +1107,19 @@ mod tests {
         clear_session(&connection, 17);
 
         let invalidations = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let media = NetworkMedia::bind("A1b2C3d4E5f6G7h8", session, sample_metadata(4096, true))
-            .expect("bind should succeed")
-            .with_invalidation_handler({
-                let invalidations = Arc::clone(&invalidations);
-                Arc::new(move || {
-                    invalidations.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                })
-            });
+        let media = NetworkMedia::bind(
+            "A1b2C3d4E5f6G7h8",
+            session,
+            sample_metadata(4096, true),
+            default_cache_defaults(),
+        )
+        .expect("bind should succeed")
+        .with_invalidation_handler({
+            let invalidations = Arc::clone(&invalidations);
+            Arc::new(move || {
+                invalidations.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })
+        });
 
         let mut buffer = [0u8; 8];
         let error = media

@@ -26,6 +26,7 @@ use network_core::client::SessionDescriber;
 use network_core::client::SessionOpener;
 use network_core::transport::TransportEndpoint;
 
+use crate::NetworkCacheDefaults;
 use crate::NetworkMedia;
 use crate::cli::local::LocalBindingKind;
 use crate::cli::local::SharedMemoryRegistry;
@@ -107,6 +108,7 @@ pub struct CliHost {
     context: BackendContext,
     shared_memory: SharedMemoryRegistry,
     network_mounts: NetworkMountRegistry,
+    network_cache_defaults: NetworkCacheDefaults,
 }
 
 impl CliHost {
@@ -125,6 +127,7 @@ impl CliHost {
             context,
             shared_memory: SharedMemoryRegistry::default(),
             network_mounts: NetworkMountRegistry::default(),
+            network_cache_defaults: NetworkCacheDefaults::default(),
         })
     }
 
@@ -140,6 +143,14 @@ impl CliHost {
 
     pub fn snapshot_managed_disks(&self) -> Vec<ManagedDiskSnapshot> {
         self.context.snapshot_managed_disks()
+    }
+
+    pub fn network_cache_defaults(&self) -> NetworkCacheDefaults {
+        self.network_cache_defaults
+    }
+
+    pub fn set_network_cache_defaults(&mut self, defaults: NetworkCacheDefaults) {
+        self.network_cache_defaults = defaults;
     }
 
     pub fn query_backend_stats(&self) -> AppResult<BackendStatsSnapshot> {
@@ -274,15 +285,21 @@ impl CliHost {
                 error
             })?;
 
-        let media = NetworkMedia::bind(auth.disk_id().to_string(), session.clone(), metadata)
-            .map_err(|error| {
-                if close_session_for_cleanup(&session) {
-                    self.network_mounts
-                        .release_connection_after_session_close(&connection);
-                }
-                error.to_string()
-            })?
-            .with_invalidation_handler(self.network_mounts.cleanup_marker(target_id));
+        let cache_defaults = self.network_cache_defaults;
+        let media = NetworkMedia::bind(
+            auth.disk_id().to_string(),
+            session.clone(),
+            metadata,
+            cache_defaults,
+        )
+        .map_err(|error| {
+            if close_session_for_cleanup(&session) {
+                self.network_mounts
+                    .release_connection_after_session_close(&connection);
+            }
+            error.to_string()
+        })?
+        .with_invalidation_handler(self.network_mounts.cleanup_marker(target_id));
 
         let mounted = MountedNetworkDisk::new(
             addr.to_string(),
