@@ -9,9 +9,30 @@ temp 文件只服务于缓存内部，不对外暴露协议语义。
 - resident dirty flush 时承载 snapshot
 - dirty eviction 后承载 spilled dirty 的唯一副本
 
+对 `NetworkMedia` 的正式接线建议里，单盘 temp 根目录固定建议为：
+
+- `<system temp>/yumedisk-network-media/<server_addr>/<remote_disk_id>/`
+
+这个目录层级的目的，是让 temp 文件按网络盘实例隔离：
+
+- `<system temp>`
+  - 使用宿主系统临时目录
+- `yumedisk-network-media`
+  - 作为 `NetworkMedia` 缓存 temp 的固定根命名
+- `<server_addr>`
+  - 区分不同服务端来源
+- `<remote_disk_id>`
+  - 区分同一服务端下的不同远端盘
+
+`cache` 组件只使用已经分配到单盘实例的 `temp_dir`，不负责决定更上层目录结构。
+
 当前 `cache/` 独立组件里，temp 文件名固定按块索引生成：
 
 - `block-<block_index>.temp`
+
+也就是说，单个块文件的完整建议落点形如：
+
+- `<system temp>/yumedisk-network-media/<server_addr>/<remote_disk_id>/block-<block_index>.temp`
 
 这意味着：
 

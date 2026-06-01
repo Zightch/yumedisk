@@ -38,6 +38,7 @@ BackendRust <-> NetworkMedia <-> DiskSession
 - 块大小由 `CacheConfig.block_size_bytes` 配置；当前上层建议值可以设为 `32 KiB`
 - resident 使用 `2Q = FIFO + LRU`
 - dirty 数据离开 resident 前，必须先落 temp
+- 单盘 temp 根目录建议为 `<system temp>/yumedisk-network-media/<server_addr>/<remote_disk_id>/`
 - 同一块同一时刻只允许一个 active flush snapshot
 - temp 按单盘文件数限流，不按总字节数限流
 - miss 需要 dirty eviction 且 temp 已满时，前台请求必须阻塞
