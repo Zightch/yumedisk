@@ -25,6 +25,7 @@ pub struct NetworkCacheDefaults {
     pub fifo_capacity_blocks: usize,
     pub lru_capacity_blocks: usize,
     pub block_size_bytes: u32,
+    pub dirty_scan_interval: Duration,
     pub temp_max_files: usize,
 }
 
@@ -34,6 +35,7 @@ impl Default for NetworkCacheDefaults {
             fifo_capacity_blocks: CACHE_FIFO_CAPACITY_BLOCKS,
             lru_capacity_blocks: CACHE_LRU_CAPACITY_BLOCKS,
             block_size_bytes: CACHE_BLOCK_SIZE_BYTES,
+            dirty_scan_interval: CACHE_DIRTY_SCAN_INTERVAL,
             temp_max_files: CACHE_TEMP_MAX_FILES,
         }
     }
@@ -161,6 +163,7 @@ impl NetworkMedia {
                     fifo_capacity_blocks: config.fifo_capacity_blocks,
                     lru_capacity_blocks: config.lru_capacity_blocks,
                     block_size_bytes: config.block_size_bytes,
+                    dirty_scan_interval: config.dirty_scan_interval,
                     temp_max_files: config.temp_max_files,
                 })
             }
@@ -360,7 +363,7 @@ fn default_cache_config(cache_defaults: NetworkCacheDefaults, temp_dir: PathBuf)
         fifo_capacity_blocks: cache_defaults.fifo_capacity_blocks,
         lru_capacity_blocks: cache_defaults.lru_capacity_blocks,
         block_size_bytes: cache_defaults.block_size_bytes,
-        dirty_scan_interval: CACHE_DIRTY_SCAN_INTERVAL,
+        dirty_scan_interval: cache_defaults.dirty_scan_interval,
         temp_max_files: cache_defaults.temp_max_files,
         temp_dir,
     }
@@ -1004,12 +1007,14 @@ mod tests {
             fifo_capacity_blocks: 16,
             lru_capacity_blocks: 32,
             block_size_bytes: 48 * 1024,
+            dirty_scan_interval: Duration::from_millis(1500),
             temp_max_files: 8,
         };
         let defaults_b = NetworkCacheDefaults {
             fifo_capacity_blocks: 4,
             lru_capacity_blocks: 12,
             block_size_bytes: 96 * 1024,
+            dirty_scan_interval: Duration::from_secs(7),
             temp_max_files: 3,
         };
 

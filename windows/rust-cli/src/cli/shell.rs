@@ -18,7 +18,7 @@ use super::host::RemoveTargetSelector;
 use crate::NetworkCacheDefaults;
 
 const CACHE_CONFIG_USAGE: &str =
-    "cc requires [fifo=<blocks>] [lru=<blocks>] [temp=<files>] [block=<bytes>]";
+    "cc requires [fifo=<blocks>] [lru=<blocks>] [temp=<files>] [block=<bytes>] [scan=<ms>]";
 
 enum LoopControl {
     Continue,
@@ -367,6 +367,7 @@ fn parse_cache_config_args(
     let mut lru_seen = false;
     let mut temp_seen = false;
     let mut block_seen = false;
+    let mut scan_seen = false;
 
     for token in args {
         let (key, value) = split_key_value(token)?;
@@ -399,6 +400,13 @@ fn parse_cache_config_args(
                 next.block_size_bytes = parse_nonzero_u32_value(value, "block")?;
                 block_seen = true;
             }
+            "scan" => {
+                if scan_seen {
+                    return Err("duplicate scan".to_string());
+                }
+                next.dirty_scan_interval = parse_nonzero_duration_millis(value, "scan")?;
+                scan_seen = true;
+            }
             _ => return Err(CACHE_CONFIG_USAGE.to_string()),
         }
     }
@@ -408,12 +416,13 @@ fn parse_cache_config_args(
 
 fn print_cache_config(prefix: &str, defaults: NetworkCacheDefaults) {
     println!(
-        "{} fifo_blocks={}, lru_blocks={}, temp_max_files={}, block_size_bytes={}, future_mounts_only=true",
+        "{} fifo_blocks={}, lru_blocks={}, temp_max_files={}, block_size_bytes={}, dirty_scan_ms={}, future_mounts_only=true",
         prefix,
         defaults.fifo_capacity_blocks,
         defaults.lru_capacity_blocks,
         defaults.temp_max_files,
-        defaults.block_size_bytes
+        defaults.block_size_bytes,
+        defaults.dirty_scan_interval.as_millis()
     );
 }
 
@@ -501,7 +510,7 @@ pub fn print_runtime_help() {
     println!("  help                               show this help");
     println!("  query                              print AppKernel session state");
     println!("  auth <addr> <claim_code> [target]  authenticate and mount one network disk");
-    println!("  cc [fifo=<n>] [lru=<n>] [temp=<n>] [block=<bytes>]");
+    println!("  cc [fifo=<n>] [lru=<n>] [temp=<n>] [block=<bytes>] [scan=<ms>]");
     println!(
         "                                     show or update default cache config for future network mounts"
     );
@@ -632,6 +641,14 @@ fn parse_nonzero_u32_value(text: &str, name: &str) -> AppResult<u32> {
         return Err(format!("{} must be greater than 0", name));
     }
     Ok(value)
+}
+
+fn parse_nonzero_duration_millis(text: &str, name: &str) -> AppResult<Duration> {
+    let millis = parse_u64_value(Some(text), name)?;
+    if millis == 0 {
+        return Err(format!("{} must be greater than 0", name));
+    }
+    Ok(Duration::from_millis(millis))
 }
 
 fn parse_bool_value(text: &str) -> AppResult<bool> {
@@ -819,6 +836,8 @@ fn stop_dead_network_reaper(reaper: DeadNetworkReaper) {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::CacheConfigCommand;
     use super::CreateLocalDiskSource;
     use super::DebugReadCommand;
@@ -909,6 +928,20 @@ mod tests {
                 assert_eq!(defaults.lru_capacity_blocks, 64);
                 assert_eq!(defaults.temp_max_files, 64);
                 assert_eq!(defaults.block_size_bytes, 65536);
+                assert_eq!(defaults.dirty_scan_interval, Duration::from_millis(50));
+            }
+            other => panic!("unexpected cache config command: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_cache_config_args_updates_scan_interval() {
+        let parsed = parse_cache_config_args(&["scan=2000"], NetworkCacheDefaults::default())
+            .expect("parse should succeed");
+
+        match parsed {
+            CacheConfigCommand::Update(defaults) => {
+                assert_eq!(defaults.dirty_scan_interval, Duration::from_millis(2000));
             }
             other => panic!("unexpected cache config command: {:?}", other),
         }
@@ -919,6 +952,10 @@ mod tests {
         let error = parse_cache_config_args(&["temp=0"], NetworkCacheDefaults::default())
             .expect_err("parse should fail");
         assert_eq!(error, "temp must be greater than 0");
+
+        let error = parse_cache_config_args(&["scan=0"], NetworkCacheDefaults::default())
+            .expect_err("parse should fail");
+        assert_eq!(error, "scan must be greater than 0");
     }
 
     #[test]
@@ -927,7 +964,7 @@ mod tests {
             .expect_err("parse should fail");
         assert_eq!(
             error,
-            "cc requires [fifo=<blocks>] [lru=<blocks>] [temp=<files>] [block=<bytes>]"
+            "cc requires [fifo=<blocks>] [lru=<blocks>] [temp=<files>] [block=<bytes>] [scan=<ms>]"
         );
     }
 

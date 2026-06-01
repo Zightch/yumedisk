@@ -28,7 +28,7 @@ fn print_usage() {
     println!("  rust-cli shell");
     println!("  rust-cli help");
     println!("  rust-cli auth <addr> <claim_code>");
-    println!("  rust-cli cc [fifo=<n>] [lru=<n>] [temp=<n>] [block=<bytes>]");
+    println!("  rust-cli cc [fifo=<n>] [lru=<n>] [temp=<n>] [block=<bytes>] [scan=<ms>]");
     println!();
     println!("default command: shell");
     println!();
