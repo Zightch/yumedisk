@@ -16,7 +16,7 @@ type Runtime interface {
 	Run(ctx context.Context) error
 }
 
-const storerLinkHeartbeatTimeout = 60 * time.Second
+const storerLinkHeartbeatTimeout = 15 * time.Second
 const storerLinkReconnectInterval = 5 * time.Second
 
 type StorerRuntime struct {

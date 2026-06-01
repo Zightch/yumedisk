@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const clientHeartbeatTimeout = 60 * time.Second
+const clientHeartbeatTimeout = 15 * time.Second
 
 var errConnHeartbeatTimeout = errors.New("client heartbeat timeout")
 

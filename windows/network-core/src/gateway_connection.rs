@@ -26,12 +26,12 @@ use super::transport_client::TransportEndpoint;
 use super::transport_client::TransportError;
 
 #[cfg(not(test))]
-const CONN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
+const CONN_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const CONN_HEARTBEAT_INTERVAL: Duration = Duration::from_millis(50);
 
 #[cfg(not(test))]
-const CONN_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(60);
+const CONN_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
 #[cfg(test)]
 const CONN_HEARTBEAT_TIMEOUT: Duration = Duration::from_millis(150);
 

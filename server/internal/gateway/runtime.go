@@ -31,8 +31,8 @@ type clientConnection struct {
 }
 
 const (
-	storerHeartbeatInterval = 20 * time.Second
-	storerHeartbeatTimeout  = 60 * time.Second
+	storerHeartbeatInterval = 5 * time.Second
+	storerHeartbeatTimeout  = 15 * time.Second
 )
 
 func NewRuntime(cfg config.GatewayConfig) (*Runtime, error) {
