@@ -15,16 +15,25 @@
   - 常驻 `gateway`
   - 常驻 `storer`
   - 管理员 PowerShell 负责抓 `tcp.port=9736`
-- `vm_win11_admin`
+- `vm_win11`
   - 常驻 `rust-cli`
   - 默认承担 `rw + cache` 侧
-- `vm_win10_admin`
+- `vm_win10`
   - 常驻 `rust-cli`
   - 默认承担 `ro` 对照侧
+
+原始盘观测动作仍然使用对应管理员终端：
+
+- `vm_win11_admin`
+  - 负责 `rw` 侧 `PhysicalDriveN` 原始读写、`TUR`、`scsi_ua_probe`
+- `vm_win10_admin`
+  - 负责 `ro` 侧 `PhysicalDriveN` 原始读写、`TUR`、`scsi_ua_probe`
 
 固定约束：
 
 - `gateway`、`storer`、`rust-cli` 全部用交互终端常驻
+- `rust-cli` 本身不要求管理员权限
+- 两侧原始盘读写、`TUR` 和抓包才要求管理员权限
 - 两侧客户端都只通过管理员原始盘句柄访问 `\\.\PhysicalDriveN`
 - 不在目标盘上建分区或文件系统
 - 若 `cc` 改了 cache 默认配置，必须重新 `auth` 挂载；已存在的 cache 实例保持旧配置不变
@@ -70,12 +79,14 @@ pktmon start --capture --pkt-size 0 --file-name C:\Users\Zightch\Desktop\driver\
 ```powershell
 pktmon stop
 pktmon etl2pcap C:\Users\Zightch\Desktop\driver\tmp\pktmon-9736.etl --out C:\Users\Zightch\Desktop\driver\tmp\pktmon-9736.pcapng
+python C:\Users\Zightch\Desktop\driver\tools\clean_pcap_heartbeats.py --input C:\Users\Zightch\Desktop\driver\tmp\pktmon-9736.pcapng --output C:\Users\Zightch\Desktop\driver\tmp\pktmon-9736.clean.pcapng
 ```
 
 固定观测点：
 
 - `rust-cli` 挂载输出里的 `raw_limit_bytes=61440`
 - 本机 `9736` 抓包里的 `ReadAt / WriteAt` 次数与长度
+- 清洗后抓包里不再保留 `ConnHeartbeat`，必要时也可顺带剔除 `LinkHeartbeat`
 - `ro` 侧 `TUR + 原始读` 何时看到新字节
 - `%TEMP%\yumedisk-network-media\<server_addr>\<remote_disk_id>\` 的 temp 文件变化
 
@@ -262,6 +273,36 @@ pktmon etl2pcap C:\Users\Zightch\Desktop\driver\tmp\pktmon-9736.etl --out C:\Use
 - 卸载后 `ro` 侧原始读能看到最终新字节
 - temp 目录被清理
 
+### M10 尾块读写
+
+目标：
+
+- 验证服务端介质容量没有按 `cc block` 对齐时，最后短尾块仍然按真实可见前缀处理
+
+操作：
+
+- 继续使用 `M6` 的 `block=98304`
+- 确认服务端真实介质容量不是 `98304` 的整数倍
+- 以当前 `64MiB` backend 为例：
+  - `disk_size_bytes = 67108864`
+  - 最后一个逻辑块起点为 `67043328`
+  - 该尾块真实可见前缀为 `65536`
+  - 该尾块逻辑长度仍为 `98304`
+- 选一个尚未触碰过的尾块偏移，推荐最后 `4096B`
+  - `offset = disk_size_bytes - 4096`
+  - `length = 4096`
+- 先做一次冷读，再做一次冷写，并在 flush / drop 后原始回读确认
+
+观测：
+
+- 尾块冷读只对远端拉取真实前缀，不会尝试读取超出真实 EOF 的尾部
+- 以当前 `64MiB + 98304` 配置为例，尾块远端读应只覆盖：
+  - `61440`
+  - `4096`
+- 本地会为尾块剩余逻辑区间补零，但这些补零不会变成远端 `ReadAt`
+- 尾块 flush / drop 时，远端写也只覆盖真实前缀，不会对 EOF 之后发 `WriteAt`
+- 最终原始回读命中，且不出现越界写副作用
+
 ## 4. 执行顺序
 
 首轮固定顺序：
@@ -273,9 +314,10 @@ pktmon etl2pcap C:\Users\Zightch\Desktop\driver\tmp\pktmon-9736.etl --out C:\Use
 5. `M4`
 6. `M5`
 7. `M6`
-8. `M7`
-9. `M8`
-10. `M9`
+8. `M10`
+9. `M7`
+10. `M8`
+11. `M9`
 
 若中途要切换 `block` 或 `scan`，固定流程为：
 
@@ -291,5 +333,4 @@ pktmon etl2pcap C:\Users\Zightch\Desktop\driver\tmp\pktmon-9736.etl --out C:\Use
 - 普通文件读写行为
 - 自动重连 / 自动 reopen
 - UI 层行为
-- `M10` 尾块专项
 - `M11` `ro` 长期旁路对照扩展项

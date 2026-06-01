@@ -61,3 +61,6 @@ jsoncpp/
 
 # Local environment
 **/env.cmake
+
+# Python
+**/__pycache__/
